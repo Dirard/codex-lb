@@ -812,6 +812,11 @@ async def _connect_upstream_websocket(
     subprotocols: Sequence[str] = (),
 ) -> UpstreamWebSocket:
     settings = get_settings()
+    upstream_ping_interval = (
+        min(30.0, settings.proxy_downstream_websocket_idle_timeout_seconds / 2.0)
+        if policy.include_responses_beta
+        else settings.proxy_downstream_websocket_idle_timeout_seconds
+    )
     if policy.include_responses_beta:
         upstream_headers = _build_upstream_websocket_headers(headers, access_token, account_id)
     else:
@@ -827,7 +832,7 @@ async def _connect_upstream_websocket(
         endpoint_id = route.endpoint_id
         active_route = route
         fallback_used = False
-        heartbeat = settings.proxy_downstream_websocket_idle_timeout_seconds if policy.enable_routed_heartbeat else None
+        heartbeat = upstream_ping_interval if policy.enable_routed_heartbeat else None
         protocol_kwargs = {"protocols": subprotocols} if subprotocols else {}
         try:
             opener = getattr(active_codex_client, "open_ws_with_route_metadata", None)

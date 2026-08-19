@@ -689,6 +689,12 @@ class LoadBalancer:
                         error_message=error_message,
                         error_code=error_code,
                     )
+                selection_inputs = replace(
+                    selection_inputs,
+                    ignore_standard_quota_account_ids=(
+                        selection_inputs.ignore_standard_quota_account_ids | {required_account_id}
+                    ),
+                )
             return selection_inputs
 
         selection_inputs = await load_selection_inputs()

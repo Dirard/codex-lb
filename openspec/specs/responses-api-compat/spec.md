@@ -332,6 +332,23 @@ The proxy MUST configure direct and routed upstream Responses WebSocket transpor
 - **THEN** settlement continues until every pending sibling is finalized exactly once
 - **AND** the submitter cancellation is preserved after settlement completes
 
+### Requirement: Routed upstream Responses heartbeats precede idle expiry
+
+The proxy MUST configure routed upstream Responses WebSockets with a heartbeat cadence no greater than 30 seconds and strictly shorter than the downstream WebSocket idle budget. The routed heartbeat MUST NOT shorten the downstream client idle budget, change direct transport behavior, or require a new operator setting.
+
+#### Scenario: Routed idle connection remains open through proactive pings
+
+- **GIVEN** a routed upstream Responses WebSocket is otherwise idle and the downstream idle budget is 120 seconds
+- **WHEN** the connection is established
+- **THEN** the routed transport uses a heartbeat cadence no greater than 30 seconds
+- **AND** the downstream idle budget remains 120 seconds
+
+#### Scenario: Direct transport keeps native ping behavior
+
+- **WHEN** an equivalent direct upstream Responses WebSocket is established
+- **THEN** the proxy leaves the direct transport's native ping interval unchanged
+- **AND** its existing pong-timeout failure classification remains unchanged
+
 ### Requirement: Upstream websocket drops penalize affected accounts
 When an upstream websocket closes while one or more streamed response requests
 are pending and have not reached a terminal event, the proxy MUST record a

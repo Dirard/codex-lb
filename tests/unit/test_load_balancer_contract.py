@@ -320,33 +320,29 @@ async def test_public_selection_applies_candidate_gates(
 
 
 @pytest.mark.asyncio
-async def test_required_continuity_owner_miss_does_not_mark_healthy_pool_degraded(
+async def test_required_continuity_owner_bypasses_only_standard_quota(
     selection_cache: AccountSelectionCache,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    unavailable_owner = _account("contract-required-owner")
-    unavailable_owner.status = AccountStatus.QUOTA_EXCEEDED
+    quota_exhausted_owner = _account("contract-required-owner")
+    quota_exhausted_owner.status = AccountStatus.QUOTA_EXCEEDED
+    quota_exhausted_owner.reset_at = int(datetime.now(UTC).timestamp()) + 3600
     available_alternate = _account("contract-available-alternate")
     balancer, _, _, _ = _balancer(
-        [unavailable_owner, available_alternate],
+        [quota_exhausted_owner, available_alternate],
         selection_cache,
     )
-    degraded_reasons: list[str] = []
-    normal_calls: list[bool] = []
-    monkeypatch.setattr(load_balancer_module, "set_degraded", degraded_reasons.append)
-    monkeypatch.setattr(load_balancer_module, "set_normal", lambda: normal_calls.append(True))
 
-    selection = await balancer.select_account(
-        required_account_id=unavailable_owner.id,
+    ordinary_selection = await balancer.select_account()
+    owner_selection = await balancer.select_account(
+        required_account_id=quota_exhausted_owner.id,
         required_continuity_owner=True,
-        lease_kind="stream",
     )
 
-    assert selection.account is None
-    assert selection.error_message == "No available accounts"
-    assert selection.error_code == load_balancer_module.CONTINUITY_OWNER_UNAVAILABLE
-    assert degraded_reasons == []
-    assert normal_calls == []
+    assert ordinary_selection.account is not None
+    assert ordinary_selection.account.id == available_alternate.id
+    assert owner_selection.account is not None
+    assert owner_selection.account.id == quota_exhausted_owner.id
+    assert owner_selection.error_code is None
 
 
 @pytest.mark.asyncio
@@ -375,7 +371,7 @@ async def test_deleted_required_continuity_owner_returns_typed_miss_without_glob
 
 
 @pytest.mark.asyncio
-async def test_opportunistic_required_owner_miss_preserves_continuity_classification(
+async def test_opportunistic_required_owner_quota_probe_preserves_policy_classification(
     selection_cache: AccountSelectionCache,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -399,8 +395,10 @@ async def test_opportunistic_required_owner_miss_preserves_continuity_classifica
     )
 
     assert selection.account is None
-    assert selection.error_message == "No available accounts"
-    assert selection.error_code == load_balancer_module.CONTINUITY_OWNER_UNAVAILABLE
+    assert selection.error_message == (
+        "opportunistic burn window closed: no expendable account has emergency foreground reserve"
+    )
+    assert selection.error_code == load_balancer_module.OPPORTUNISTIC_BURN_WINDOW_CLOSED
     assert degraded_reasons == []
     assert normal_calls == []
 

@@ -513,7 +513,7 @@ async def test_connect_responses_websocket_routed_codex_call_preserves_size_limi
     assert call["route"] is route
     assert call["timeout"] == 7.0
     assert call["max_msg_size"] == 4321
-    assert call["heartbeat"] == 120.0
+    assert call["heartbeat"] == 30.0
     assert "max_size" not in call
     assert "protocols" not in call
     assert websocket.response_header("x-codex-turn-state") == "turn-routed"
