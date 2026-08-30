@@ -2158,7 +2158,9 @@ class _HTTPBridgeMixin(
                     service_tier=session.request_service_tier,
                     exclude_account_ids=excluded_account_ids,
                     preferred_account_id=preferred_candidate_id,
-                    preferred_account_is_continuity_owner=account_neutral_recovery,
+                    preferred_account_is_continuity_owner=(
+                        required_preferred_account_id is not None or hard_close_account_bound
+                    ),
                     require_security_work_authorized=require_security_work_authorized,
                     lease_kind=None if reuse_current_account_lease else "stream",
                     estimated_lease_tokens=_estimated_lease_tokens_from_request_usage_budget(

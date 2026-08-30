@@ -10775,6 +10775,82 @@ async def test_reconnect_http_bridge_session_preserves_hard_account_after_1011(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hard_owner", "required_owner", "expected_account_id"),
+    [
+        pytest.param(True, False, "acc-bridge", id="hard-same-account-owner"),
+        pytest.param(False, False, "acc-alternate", id="ordinary-soft"),
+        pytest.param(False, True, "acc-bridge", id="explicit-required-owner"),
+    ],
+)
+async def test_reconnect_quota_routing_keeps_only_continuity_owner_on_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    hard_owner: bool,
+    required_owner: bool,
+    expected_account_id: str,
+) -> None:
+    service = proxy_service.ProxyService(cast(Any, nullcontext()))
+    owner_account = _make_bridge_session().account
+    alternate_account = cast(
+        Any,
+        SimpleNamespace(id="acc-alternate", status=AccountStatus.ACTIVE, plan_type="plus"),
+    )
+
+    async def select_account(_deadline: float, **kwargs: object) -> proxy_service.AccountSelection:
+        # Simulate real quota routing: only a continuity-owner request may keep
+        # the exhausted owner; ordinary soft routing selects an available alternate.
+        selected_account = owner_account if kwargs["preferred_account_is_continuity_owner"] else alternate_account
+        return proxy_service.AccountSelection(
+            account=selected_account,
+            error_message=None,
+            error_code=None,
+        )
+
+    async def ensure_fresh(account: object, **_: object) -> object:
+        return account
+
+    settings = SimpleNamespace(prefer_earlier_reset_accounts=False, routing_strategy=None)
+    upstream = cast(Any, SimpleNamespace(response_header=lambda _name: None, close=AsyncMock()))
+    monkeypatch.setattr(proxy_service, "get_settings", lambda: _make_app_settings())
+    monkeypatch.setattr(
+        proxy_service,
+        "get_settings_cache",
+        lambda: SimpleNamespace(get=AsyncMock(return_value=settings)),
+    )
+    monkeypatch.setattr(service, "_select_account_with_budget_for_stream", select_account)
+    monkeypatch.setattr(service, "_ensure_fresh_with_budget", ensure_fresh)
+    monkeypatch.setattr(service, "_open_upstream_websocket_with_budget", AsyncMock(return_value=upstream))
+
+    session = _make_bridge_session(
+        key=proxy_service._HTTPBridgeSessionKey(
+            "session_header" if hard_owner else "prompt_cache",
+            "quota-bypass",
+            None,
+        ),
+        key_value="quota-bypass",
+    )
+    await service._reconnect_http_bridge_session(
+        session,
+        request_state=proxy_service._WebSocketRequestState(
+            request_id="req-quota-bypass",
+            model="gpt-5.4",
+            service_tier=None,
+            reasoning_effort=None,
+            api_key_reservation=None,
+            started_at=time.monotonic(),
+            preferred_account_id=session.account.id if required_owner else None,
+        ),
+        require_same_account=hard_owner,
+        require_preferred_account=required_owner,
+    )
+
+    assert session.account.id == expected_account_id
+    assert session.upstream is upstream
+    assert session.closed is False
+    assert session.handoff_in_progress is False
+
+
+@pytest.mark.asyncio
 async def test_reconnect_http_bridge_session_keeps_soft_file_pin_owner_after_1011(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
