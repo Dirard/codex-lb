@@ -7138,13 +7138,22 @@ async def _wait_for_first_stream_probe(
                     asyncio.create_task(capacity_ready_event.wait()) if capacity_ready_event is not None else None
                 )
                 try:
+                    recovery_wait_remaining = max(
+                        0.0,
+                        signal_discovery_deadline - asyncio.get_running_loop().time(),
+                    )
+                    if recovery_wait_remaining <= 0:
+                        return False
                     recovery_waiters = {first_task}
                     if recovery_ready_task is not None:
                         recovery_waiters.add(recovery_ready_task)
                     recovery_done, _pending = await asyncio.wait(
                         recovery_waiters,
+                        timeout=recovery_wait_remaining,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if not recovery_done:
+                        return False
                     if first_task not in recovery_done:
                         # Re-read the paired level state. The ready signal has
                         # cleared the wait that recovered, but a newer wait may

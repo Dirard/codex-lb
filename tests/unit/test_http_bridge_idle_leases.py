@@ -18,11 +18,27 @@ from app.core.clients.proxy_websocket import UpstreamWebSocket
 from app.core.errors import openai_error
 from app.db.models import AccountStatus
 from app.modules.api_keys.service import ApiKeyRequestUsageBudget
+from app.modules.proxy import load_balancer as load_balancer_module
 from app.modules.proxy import service as proxy_service
+from app.modules.proxy._load_balancer.types import AccountConcurrencyCaps
 from app.modules.proxy._service.http_bridge import request_submit as http_bridge_request_submit_module
 from app.modules.proxy.load_balancer import LoadBalancer
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _dashboard_settings_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    dashboard_settings = SimpleNamespace(
+        proxy_account_response_create_limit=4,
+        proxy_account_stream_limit=8,
+        proxy_api_key_fair_share_congestion_threshold_pct=0,
+    )
+    monkeypatch.setattr(
+        http_bridge_request_submit_module,
+        "_service_get_settings_cache",
+        lambda: SimpleNamespace(get=AsyncMock(return_value=dashboard_settings)),
+    )
 
 
 def _make_bridge_session(
@@ -135,9 +151,50 @@ async def test_next_turn_reacquires_stream_lease() -> None:
         "acc-bridge",
         kind="stream",
         estimated_tokens=0.0,
+        concurrency_caps=AccountConcurrencyCaps(response_create_limit=4, stream_limit=8),
         api_key_id=None,
         api_key_stream_fair_share_threshold_pct=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_warm_session_reacquire_honors_unlimited_dashboard_stream_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixin = http_bridge_request_submit_module._HTTPBridgeRequestSubmitMixin
+    dashboard_settings = SimpleNamespace(
+        proxy_account_response_create_limit=0,
+        proxy_account_stream_limit=0,
+        proxy_api_key_fair_share_congestion_threshold_pct=0,
+    )
+    monkeypatch.setattr(
+        load_balancer_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            proxy_account_response_create_limit=4,
+            proxy_account_stream_limit=8,
+            proxy_account_caps_scope="replica",
+        ),
+    )
+    balancer = LoadBalancer(cast(Any, None))
+    async with balancer._runtime_lock:
+        for _ in range(8):
+            balancer._acquire_account_lease_locked(
+                "acc-bridge",
+                kind="stream",
+                estimated_tokens=0.0,
+            )
+    session = _make_bridge_session()
+
+    async with session.pending_lock:
+        await mixin._ensure_http_bridge_session_stream_lease_locked(
+            SimpleNamespace(_load_balancer=balancer),
+            session,
+            dashboard_settings=dashboard_settings,
+        )
+
+    assert session.account_lease is not None
+    assert balancer._runtime["acc-bridge"].inflight_streams == 9
 
 
 @pytest.mark.asyncio
@@ -175,15 +232,14 @@ async def test_reacquire_carries_turn_usage_budget_estimate() -> None:
         "acc-bridge",
         kind="stream",
         estimated_tokens=expected_tokens,
+        concurrency_caps=AccountConcurrencyCaps(response_create_limit=4, stream_limit=8),
         api_key_id=None,
         api_key_stream_fair_share_threshold_pct=0,
     )
 
 
 @pytest.mark.asyncio
-async def test_keyed_warm_session_reacquire_is_fair_share_gated_and_counted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_keyed_warm_session_reacquire_is_fair_share_gated_and_counted() -> None:
     """Warm bridge session reacquires join per-key accounting and the fair-share gate.
 
     Regression for the review P2: ``acquire_account_lease`` previously had no
@@ -192,13 +248,6 @@ async def test_keyed_warm_session_reacquire_is_fair_share_gated_and_counted(
     """
     mixin = http_bridge_request_submit_module._HTTPBridgeRequestSubmitMixin
     balancer = LoadBalancer(cast(Any, None))
-    monkeypatch.setattr(
-        http_bridge_request_submit_module,
-        "_service_get_settings_cache",
-        lambda: SimpleNamespace(
-            get=AsyncMock(return_value=SimpleNamespace(proxy_api_key_fair_share_congestion_threshold_pct=50))
-        ),
-    )
     # The reacquire is pinned to the session's account, so the fair-share
     # pool is that single account: C = 8 (default stream cap). key-hot holds
     # 4 and key-other holds 1 -> T = 5, 500 >= 400 -> congested;
@@ -216,7 +265,11 @@ async def test_keyed_warm_session_reacquire_is_fair_share_gated_and_counted(
     hot_session = _make_bridge_session(api_key_id="key-hot")
     with pytest.raises(ProxyResponseError) as exc_info:
         async with hot_session.pending_lock:
-            await mixin._ensure_http_bridge_session_stream_lease_locked(fake_self, hot_session)
+            await mixin._ensure_http_bridge_session_stream_lease_locked(
+                fake_self,
+                hot_session,
+                fair_share_threshold_pct=50,
+            )
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.payload["error"]["code"] == "api_key_stream_fair_share"
@@ -230,7 +283,11 @@ async def test_keyed_warm_session_reacquire_is_fair_share_gated_and_counted(
     # its reacquire admits and is counted into the per-key map.
     light_session = _make_bridge_session(api_key_id="key-light")
     async with light_session.pending_lock:
-        await mixin._ensure_http_bridge_session_stream_lease_locked(fake_self, light_session)
+        await mixin._ensure_http_bridge_session_stream_lease_locked(
+            fake_self,
+            light_session,
+            fair_share_threshold_pct=50,
+        )
 
     assert light_session.account_lease is not None
     assert light_session.account_lease.api_key_id == "key-light"
@@ -602,6 +659,7 @@ async def test_response_create_admission_failure_releases_reacquired_stream_leas
         "acc-bridge",
         kind="stream",
         estimated_tokens=0.0,
+        concurrency_caps=AccountConcurrencyCaps(response_create_limit=4, stream_limit=8),
         api_key_id=None,
         api_key_stream_fair_share_threshold_pct=0,
     )
@@ -746,6 +804,7 @@ async def test_stale_finalizer_cannot_release_lease_reacquired_for_new_turn(
         "acc-bridge",
         kind="stream",
         estimated_tokens=0.0,
+        concurrency_caps=AccountConcurrencyCaps(response_create_limit=4, stream_limit=8),
         api_key_id=None,
         api_key_stream_fair_share_threshold_pct=0,
     )
@@ -811,6 +870,7 @@ async def test_prewarm_failure_retires_closed_session_after_last_waiter(
         "acc-bridge",
         kind="stream",
         estimated_tokens=0.0,
+        concurrency_caps=AccountConcurrencyCaps(response_create_limit=4, stream_limit=8),
         api_key_id=None,
         api_key_stream_fair_share_threshold_pct=0,
     )
@@ -1011,6 +1071,7 @@ async def test_prewarm_cancellation_cannot_interrupt_waiter_cleanup(
         "acc-bridge",
         kind="stream",
         estimated_tokens=0.0,
+        concurrency_caps=AccountConcurrencyCaps(response_create_limit=4, stream_limit=8),
         api_key_id=None,
         api_key_stream_fair_share_threshold_pct=0,
     )

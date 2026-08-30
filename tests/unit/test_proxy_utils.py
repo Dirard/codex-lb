@@ -1371,6 +1371,35 @@ async def test_startup_probe_without_capacity_signal_returns_within_discovery_bu
 
 
 @pytest.mark.asyncio
+async def test_startup_probe_capacity_marker_without_ready_returns_within_discovery_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capacity_wait_event = asyncio.Event()
+    capacity_ready_event = asyncio.Event()
+    release_first_event = asyncio.Event()
+
+    async def stream_waiting_for_capacity() -> AsyncIterator[str]:
+        capacity_wait_event.set()
+        await release_first_event.wait()
+        yield 'data: {"type":"codex.keepalive","status":"waiting_for_account_capacity"}\n\n'
+
+    monkeypatch.setattr(proxy_api, "_CAPACITY_STARTUP_SIGNAL_DISCOVERY_SECONDS", 0.01)
+    stream, startup_error = await asyncio.wait_for(
+        proxy_api._probe_stream_startup_error(
+            stream_waiting_for_capacity(),
+            timeout_seconds=0.001,
+            capacity_wait_event=capacity_wait_event,
+            capacity_ready_event=capacity_ready_event,
+        ),
+        timeout=0.1,
+    )
+
+    assert startup_error is None
+    release_first_event.set()
+    assert "waiting_for_account_capacity" in await asyncio.wait_for(anext(stream), timeout=0.1)
+
+
+@pytest.mark.asyncio
 async def test_startup_probe_waits_for_remote_owner_headers_without_local_marker() -> None:
     capacity_wait_event = asyncio.Event()
     capacity_ready_event = asyncio.Event()

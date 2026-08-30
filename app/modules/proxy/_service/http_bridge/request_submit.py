@@ -1638,14 +1638,18 @@ class _HTTPBridgeRequestSubmitMixin:
             # critical section (issue #1971) — and only when the reacquire can
             # actually run: a session already holding its lease never depended
             # on a settings read to admit a turn.
+            dashboard_settings = await _service_get_settings_cache().get() if needs_stream_lease else None
             fair_share_threshold_pct = (
-                await self._http_bridge_fair_share_threshold_pct(session) if needs_stream_lease else 0
+                _api_key_fair_share_threshold_pct_from_settings(dashboard_settings)
+                if dashboard_settings is not None and session.key.api_key_id is not None
+                else 0
             )
             async with session.pending_lock:
                 await self._ensure_http_bridge_session_stream_lease_locked(
                     session,
                     request_state=request_state,
                     fair_share_threshold_pct=fair_share_threshold_pct,
+                    dashboard_settings=dashboard_settings,
                 )
         except BaseException:
             # Recovery claims are made before admission. If reacquiring an
@@ -1716,6 +1720,7 @@ class _HTTPBridgeRequestSubmitMixin:
                     session,
                     request_state=request_state,
                     fair_share_threshold_pct=fair_share_threshold_pct,
+                    dashboard_settings=dashboard_settings,
                 )
                 session.queued_request_count += 1
                 if getattr(session, "unanchored_reservation_id", None) == request_scope_id:
@@ -2658,39 +2663,23 @@ class _HTTPBridgeRequestSubmitMixin:
             )
         await self._maybe_release_idle_http_bridge_session_lease(session)
 
-    async def _http_bridge_fair_share_threshold_pct(
-        self: Any,
-        session: "_HTTPBridgeSession",
-    ) -> int:
-        """Resolve the keyed fair-share threshold WITHOUT holding pending_lock.
-
-        The settings-cache refresh runs a DB query behind a process-global
-        lock; awaiting it while holding a session's ``pending_lock`` let one
-        stalled query wedge every keyed submit process-wide (issue #1971).
-        Callers resolve the snapshot first and pass it into
-        ``_ensure_http_bridge_session_stream_lease_locked``.
-        """
-        if session.key.api_key_id is None:
-            return 0
-        return _api_key_fair_share_threshold_pct_from_settings(await _service_get_settings_cache().get())
-
     async def _ensure_http_bridge_session_stream_lease_locked(
         self: Any,
         session: "_HTTPBridgeSession",
         *,
         request_state: _WebSocketRequestState | None = None,
         fair_share_threshold_pct: int | None = None,
+        dashboard_settings: Any | None = None,
     ) -> None:
         """Reacquire the account stream lease for a session idled between turns.
 
-        Callers hold ``session.pending_lock`` and MUST pass
-        ``fair_share_threshold_pct`` (see
-        ``_http_bridge_fair_share_threshold_pct``) computed before acquiring
-        it: resolving the threshold reads the settings cache, whose refresh
+        Callers hold ``session.pending_lock`` and pass the dashboard settings
+        snapshot plus ``fair_share_threshold_pct`` computed before acquiring
+        it. Resolving that snapshot reads the settings cache, whose refresh
         runs a DB query behind a process-global lock — one stalled refresh
-        under ``pending_lock`` wedged every keyed submit for days
-        (issue #1971). The ``None`` fallback resolves it inline and exists
-        for lock-free callers only.
+        under ``pending_lock`` wedged every keyed submit for days (issue
+        #1971). A missing snapshot uses process defaults for lock-free test and
+        compatibility callers without reading the settings cache here.
 
         The lease is released when the
         session's last in-flight turn detaches, so an idle session does not
@@ -2719,8 +2708,10 @@ class _HTTPBridgeRequestSubmitMixin:
         if api_key_id is None:
             fair_share_threshold_pct = 0
         elif fair_share_threshold_pct is None:
-            fair_share_threshold_pct = _api_key_fair_share_threshold_pct_from_settings(
-                await _service_get_settings_cache().get()
+            fair_share_threshold_pct = (
+                _api_key_fair_share_threshold_pct_from_settings(dashboard_settings)
+                if dashboard_settings is not None
+                else 0
             )
         try:
             lease = await load_balancer.acquire_account_lease(
@@ -2732,6 +2723,7 @@ class _HTTPBridgeRequestSubmitMixin:
                 estimated_tokens=_estimated_lease_tokens_from_request_usage_budget(
                     request_state.request_usage_budget if request_state is not None else None
                 ),
+                concurrency_caps=effective_account_concurrency_caps(dashboard_settings),
                 api_key_id=api_key_id,
                 api_key_stream_fair_share_threshold_pct=fair_share_threshold_pct,
             )
