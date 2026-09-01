@@ -79,6 +79,7 @@ from app.modules.proxy.helpers import (
     _upstream_error_from_openai,
     classify_upstream_failure,
     is_upstream_model_capacity_error,
+    is_upstream_quota_failover_error_code,
 )
 from app.modules.proxy.load_balancer import AccountLease, AccountSelection
 from app.modules.proxy.replay_safety import responses_payload_is_account_neutral_fresh_replay
@@ -713,14 +714,20 @@ class _StreamingRetryMixin:
                 payload.to_replay_safety_payload()
             )
 
-        def _move_verified_fresh_replay_from_owner(*, account_id: str, outcome: str) -> bool:
+        def _move_verified_fresh_replay_from_owner(
+            *,
+            account_id: str,
+            outcome: str,
+            upstream_error_code: str | None = None,
+        ) -> bool:
             # Only a proxy-injected owner anchor with locally verified full
             # input may move; the failed owner stays excluded so sticky
             # selection cannot immediately loop back to it.
             nonlocal affinity, payload, payload_replay_required_account_id
             nonlocal preferred_account_id, require_preferred_account, verified_fresh_replay_payload
             if not (
-                require_preferred_account
+                is_upstream_quota_failover_error_code(upstream_error_code)
+                and require_preferred_account
                 and preferred_account_id == account_id
                 and verified_fresh_replay_payload is not None
             ):
@@ -1044,18 +1051,11 @@ class _StreamingRetryMixin:
                 model=payload.model,
             ):
                 return None
-            can_move_verified_owner = bool(
-                require_preferred_account
-                and preferred_account_id == account.id
-                and verified_fresh_replay_payload is not None
-            )
             can_try_other_account = bool(
                 not account_model_replay_attempted
                 and attempt < max_attempts - 1
-                and (
-                    can_move_verified_owner
-                    or (not require_preferred_account and account.id != file_preferred_account_id)
-                )
+                and not require_preferred_account
+                and account.id != file_preferred_account_id
             )
             if not can_try_other_account:
                 return False
@@ -1072,12 +1072,8 @@ class _StreamingRetryMixin:
             last_account_model_rejection_account_id = account.id
             await _release_tracked_stream_lease(current_account_lease)
             current_account_lease = None
-            if not _move_verified_fresh_replay_from_owner(
-                account_id=account.id,
-                outcome=outcome,
-            ):
-                excluded_account_ids.add(account.id)
-                affinity = replace(affinity, reallocate_sticky=True)
+            excluded_account_ids.add(account.id)
+            affinity = replace(affinity, reallocate_sticky=True)
             return True
 
         try:
@@ -2362,22 +2358,28 @@ class _StreamingRetryMixin:
                                     action,
                                 )
                                 if action == "failover_next":
-                                    await _handle_or_defer_keyed_stream_health(
-                                        account,
-                                        _upstream_error_from_openai(error),
-                                        code,
-                                        http_status=tex.status_code,
-                                    )
-                                    last_transient_exc = tex
-                                    transient_failed_account_id = account.id
-                                    await _release_tracked_stream_lease(current_account_lease)
-                                    current_account_lease = None
-                                    excluded_account_ids.add(account.id)
-                                    _move_verified_fresh_replay_from_owner(
+                                    verified_owner_replay_moved = _move_verified_fresh_replay_from_owner(
                                         account_id=account.id,
                                         outcome="owner_previsible_failure",
+                                        upstream_error_code=code,
                                     )
-                                    break
+                                    if not (
+                                        require_preferred_account
+                                        and preferred_account_id == account.id
+                                        and not verified_owner_replay_moved
+                                    ):
+                                        await _handle_or_defer_keyed_stream_health(
+                                            account,
+                                            _upstream_error_from_openai(error),
+                                            code,
+                                            http_status=tex.status_code,
+                                        )
+                                        last_transient_exc = tex
+                                        transient_failed_account_id = account.id
+                                        await _release_tracked_stream_lease(current_account_lease)
+                                        current_account_lease = None
+                                        excluded_account_ids.add(account.id)
+                                        break
                                 await proxy._handle_stream_error(
                                     account,
                                     _upstream_error_from_openai(error),
@@ -2507,16 +2509,23 @@ class _StreamingRetryMixin:
                         require_security_work_authorized = True
                         last_security_work_retry_error = exc
                         continue
+                    verified_owner_replay_moved = _move_verified_fresh_replay_from_owner(
+                        account_id=account.id,
+                        outcome="owner_previsible_retryable_failure",
+                        upstream_error_code=exc.code,
+                    )
+                    if (
+                        require_preferred_account
+                        and preferred_account_id == account.id
+                        and not verified_owner_replay_moved
+                    ):
+                        raise
                     await _handle_or_defer_keyed_stream_health(account, exc.error, exc.code)
                     last_retryable_stream_error = exc
                     if exc.exclude_account:
                         await _release_tracked_stream_lease(current_account_lease)
                         current_account_lease = None
                         excluded_account_ids.add(account.id)
-                    _move_verified_fresh_replay_from_owner(
-                        account_id=account.id,
-                        outcome="owner_previsible_retryable_failure",
-                    )
                     continue
                 except _TerminalStreamError as exc:
                     health_write_allowed = await _drain_pending_post_refresh_penalty_on_terminal(settlement)
@@ -2968,21 +2977,27 @@ class _StreamingRetryMixin:
                                 action,
                             )
                             if action == "failover_next":
-                                await _handle_or_defer_keyed_stream_health(
-                                    account,
-                                    current_error_payload,
-                                    current_error_code,
-                                    http_status=retry_exc.status_code,
-                                )
-                                last_transient_exc = retry_exc
-                                await _release_tracked_stream_lease(current_account_lease)
-                                current_account_lease = None
-                                _move_verified_fresh_replay_from_owner(
+                                verified_owner_replay_moved = _move_verified_fresh_replay_from_owner(
                                     account_id=account.id,
                                     outcome="owner_post_refresh_failure",
+                                    upstream_error_code=current_error_code,
                                 )
-                                excluded_account_ids.add(account.id)
-                                continue
+                                if not (
+                                    require_preferred_account
+                                    and preferred_account_id == account.id
+                                    and not verified_owner_replay_moved
+                                ):
+                                    await _handle_or_defer_keyed_stream_health(
+                                        account,
+                                        current_error_payload,
+                                        current_error_code,
+                                        http_status=retry_exc.status_code,
+                                    )
+                                    last_transient_exc = retry_exc
+                                    await _release_tracked_stream_lease(current_account_lease)
+                                    current_account_lease = None
+                                    excluded_account_ids.add(account.id)
+                                    continue
                             health_write_allowed = await _drain_pending_post_refresh_penalty_on_terminal(settlement)
                             if health_write_allowed:
                                 await proxy._handle_stream_error(

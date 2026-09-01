@@ -409,7 +409,6 @@ from app.modules.proxy._service.websocket.helpers import (
     _release_websocket_response_create_gate,
     _rewrite_websocket_continuity_corruption_event,
     _rewrite_websocket_downstream_response_id,
-    _rewrite_websocket_previous_response_owner_unavailable_event,
     _rewrite_websocket_suppressed_duplicate_tool_call_completion_event,
     _sanitize_websocket_connect_failure,
     _sanitize_websocket_previous_response_error,
@@ -432,6 +431,7 @@ from app.modules.proxy._service.websocket.helpers import (
     _websocket_event_incomplete_reason,
     _websocket_full_resend_conflicts_with_visible_pending,
     _websocket_input_items_are_self_contained_fresh_replay,
+    _websocket_owner_pinned_quota_error_code,
     _websocket_owner_switch_has_other_pending_requests,
     _websocket_precreated_auth_error_code,
     _websocket_precreated_replay_fallback_error,
@@ -5650,28 +5650,31 @@ class _WebSocketMixin:
                 payload=payload,
                 has_other_pending_requests=has_other_pending_requests,
             )
-        retry_safe_owner_replay = bool(
+        owner_pinned_quota_error_code = _websocket_owner_pinned_quota_error_code(
+            request_state,
+            event_type=event_type,
+            payload=payload,
+        )
+        owner_pinned_retry_error = bool(
             retry_error_code in _facade()._WEBSOCKET_TRANSPARENT_REPLAY_ERROR_CODES
+            and request_state.previous_response_id is not None
+            and request_state.preferred_account_id is not None
+        )
+        retry_safe_owner_replay = bool(
+            retry_error_code is not None
+            and owner_pinned_quota_error_code is not None
             and request_state.previous_response_id is not None
             and request_state.preferred_account_id is not None
             and request_state.proxy_injected_previous_response_id
             and request_state.fresh_upstream_request_is_retry_safe
             and request_state.fresh_upstream_request_text
         )
-        if (
-            retry_error_code in _facade()._WEBSOCKET_TRANSPARENT_REPLAY_ERROR_CODES
-            and request_state.previous_response_id is not None
-            and request_state.preferred_account_id is not None
-            and not retry_safe_previous_response_not_found
-            and not retry_safe_owner_replay
-        ):
+        if owner_pinned_retry_error and not retry_safe_previous_response_not_found and not retry_safe_owner_replay:
+            assert retry_error_code is not None
             await proxy._handle_stream_error(
                 account,
                 {"message": _websocket_event_error_message(event_type, payload) or "Upstream error"},
                 retry_error_code,
-            )
-            event, payload, event_type, downstream_text = _rewrite_websocket_previous_response_owner_unavailable_event(
-                request_state=request_state,
             )
             retry_error_code = None
         if retry_safe_owner_replay and not retry_safe_previous_response_not_found:
@@ -5681,11 +5684,6 @@ class _WebSocketMixin:
                     account,
                     {"message": _websocket_event_error_message(event_type, payload) or "Upstream error"},
                     retry_error_code,
-                )
-                event, payload, event_type, downstream_text = (
-                    _rewrite_websocket_previous_response_owner_unavailable_event(
-                        request_state=request_state,
-                    )
                 )
                 retry_error_code = None
             else:

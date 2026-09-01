@@ -37,6 +37,7 @@ PLAN_TYPE_PRIORITY = (
 
 _RATE_LIMIT_CODES = frozenset({"rate_limit_exceeded", "usage_limit_reached"})
 _QUOTA_CODES = frozenset({"insufficient_quota", "usage_not_included", "quota_exceeded"})
+_OWNER_FAILOVER_QUOTA_CODES = _QUOTA_CODES | {"usage_limit_reached"}
 _TRANSIENT_CODES = frozenset(
     {"server_error", "upstream_error", "stream_incomplete", "overloaded_error", "server_is_overloaded"}
 )
@@ -85,6 +86,12 @@ def is_upstream_model_capacity_error(message: str | None) -> bool:
         return False
     normalized_message = " ".join(message.lower().split())
     return any(marker in normalized_message for marker in _MODEL_CAPACITY_MESSAGE_MARKERS)
+
+
+def is_upstream_quota_failover_error_code(error_code: str | None) -> bool:
+    """Return whether an upstream code authorizes moving a hard continuity owner."""
+
+    return error_code in _OWNER_FAILOVER_QUOTA_CODES
 
 
 def classify_upstream_failure(

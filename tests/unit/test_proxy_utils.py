@@ -15076,7 +15076,7 @@ async def test_stream_with_retry_post_refresh_confirmed_proxy_connect_failure_fa
 
 
 @pytest.mark.asyncio
-async def test_stream_with_retry_post_refresh_confirmed_proxy_connect_failure_moves_verified_fresh_replay(
+async def test_stream_with_retry_post_refresh_confirmed_proxy_connect_failure_keeps_verified_owner(
     monkeypatch,
 ):
     settings = _make_proxy_settings()
@@ -15147,9 +15147,11 @@ async def test_stream_with_retry_post_refresh_confirmed_proxy_connect_failure_mo
         )
     ]
 
-    assert json.loads(chunks[-1].split("data: ", 1)[1])["response"]["id"] == "resp_post_refresh_verified_ok"
-    assert streamed_previous_response_ids == [previous_response_id, previous_response_id, None]
-    assert selection_exclusions == [set(), {owner.id}]
+    failed = json.loads(chunks[-1].split("data: ", 1)[1])
+    assert failed["type"] == "response.failed"
+    assert failed["response"]["error"]["message"] == "verified owner proxy route unavailable"
+    assert streamed_previous_response_ids == [previous_response_id, previous_response_id]
+    assert selection_exclusions == [set()]
     assert all(call.args[2] != "upstream_unavailable" for call in handle_stream_error.await_args_list)
 
 
@@ -30006,7 +30008,7 @@ async def test_process_upstream_websocket_text_does_not_fresh_retry_injected_too
 
 
 @pytest.mark.asyncio
-async def test_process_upstream_websocket_text_maps_previous_response_usage_limit_to_upstream_unavailable(
+async def test_process_upstream_websocket_text_preserves_previous_response_usage_limit_when_replay_unsafe(
     monkeypatch,
 ):
     request_logs = _RequestLogsRecorder()
@@ -30061,7 +30063,7 @@ async def test_process_upstream_websocket_text_maps_previous_response_usage_limi
         response_create_gate=asyncio.Semaphore(1),
     )
 
-    assert '"code":"upstream_unavailable"' in downstream_text
+    assert '"code":"usage_limit_reached"' in downstream_text
     handle_stream_error.assert_awaited_once()
     handle_call = handle_stream_error.await_args
     assert handle_call is not None
@@ -30070,13 +30072,12 @@ async def test_process_upstream_websocket_text_maps_previous_response_usage_limi
     finalize_request_state.assert_awaited_once()
     finalize_call = finalize_request_state.await_args
     assert finalize_call is not None
-    assert finalize_call.kwargs["event_type"] == "response.failed"
+    assert finalize_call.kwargs["event_type"] == "error"
     payload = finalize_call.kwargs["payload"]
     assert isinstance(payload, dict)
-    response_payload = cast(dict[str, JsonValue], payload["response"])
-    error_payload = cast(dict[str, JsonValue], response_payload["error"])
-    assert error_payload["code"] == "upstream_unavailable"
-    assert error_payload["message"] == "Previous response owner account is unavailable; retry later."
+    error_payload = cast(dict[str, JsonValue], payload["error"])
+    assert error_payload["code"] == "usage_limit_reached"
+    assert error_payload["message"] == "The usage limit has been reached"
     assert upstream_control.reconnect_requested is False
     assert upstream_control.suppress_downstream_event is False
     assert upstream_control.replay_request_state is None
@@ -30157,7 +30158,7 @@ async def test_process_upstream_websocket_text_replays_proxy_verified_anchor_aft
 
 
 @pytest.mark.asyncio
-async def test_process_upstream_websocket_text_replays_proxy_verified_anchor_after_model_capacity(
+async def test_process_upstream_websocket_text_keeps_proxy_verified_anchor_on_model_capacity(
     monkeypatch,
 ):
     service = proxy_service.ProxyService(_repo_factory(_RequestLogsRecorder()))
@@ -30206,8 +30207,9 @@ async def test_process_upstream_websocket_text_replays_proxy_verified_anchor_aft
         },
     }
 
-    await service._process_upstream_websocket_text(
-        json.dumps(upstream_payload, separators=(",", ":")),
+    upstream_text = json.dumps(upstream_payload, separators=(",", ":"))
+    downstream_text = await service._process_upstream_websocket_text(
+        upstream_text,
         account=account,
         account_id_value=account.id,
         pending_requests=pending_requests,
@@ -30221,13 +30223,14 @@ async def test_process_upstream_websocket_text_replays_proxy_verified_anchor_aft
     handle_call = handle_stream_error.await_args
     assert handle_call is not None
     assert handle_call.args[2] == "server_is_overloaded"
-    finalize_request_state.assert_not_awaited()
-    assert upstream_control.reconnect_requested is True
-    assert upstream_control.suppress_downstream_event is True
-    assert upstream_control.replay_request_state is pending_request
-    assert pending_request.request_text == fresh_text
-    assert pending_request.previous_response_id is None
-    assert pending_request.preferred_account_id is None
+    finalize_request_state.assert_awaited_once()
+    assert downstream_text == upstream_text
+    assert upstream_control.reconnect_requested is False
+    assert upstream_control.suppress_downstream_event is False
+    assert upstream_control.replay_request_state is None
+    assert pending_request.request_text != fresh_text
+    assert pending_request.previous_response_id == "resp_proxy_anchor_capacity"
+    assert pending_request.preferred_account_id == account.id
     assert list(pending_requests) == []
 
 
@@ -30830,8 +30833,8 @@ async def test_process_upstream_websocket_text_keeps_file_backed_verified_anchor
         response_create_gate=asyncio.Semaphore(1),
     )
 
-    assert '"code":"upstream_unavailable"' in downstream_text
-    assert "usage_limit_reached" not in downstream_text
+    assert '"code":"usage_limit_reached"' in downstream_text
+    assert "upstream_unavailable" not in downstream_text
     handle_stream_error.assert_awaited_once()
     finalize_request_state.assert_awaited_once()
     assert upstream_control.reconnect_requested is False
@@ -38911,7 +38914,7 @@ async def test_stream_verified_fresh_replay_moves_off_owner_after_previsible_quo
 
 
 @pytest.mark.asyncio
-async def test_stream_verified_fresh_replay_moves_off_owner_after_refresh_connect_failure(monkeypatch):
+async def test_stream_verified_fresh_replay_stays_on_owner_after_refresh_connect_failure(monkeypatch):
     settings = _make_proxy_settings()
     request_logs = _RequestLogsRecorder()
     service = proxy_service.ProxyService(_repo_factory(request_logs))
@@ -38973,12 +38976,7 @@ async def test_stream_verified_fresh_replay_moves_off_owner_after_refresh_connec
     monkeypatch.setattr(
         service,
         "_ensure_fresh_with_budget",
-        AsyncMock(
-            side_effect=[
-                aiohttp.ClientConnectionError("[Errno 104] Connection reset by peer"),
-                replacement_account,
-            ]
-        ),
+        AsyncMock(side_effect=aiohttp.ClientConnectionError("[Errno 104] Connection reset by peer")),
     )
     monkeypatch.setattr(service, "_settle_stream_api_key_usage", AsyncMock(return_value=True))
     monkeypatch.setattr(proxy_service, "core_stream_responses", fake_stream)
@@ -38995,25 +38993,18 @@ async def test_stream_verified_fresh_replay_moves_off_owner_after_refresh_connec
 
     chunks = [chunk async for chunk in service.stream_responses(payload, {"session_id": session_id})]
 
-    assert json.loads(chunks[-1].split("data: ", 1)[1])["type"] == "response.completed"
-    assert len(selection_calls) >= 2
-    assert [streamed.previous_response_id for streamed in streamed_payloads] == [None]
-    assert streamed_payloads[0].input == full_input
-    assert streamed_account_ids == [replacement_account.chatgpt_account_id]
-    assert owner_pressures_before_replacement == [(0, 0, 0.0)]
+    assert json.loads(chunks[-1].split("data: ", 1)[1])["type"] == "response.failed"
+    assert len(selection_calls) == 1
+    assert streamed_payloads == []
+    assert streamed_account_ids == []
+    assert owner_pressures_before_replacement == []
     assert await service._load_balancer.account_pressure_snapshot(owner_account.id) == (0, 0, 0.0)
     assert await service._load_balancer.account_pressure_snapshot(replacement_account.id) == (0, 0, 0.0)
-    handle_stream_error.assert_awaited_once()
-    assert handle_stream_error.await_args is not None
-    assert handle_stream_error.await_args.args[0] == owner_account
+    handle_stream_error.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_stream_verified_fresh_replay_moves_off_owner_after_pre_dispatch_connect_failure(monkeypatch):
-    # Regression: a confirmed pre-dispatch dead-route failure on a pinned owner
-    # guarantees zero upstream bytes, so a locally verified full-resend replay
-    # must move to a fresh account instead of failing closed under hard
-    # ownership.
+async def test_stream_verified_fresh_replay_stays_on_owner_after_pre_dispatch_connect_failure(monkeypatch):
     settings = _make_proxy_settings()
     request_logs = _RequestLogsRecorder()
     service = proxy_service.ProxyService(_repo_factory(request_logs))
@@ -39083,15 +39074,10 @@ async def test_stream_verified_fresh_replay_moves_off_owner_after_pre_dispatch_c
 
     chunks = [chunk async for chunk in service.stream_responses(payload, {"session_id": session_id})]
 
-    assert json.loads(chunks[-1].split("data: ", 1)[1])["type"] == "response.completed"
-    assert all('"type":"response.failed"' not in chunk for chunk in chunks)
-    assert len(selection_calls) >= 2
-    assert streamed_account_ids == [
-        owner_account.chatgpt_account_id,
-        replacement_account.chatgpt_account_id,
-    ]
-    assert [streamed.previous_response_id for streamed in streamed_payloads] == [previous_response_id, None]
-    assert streamed_payloads[1].input == full_input
+    assert json.loads(chunks[-1].split("data: ", 1)[1])["type"] == "response.failed"
+    assert len(selection_calls) == 1
+    assert streamed_account_ids == [owner_account.chatgpt_account_id]
+    assert [streamed.previous_response_id for streamed in streamed_payloads] == [previous_response_id]
     record_error_backoff.assert_awaited_once_with(owner_account)
     record_error.assert_not_awaited()
 

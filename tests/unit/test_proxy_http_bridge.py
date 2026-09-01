@@ -22056,7 +22056,7 @@ async def test_process_http_bridge_upstream_text_preserves_raw_error_but_finaliz
 
 
 @pytest.mark.asyncio
-async def test_process_http_bridge_upstream_text_masks_previous_response_usage_limit(
+async def test_process_http_bridge_upstream_text_preserves_previous_response_usage_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = proxy_service.ProxyService(cast(Any, nullcontext()))
@@ -22130,17 +22130,19 @@ async def test_process_http_bridge_upstream_text_masks_previous_response_usage_l
     assert isinstance(error, dict)
 
     assert payload["type"] == "response.failed"
-    assert error["code"] == "upstream_unavailable"
-    assert "usage_limit_reached" not in json.dumps(payload)
-    assert request_state.error_http_status_override == 502
+    assert error["code"] == "usage_limit_reached"
+    assert error["message"] == "The usage limit has been reached"
+    assert request_state.error_http_status_override == 429
     assert session.upstream_control.reconnect_requested is True
     assert session.pending_requests == deque()
     assert session.queued_request_count == 0
 
 
 @pytest.mark.asyncio
-async def test_http_bridge_replays_proxy_verified_full_resend_after_owner_quota(
+@pytest.mark.parametrize("retry_succeeds", [True, False], ids=["replay-succeeds", "replay-fails"])
+async def test_http_bridge_owner_quota_replay_preserves_error_when_replacement_fails(
     monkeypatch: pytest.MonkeyPatch,
+    retry_succeeds: bool,
 ) -> None:
     service = proxy_service.ProxyService(cast(Any, nullcontext()))
     fresh_text = (
@@ -22207,7 +22209,7 @@ async def test_http_bridge_replays_proxy_verified_full_resend_after_owner_quota(
         assert request_state.excluded_account_ids == {account.id}
         assert request_state.affinity_policy.reallocate_sticky is True
         assert list(session.pending_requests) == [request_state]
-        return True
+        return retry_succeeds
 
     monkeypatch.setattr(service, "_handle_stream_error", handle_stream_error)
     monkeypatch.setattr(
@@ -22235,11 +22237,28 @@ async def test_http_bridge_replays_proxy_verified_full_resend_after_owner_quota(
     handle_stream_error.assert_awaited_once()
     release_create_lease.assert_awaited_once_with(request_state)
     assert request_state.event_queue is not None
-    assert request_state.event_queue.empty()
+    if retry_succeeds:
+        assert request_state.event_queue.empty()
+    else:
+        event_block = await request_state.event_queue.get()
+        assert event_block is not None
+        assert await request_state.event_queue.get() is None
+        payload = proxy_service.parse_sse_data_json(event_block)
+        assert isinstance(payload, dict)
+        response = payload.get("response")
+        assert isinstance(response, dict)
+        error = response.get("error")
+        assert isinstance(error, dict)
+        assert error["code"] == "usage_limit_reached"
+        assert error["message"] == "The usage limit has been reached"
+        assert session.account is account
+        assert request_state.previous_response_id == "resp_verified_owner"
+        assert request_state.preferred_account_id == account.id
+        assert request_state.error_http_status_override == 429
 
 
 @pytest.mark.asyncio
-async def test_http_bridge_masks_owner_pinned_quota_error_with_queued_requests(
+async def test_http_bridge_preserves_owner_pinned_quota_error_with_queued_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = proxy_service.ProxyService(cast(Any, nullcontext()))
@@ -22328,9 +22347,9 @@ async def test_http_bridge_masks_owner_pinned_quota_error_with_queued_requests(
     assert isinstance(error, dict)
 
     assert payload["type"] == "response.failed"
-    assert error["code"] == "upstream_unavailable"
-    assert "usage_limit_reached" not in json.dumps(payload)
-    assert request_state.error_http_status_override == 502
+    assert error["code"] == "usage_limit_reached"
+    assert error["message"] == "The usage limit has been reached"
+    assert request_state.error_http_status_override == 429
     assert session.upstream_control.reconnect_requested is True
     assert session.upstream_control.retire_after_drain is True
     assert session.pending_requests == deque([queued_request_state])

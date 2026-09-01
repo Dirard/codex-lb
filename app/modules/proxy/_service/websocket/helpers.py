@@ -332,6 +332,7 @@ from app.modules.proxy.helpers import (
     _normalize_error_code,
     _parse_openai_error,
     is_upstream_model_capacity_error,
+    is_upstream_quota_failover_error_code,
 )
 from app.modules.proxy.http_bridge_forwarding import (
     HTTPBridgeForwardContext as HTTPBridgeForwardContext,
@@ -1017,21 +1018,7 @@ def _websocket_owner_pinned_quota_error_code(
         _websocket_event_error_code(event_type, payload),
         _websocket_event_error_type(event_type, payload),
     )
-    if is_upstream_model_capacity_error(_websocket_event_error_message(event_type, payload)):
-        if error_code in {
-            "rate_limit_exceeded",
-            "usage_limit_reached",
-            "insufficient_quota",
-            "usage_not_included",
-            "quota_exceeded",
-        }:
-            return error_code
-        if _websocket_response_id(None, payload) is not None:
-            return None
-        return "server_is_overloaded"
-    if error_code not in _facade()._WEBSOCKET_TRANSPARENT_REPLAY_ERROR_CODES:
-        return None
-    return error_code
+    return error_code if is_upstream_quota_failover_error_code(error_code) else None
 
 
 async def _pop_replayable_precreated_websocket_request_state(

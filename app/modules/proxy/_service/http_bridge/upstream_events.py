@@ -110,7 +110,6 @@ from app.modules.proxy._service.http_bridge.service_stubs import (
     _response_output_item_done_tool_call,
     _rewrite_websocket_continuity_corruption_event,
     _rewrite_websocket_downstream_response_id,
-    _rewrite_websocket_previous_response_owner_unavailable_event,
     _rewrite_websocket_suppressed_duplicate_tool_call_completion_event,
     _security_work_advisory_event,
     _service_get_settings,
@@ -2991,8 +2990,27 @@ class _HTTPBridgeUpstreamEventsMixin:
                 and status_request_state.previous_response_id is not None
                 and status_request_state.preferred_account_id is not None
             ):
+                previous_request_state = (
+                    status_request_state.request_text,
+                    status_request_state.previous_response_id,
+                    status_request_state.preferred_account_id,
+                    status_request_state.replay_required_account_id,
+                    status_request_state.proxy_injected_previous_response_id,
+                    status_request_state.fresh_upstream_request_is_retry_safe,
+                    status_request_state.responses_lite_model,
+                    status_request_state.input_item_count,
+                    status_request_state.input_full_fingerprint,
+                    status_request_state.affinity_policy,
+                    set(status_request_state.excluded_account_ids),
+                    status_request_state.error_code_override,
+                    status_request_state.error_type_override,
+                    status_request_state.error_message_override,
+                    status_request_state.error_param_override,
+                    status_request_state.error_http_status_override,
+                )
                 safe_request_text = _prepare_websocket_request_state_for_account_switch(status_request_state)
                 if safe_request_text is not None:
+                    previous_account = session.account
                     previous_upstream_turn_state = session.upstream_turn_state
                     previous_downstream_turn_state = session.downstream_turn_state
                     session.upstream_turn_state = None
@@ -3013,30 +3031,39 @@ class _HTTPBridgeUpstreamEventsMixin:
                     retried = await self._retry_http_bridge_precreated_request(session)
                     if retried:
                         return
+                    session.account = previous_account
                     session.upstream_turn_state = previous_upstream_turn_state
                     session.downstream_turn_state = previous_downstream_turn_state
+                    (
+                        status_request_state.request_text,
+                        status_request_state.previous_response_id,
+                        status_request_state.preferred_account_id,
+                        status_request_state.replay_required_account_id,
+                        status_request_state.proxy_injected_previous_response_id,
+                        status_request_state.fresh_upstream_request_is_retry_safe,
+                        status_request_state.responses_lite_model,
+                        status_request_state.input_item_count,
+                        status_request_state.input_full_fingerprint,
+                        status_request_state.affinity_policy,
+                        previous_excluded_account_ids,
+                        status_request_state.error_code_override,
+                        status_request_state.error_type_override,
+                        status_request_state.error_message_override,
+                        status_request_state.error_param_override,
+                        status_request_state.error_http_status_override,
+                    ) = previous_request_state
+                    status_request_state.excluded_account_ids = previous_excluded_account_ids
+                    event_block = f"data: {original_text}\n\n"
+                    payload = parse_sse_data_json(event_block)
+                    event_type = classify_event_type(payload)
+                    event = parse_sse_event_payload(payload) if event_type in _LIFECYCLE_EVENT_TYPES else None
                     async with session.pending_lock:
                         if status_request_state in session.pending_requests:
                             session.pending_requests.remove(status_request_state)
                             session.queued_request_count = max(0, session.queued_request_count - 1)
-                    status_request_state.error_http_status_override = 502
-                    (
-                        _downstream_text,
-                        event_block,
-                        event,
-                        payload,
-                        event_type,
-                    ) = _build_stream_incomplete_terminal_event_for_request(status_request_state)
                 else:
-                    status_request_state.error_http_status_override = 502
                     session.upstream_control.reconnect_requested = True
                     session.upstream_control.retire_after_drain = True
-                    event, payload, event_type, rewritten_text = (
-                        _rewrite_websocket_previous_response_owner_unavailable_event(
-                            request_state=status_request_state,
-                        )
-                    )
-                    event_block = f"data: {rewritten_text}\n\n"
         elif (
             retry_error_code == _ACCOUNT_MODEL_UNSUPPORTED_ERROR_CODE
             and not is_previous_response_not_found_event
