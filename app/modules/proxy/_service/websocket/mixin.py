@@ -414,6 +414,7 @@ from app.modules.proxy._service.websocket.helpers import (
     _record_websocket_responses_lite_acceptance,
     _record_websocket_stale_anchor_failure,
     _release_websocket_response_create_gate,
+    _retire_websocket_rejected_continuity_anchor,
     _rewrite_websocket_continuity_corruption_event,
     _rewrite_websocket_downstream_response_id,
     _rewrite_websocket_suppressed_duplicate_tool_call_completion_event,
@@ -1905,6 +1906,7 @@ class _WebSocketMixin:
                                     surface="websocket_connect",
                                     expose_stale_previous_response_classifier=codex_session_affinity,
                                     request_state=request_state,
+                                    continuity_state=continuity_state,
                                 )
                                 if request_state is not None:
                                     sanitized_error = _parse_openai_error(error_payload)
@@ -5591,6 +5593,7 @@ class _WebSocketMixin:
                         grouped_request_state,
                         surface="websocket_stream",
                         upstream_error_code="previous_response_not_found",
+                        continuity_state=continuity_state,
                     )
                 (
                     grouped_downstream_text,
@@ -5693,6 +5696,7 @@ class _WebSocketMixin:
             and retry_error_code is not None
         )
         if retry_safe_previous_response_not_found:
+            _retire_websocket_rejected_continuity_anchor(continuity_state, request_state)
             downstream_text = text
         else:
             event, payload, event_type, downstream_text = _maybe_rewrite_websocket_previous_response_not_found_event(
@@ -5702,6 +5706,7 @@ class _WebSocketMixin:
                 event_type=event_type,
                 upstream_control=upstream_control,
                 original_text=text,
+                continuity_state=continuity_state,
             )
         if event_type in {"response.failed", "response.incomplete", "error"} and isinstance(payload, dict):
             public_payload = _sanitize_public_websocket_event_payload(payload, event_type=event_type)
