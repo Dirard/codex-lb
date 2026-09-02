@@ -36269,6 +36269,7 @@ async def test_process_upstream_websocket_text_retries_precreated_previous_respo
         awaiting_response_created=True,
         request_text=json.dumps(request_payload, separators=(",", ":")),
         previous_response_id="resp_anchor",
+        proxy_injected_previous_response_id=True,
         fresh_upstream_request_text=json.dumps(fresh_request_payload, separators=(",", ":")),
         fresh_upstream_request_is_retry_safe=True,
         error_code_override="upstream_unavailable",
@@ -36279,6 +36280,13 @@ async def test_process_upstream_websocket_text_retries_precreated_previous_respo
         preferred_account_id=account.id,
     )
     pending_requests = deque([pending_request])
+    continuity_state = proxy_service._WebSocketContinuityState(
+        last_completed_response_id="resp_anchor",
+        last_completed_input_count=1,
+        last_completed_input_prefix_fingerprint="stale-prefix",
+        last_pending_function_call_ids=["call_stale"],
+        last_pending_tool_call_types={"call_stale": "function_call"},
+    )
     upstream_control = proxy_service._WebSocketUpstreamControl()
     upstream_payload = {
         "type": "error",
@@ -36301,6 +36309,7 @@ async def test_process_upstream_websocket_text_retries_precreated_previous_respo
         api_key=None,
         upstream_control=upstream_control,
         response_create_gate=asyncio.Semaphore(1),
+        continuity_state=continuity_state,
     )
 
     handle_stream_error.assert_not_awaited()
@@ -36320,6 +36329,11 @@ async def test_process_upstream_websocket_text_retries_precreated_previous_respo
     assert pending_request.error_type_override is None
     assert pending_request.error_param_override is None
     assert pending_request.error_http_status_override is None
+    assert continuity_state.last_completed_response_id is None
+    assert continuity_state.last_completed_input_count == 0
+    assert continuity_state.last_completed_input_prefix_fingerprint is None
+    assert continuity_state.last_pending_function_call_ids == []
+    assert continuity_state.last_pending_tool_call_types == {}
 
 
 @pytest.mark.asyncio
@@ -37415,6 +37429,196 @@ def test_sanitize_websocket_connect_failure_rewrites_previous_response_not_found
         previous_response_id="resp_prev_anchor",
         api_key_id=None,
     )
+
+
+def _websocket_previous_response_not_found_error_payload(previous_response_id: str) -> dict[str, JsonValue]:
+    payload = proxy_module.openai_error(
+        "previous_response_not_found",
+        f"Previous response with id '{previous_response_id}' not found.",
+        error_type="invalid_request_error",
+    )
+    payload["type"] = "error"
+    payload["status"] = 400
+    payload["error"]["param"] = "previous_response_id"
+    return payload
+
+
+def test_websocket_rejected_proxy_anchor_is_retired_from_live_continuity(monkeypatch):
+    monkeypatch.setattr(websocket_helpers_module, "_websocket_stale_previous_response_index", {})
+    full_resend_input_items = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first turn"}]},
+        {"type": "function_call", "call_id": "call_rejected", "name": "shell", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_rejected", "output": "done"},
+    ]
+    responses_payload = ResponsesRequest(
+        model="gpt-5.1",
+        instructions="You are a helpful assistant.",
+        input=full_resend_input_items,
+    )
+    sanitized_input_items = cast(list[JsonValue], responses_payload.input)
+    assert len(sanitized_input_items) == 3
+    stored_prefix_items = sanitized_input_items[:2]
+    continuity_state = proxy_service._WebSocketContinuityState(
+        last_completed_response_id="resp_rejected_anchor",
+        last_completed_input_count=len(stored_prefix_items),
+        last_completed_input_prefix_fingerprint=proxy_service._fingerprint_input_items(stored_prefix_items),
+        last_pending_function_call_ids=["call_rejected"],
+        last_pending_tool_call_types={"call_rejected": "function_call"},
+    )
+    anchor_before = websocket_helpers_module._websocket_continuity_anchor_for_payload(
+        continuity_state,
+        responses_payload=responses_payload,
+        codex_session_affinity=True,
+    )
+    assert anchor_before is not None
+    assert anchor_before.previous_response_id == "resp_rejected_anchor"
+    assert anchor_before.stored_input_item_count == 2
+
+    request_state = proxy_service._WebSocketRequestState(
+        request_id="ws_req_rejected_proxy_anchor",
+        model="gpt-5.1",
+        service_tier=None,
+        reasoning_effort=None,
+        api_key_reservation=None,
+        started_at=0.0,
+        previous_response_id="resp_rejected_anchor",
+        session_id="sid-rejected-proxy-anchor",
+        proxy_injected_previous_response_id=True,
+        expose_stale_previous_response_classifier=True,
+    )
+    original_payload = _websocket_previous_response_not_found_error_payload("resp_rejected_anchor")
+    original_text = json.dumps(original_payload, separators=(",", ":"))
+    original_event = parse_sse_event(f"data: {original_text}\n\n")
+    assert original_event is not None
+    original_event_type = proxy_service._event_type_from_payload(original_event, original_payload)
+    upstream_control = proxy_service._WebSocketUpstreamControl()
+
+    _, rewritten_payload, rewritten_event_type, rewritten_text = (
+        proxy_service._maybe_rewrite_websocket_previous_response_not_found_event(
+            request_state=request_state,
+            event=original_event,
+            payload=original_payload,
+            event_type=original_event_type,
+            upstream_control=upstream_control,
+            original_text=original_text,
+            continuity_state=continuity_state,
+        )
+    )
+
+    assert continuity_state.last_completed_response_id is None
+    assert continuity_state.last_completed_input_count == 0
+    assert continuity_state.last_completed_input_prefix_fingerprint is None
+    assert continuity_state.last_pending_function_call_ids == []
+    assert continuity_state.last_pending_tool_call_types == {}
+    assert (
+        websocket_helpers_module._websocket_continuity_anchor_for_payload(
+            continuity_state,
+            responses_payload=responses_payload,
+            codex_session_affinity=True,
+        )
+        is None
+    )
+    assert websocket_helpers_module._is_websocket_stale_previous_response(
+        previous_response_id="resp_rejected_anchor",
+        api_key_id=None,
+    )
+    assert upstream_control.replay_request_state is None
+    assert upstream_control.reconnect_requested is False
+    assert rewritten_event_type == "response.failed"
+    rewritten_error = cast(dict[str, JsonValue], cast(dict[str, JsonValue], rewritten_payload)["response"]["error"])
+    assert rewritten_error["code"] == "previous_response_not_found"
+    assert rewritten_error["message"] == proxy_service.PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE
+    assert "resp_rejected_anchor" not in rewritten_text
+
+
+def test_websocket_rejected_proxy_anchor_preserves_newer_completed_response(monkeypatch):
+    monkeypatch.setattr(websocket_helpers_module, "_websocket_stale_previous_response_index", {})
+    continuity_state = proxy_service._WebSocketContinuityState(
+        last_completed_response_id="resp_newer_completion",
+        last_completed_input_count=3,
+        last_completed_input_prefix_fingerprint="fingerprint-newer",
+        last_pending_function_call_ids=["call_newer"],
+        last_pending_tool_call_types={"call_newer": "custom_tool_call"},
+    )
+    request_state = proxy_service._WebSocketRequestState(
+        request_id="ws_req_rejected_proxy_anchor_race",
+        model="gpt-5.1",
+        service_tier=None,
+        reasoning_effort=None,
+        api_key_reservation=None,
+        started_at=0.0,
+        previous_response_id="resp_rejected_anchor",
+        session_id="sid-rejected-proxy-anchor-race",
+        proxy_injected_previous_response_id=True,
+        expose_stale_previous_response_classifier=True,
+    )
+    original_payload = _websocket_previous_response_not_found_error_payload("resp_rejected_anchor")
+    original_text = json.dumps(original_payload, separators=(",", ":"))
+    original_event = parse_sse_event(f"data: {original_text}\n\n")
+    assert original_event is not None
+    original_event_type = proxy_service._event_type_from_payload(original_event, original_payload)
+
+    _, _, rewritten_event_type, _ = proxy_service._maybe_rewrite_websocket_previous_response_not_found_event(
+        request_state=request_state,
+        event=original_event,
+        payload=original_payload,
+        event_type=original_event_type,
+        upstream_control=proxy_service._WebSocketUpstreamControl(),
+        original_text=original_text,
+        continuity_state=continuity_state,
+    )
+
+    assert rewritten_event_type == "response.failed"
+    assert continuity_state.last_completed_response_id == "resp_newer_completion"
+    assert continuity_state.last_completed_input_count == 3
+    assert continuity_state.last_completed_input_prefix_fingerprint == "fingerprint-newer"
+    assert continuity_state.last_pending_function_call_ids == ["call_newer"]
+    assert continuity_state.last_pending_tool_call_types == {"call_newer": "custom_tool_call"}
+
+
+def test_websocket_rejected_client_supplied_anchor_keeps_live_continuity(monkeypatch):
+    monkeypatch.setattr(websocket_helpers_module, "_websocket_stale_previous_response_index", {})
+    continuity_state = proxy_service._WebSocketContinuityState(
+        last_completed_response_id="resp_client_supplied_invalid",
+        last_completed_input_count=2,
+        last_completed_input_prefix_fingerprint="fingerprint-client",
+        last_pending_function_call_ids=["call_client"],
+        last_pending_tool_call_types={"call_client": "function_call"},
+    )
+    request_state = proxy_service._WebSocketRequestState(
+        request_id="ws_req_client_supplied_invalid",
+        model="gpt-5.1",
+        service_tier=None,
+        reasoning_effort=None,
+        api_key_reservation=None,
+        started_at=0.0,
+        previous_response_id="resp_client_supplied_invalid",
+        session_id="sid-client-supplied-invalid",
+        proxy_injected_previous_response_id=False,
+        expose_stale_previous_response_classifier=True,
+    )
+    original_payload = _websocket_previous_response_not_found_error_payload("resp_client_supplied_invalid")
+    original_text = json.dumps(original_payload, separators=(",", ":"))
+    original_event = parse_sse_event(f"data: {original_text}\n\n")
+    assert original_event is not None
+    original_event_type = proxy_service._event_type_from_payload(original_event, original_payload)
+
+    _, _, rewritten_event_type, _ = proxy_service._maybe_rewrite_websocket_previous_response_not_found_event(
+        request_state=request_state,
+        event=original_event,
+        payload=original_payload,
+        event_type=original_event_type,
+        upstream_control=proxy_service._WebSocketUpstreamControl(),
+        original_text=original_text,
+        continuity_state=continuity_state,
+    )
+
+    assert rewritten_event_type == "response.failed"
+    assert continuity_state.last_completed_response_id == "resp_client_supplied_invalid"
+    assert continuity_state.last_completed_input_count == 2
+    assert continuity_state.last_completed_input_prefix_fingerprint == "fingerprint-client"
+    assert continuity_state.last_pending_function_call_ids == ["call_client"]
+    assert continuity_state.last_pending_tool_call_types == {"call_client": "function_call"}
 
 
 def test_sanitize_websocket_terminal_stale_error_marks_missing_anchor_source_unknown():

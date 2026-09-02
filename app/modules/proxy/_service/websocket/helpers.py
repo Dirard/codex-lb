@@ -1160,6 +1160,7 @@ def _maybe_rewrite_websocket_previous_response_not_found_event(
     event_type: str | None,
     upstream_control: _WebSocketUpstreamControl,
     original_text: str,
+    continuity_state: _WebSocketContinuityState | None = None,
 ) -> tuple[OpenAIEvent | None, dict[str, JsonValue] | None, str | None, str]:
     error_code = _normalize_error_code(
         _websocket_event_error_code(event_type, payload),
@@ -1192,6 +1193,7 @@ def _maybe_rewrite_websocket_previous_response_not_found_event(
         reason=reason,
         reconnect_requested=reconnect_requested,
         original_text=original_text,
+        continuity_state=continuity_state,
     )
 
 
@@ -1281,12 +1283,42 @@ def _websocket_stale_anchor_failure_detail(
     )
 
 
+def _retire_websocket_rejected_continuity_anchor(
+    continuity_state: _WebSocketContinuityState | None,
+    request_state: _WebSocketRequestState,
+) -> None:
+    """Retire the exact proxy-injected anchor OpenAI rejected from live state.
+
+    Without this, the negative cache suppresses owner lookups for a short
+    window while the live continuity state keeps re-injecting the same
+    rejected response id on every retry. The clear is compare-and-set: an
+    older failed request must not erase a newer completion recorded by
+    another request, and a client-supplied response chain stays the client's
+    responsibility.
+    """
+    if continuity_state is None:
+        return
+    if not request_state.proxy_injected_previous_response_id:
+        return
+    if request_state.previous_response_id is None:
+        return
+    if continuity_state.last_completed_response_id != request_state.previous_response_id:
+        return
+    continuity_state.last_completed_response_id = None
+    continuity_state.last_completed_input_count = 0
+    continuity_state.last_completed_input_prefix_fingerprint = None
+    continuity_state.last_pending_function_call_ids = []
+    continuity_state.last_pending_tool_call_types = {}
+
+
 def _record_websocket_stale_anchor_failure(
     request_state: _WebSocketRequestState,
     *,
     surface: str,
     upstream_error_code: str,
+    continuity_state: _WebSocketContinuityState | None = None,
 ) -> None:
+    _retire_websocket_rejected_continuity_anchor(continuity_state, request_state)
     diagnostics = _websocket_stale_anchor_diagnostics(request_state)
     request_state.failure_phase_override = "upstream"
     request_state.failure_detail_override = _websocket_stale_anchor_failure_detail(diagnostics)
@@ -1318,6 +1350,7 @@ def _rewrite_websocket_continuity_corruption_event(
     reason: str,
     reconnect_requested: bool,
     original_text: str,
+    continuity_state: _WebSocketContinuityState | None = None,
 ) -> tuple[OpenAIEvent | None, dict[str, JsonValue] | None, str | None, str]:
     del original_text
     if reconnect_requested:
@@ -1327,6 +1360,7 @@ def _rewrite_websocket_continuity_corruption_event(
             request_state,
             surface="websocket_stream",
             upstream_error_code="previous_response_not_found",
+            continuity_state=continuity_state,
         )
     else:
         _record_continuity_fail_closed(
@@ -1402,6 +1436,7 @@ def _sanitize_websocket_connect_failure(
     payload: OpenAIErrorEnvelope,
     error_code: str,
     error_message: str,
+    continuity_state: _WebSocketContinuityState | None = None,
 ) -> tuple[int, OpenAIErrorEnvelope, str, str]:
     return _sanitize_websocket_previous_response_error(
         previous_response_id=request_state.previous_response_id,
@@ -1413,6 +1448,7 @@ def _sanitize_websocket_connect_failure(
         surface="websocket_connect",
         expose_stale_previous_response_classifier=request_state.expose_stale_previous_response_classifier,
         request_state=request_state,
+        continuity_state=continuity_state,
     )
 
 
@@ -1427,6 +1463,7 @@ def _sanitize_websocket_previous_response_error(
     surface: str,
     expose_stale_previous_response_classifier: bool = False,
     request_state: _WebSocketRequestState | None = None,
+    continuity_state: _WebSocketContinuityState | None = None,
 ) -> tuple[int, OpenAIErrorEnvelope, str, str]:
     if previous_response_id is None:
         return status_code, payload, error_code, error_message
@@ -1461,6 +1498,7 @@ def _sanitize_websocket_previous_response_error(
             request_state,
             surface=surface,
             upstream_error_code=normalized_code,
+            continuity_state=continuity_state,
         )
     else:
         _record_continuity_fail_closed(
@@ -1489,6 +1527,7 @@ def _sanitize_websocket_terminal_error_fields(
     error_message: str,
     error_type: str,
     error_param: str | None,
+    continuity_state: _WebSocketContinuityState | None = None,
 ) -> tuple[str, str, str, str | None]:
     normalized_code = _normalize_error_code(error_code, error_type)
     if not _facade()._is_previous_response_not_found_error(
@@ -1501,6 +1540,7 @@ def _sanitize_websocket_terminal_error_fields(
         request_state,
         surface="websocket_terminal",
         upstream_error_code=normalized_code,
+        continuity_state=continuity_state,
     )
     rewritten_code, rewritten_message = _websocket_continuity_error_fields(
         reason="previous_response_not_found",
