@@ -3801,6 +3801,7 @@ class _HTTPBridgeRequestSubmitMixin:
         *,
         request_state: _WebSocketRequestState | None = None,
         restart_reader: bool = False,
+        selection_affinity: _AffinityPolicy | None = None,
     ) -> bool:
         # The admitted body's admission gate can claim the half-open probe;
         # any exit that never advances a send attempt past its baseline must
@@ -4138,11 +4139,26 @@ class _HTTPBridgeRequestSubmitMixin:
                     **reconnect_reader_kwargs,
                 )
             else:
-                await self._reconnect_http_bridge_session(
-                    session,
-                    request_state=request_state,
-                    **reconnect_reader_kwargs,
-                )
+                # Only pass the affinity when a caller supplied one: an
+                # explicit ``None`` would leak into reconnect call-shape
+                # assertions and mocks that predate the parameter.
+                if selection_affinity is None:
+                    await self._reconnect_http_bridge_session(
+                        session,
+                        request_state=request_state,
+                        **reconnect_reader_kwargs,
+                    )
+                else:
+                    # A quota-authorized replay retires the old hard-owner
+                    # generation, so its reallocate_sticky affinity must reach
+                    # account selection instead of the session's still-bound
+                    # policy; otherwise the exhausted owner stays preferred.
+                    await self._reconnect_http_bridge_session(
+                        session,
+                        request_state=request_state,
+                        selection_affinity=selection_affinity,
+                        **reconnect_reader_kwargs,
+                    )
             if request_state.account_response_create_lease is None:
                 current_settings = await _service_get_settings_cache().get()
                 request_state.account_response_create_lease = (

@@ -29,6 +29,10 @@ An upstream quota rejection only authorizes consideration of transfer. Existing 
 
 Direct WebSocket and HTTP bridge will derive the quota code from the received upstream `error` or `response.failed` event. HTTP/SSE verified-owner replay will pass the parsed upstream error code into its owner-move helper; pre-dispatch refresh/connect failures have no quota evidence and therefore cannot move the owner.
 
+For HTTP bridge, an authorized replay must also replace the exhausted bridge generation before account selection. Reusing the existing hard-key generation would feed its original account back as the preferred owner and dispatch the replay to the exhausted account again. The replacement keeps the canonical thread key but clears account-scoped response and turn-state continuity before selecting another eligible account.
+
+Once the replacement socket and durable owner have moved to account B, a later admission or send failure must retire that replacement generation. It must not restore only the in-memory account object to A while leaving B's socket, lease, headers, and durable ownership attached.
+
 ### Preserve the upstream terminal when transfer does not happen
 
 The proxy must not synthesize `previous_response_owner_unavailable` after an upstream failure merely because replay is unsafe. Leaving the normalized upstream terminal intact preserves the actual quota or non-quota cause in both the client response and request-log finalization.
