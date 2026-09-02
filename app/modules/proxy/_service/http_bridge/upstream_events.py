@@ -2997,6 +2997,7 @@ class _HTTPBridgeUpstreamEventsMixin:
                     status_request_state.replay_required_account_id,
                     status_request_state.proxy_injected_previous_response_id,
                     status_request_state.fresh_upstream_request_is_retry_safe,
+                    status_request_state.hard_continuity_anchor,
                     status_request_state.responses_lite_model,
                     status_request_state.input_item_count,
                     status_request_state.input_full_fingerprint,
@@ -3022,18 +3023,33 @@ class _HTTPBridgeUpstreamEventsMixin:
                         reallocate_sticky=True,
                     )
                     status_request_state.request_text = safe_request_text
+                    # Only this verified upstream-quota replay may retire the
+                    # old hard-owner anchor: the replacement payload is
+                    # account-neutral, so leaving the flag set would force
+                    # require_same_account in the pre-created retry and pin the
+                    # exhausted owner again. Every other replay path (auth,
+                    # security work, generic retry) keeps its anchor semantics.
+                    status_request_state.hard_continuity_anchor = False
                     async with session.pending_lock:
                         if status_request_state not in session.pending_requests:
                             session.pending_requests.appendleft(status_request_state)
                             session.queued_request_count += 1
                         status_request_state.awaiting_response_created = True
                         status_request_state.response_id = None
-                    retried = await self._retry_http_bridge_precreated_request(session)
+                    retried = await self._retry_http_bridge_precreated_request(
+                        session,
+                        selection_affinity=status_request_state.affinity_policy,
+                    )
                     if retried:
                         return
-                    session.account = previous_account
-                    session.upstream_turn_state = previous_upstream_turn_state
-                    session.downstream_turn_state = previous_downstream_turn_state
+                    replacement_account_selected = session.account.id != previous_account.id
+                    if replacement_account_selected:
+                        session.upstream_control.reconnect_requested = True
+                        session.upstream_control.retire_after_drain = True
+                    else:
+                        session.account = previous_account
+                        session.upstream_turn_state = previous_upstream_turn_state
+                        session.downstream_turn_state = previous_downstream_turn_state
                     (
                         status_request_state.request_text,
                         status_request_state.previous_response_id,
@@ -3041,6 +3057,7 @@ class _HTTPBridgeUpstreamEventsMixin:
                         status_request_state.replay_required_account_id,
                         status_request_state.proxy_injected_previous_response_id,
                         status_request_state.fresh_upstream_request_is_retry_safe,
+                        status_request_state.hard_continuity_anchor,
                         status_request_state.responses_lite_model,
                         status_request_state.input_item_count,
                         status_request_state.input_full_fingerprint,
@@ -3061,6 +3078,8 @@ class _HTTPBridgeUpstreamEventsMixin:
                         if status_request_state in session.pending_requests:
                             session.pending_requests.remove(status_request_state)
                             session.queued_request_count = max(0, session.queued_request_count - 1)
+                    if replacement_account_selected:
+                        await self._retire_http_bridge_after_drain_if_ready(session)
                 else:
                     session.upstream_control.reconnect_requested = True
                     session.upstream_control.retire_after_drain = True
