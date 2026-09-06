@@ -22,6 +22,12 @@ from scripts.release_versions import (
 )
 
 
+def test_fork_release_skips_upstream_publishing() -> None:
+    workflow = Path(__file__).resolve().parents[2] / ".github/workflows/release.yml"
+    metadata_job = workflow.read_text(encoding="utf-8").split("  release-metadata:\n", 1)[1].split("\n  build:", 1)[0]
+    assert "if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'fork-') }}" in metadata_job
+
+
 def write_minimal_release_files(root: Path, version: str = "1.18.2") -> None:
     (root / "app").mkdir(parents=True)
     (root / "frontend").mkdir(parents=True)
