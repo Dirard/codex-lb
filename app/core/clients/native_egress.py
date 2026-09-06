@@ -534,8 +534,19 @@ class SubprocessNativeEgressClient:
         }
         try:
             await self._send_command(process, generation, request_event)
-            head_timeout = request.response_head_timeout_seconds or request.timeout_seconds
-            item = await asyncio.wait_for(events.get(), timeout=min(head_timeout, request.timeout_seconds))
+            if request.response_head_timeout_seconds is None or request.connect_timeout_seconds is None:
+                head_timeout = request.timeout_seconds
+            else:
+                # aiohttp starts sock_read after connection setup. The helper
+                # exposes no equivalent phase event, so preserve both bounded
+                # allowances instead of spending the read budget on connect.
+                # ponytail: pooled connections get the unused connect allowance;
+                # split the phases when the helper can report dispatch safely.
+                head_timeout = min(
+                    request.timeout_seconds,
+                    request.connect_timeout_seconds + request.response_head_timeout_seconds,
+                )
+            item = await asyncio.wait_for(events.get(), timeout=head_timeout)
             if isinstance(item, BaseException):
                 self._finish_request(request_id, generation, events)
                 raise item

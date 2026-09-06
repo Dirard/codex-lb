@@ -2421,16 +2421,26 @@ class _HTTPBridgeRequestSubmitMixin:
                                 )
                     raise
         except ProxyResponseError:
-            await self._cleanup_http_bridge_submit_interruption(
-                session,
-                request_state=request_state,
-                gate_acquired=gate_acquired,
-                request_enqueued=request_enqueued,
-                counted_in_queue=True,
-                admission_waiter_registered=admission_waiter_registered,
+
+            async def cleanup_proxy_response_failure() -> None:
+                await self._cleanup_http_bridge_submit_interruption(
+                    session,
+                    request_state=request_state,
+                    gate_acquired=gate_acquired,
+                    request_enqueued=request_enqueued,
+                    counted_in_queue=True,
+                    admission_waiter_registered=admission_waiter_registered,
+                )
+                if not session.upstream_close_attempted:
+                    await self._retire_http_bridge_after_drain_if_ready(session)
+
+            cleanup_task = asyncio.create_task(
+                cleanup_proxy_response_failure(),
+                name=f"http-bridge-proxy-response-cleanup-{request_state.request_id}",
             )
-            if not session.upstream_close_attempted:
-                await self._retire_http_bridge_after_drain_if_ready(session)
+            _, cleanup_cancellation = await _await_task_deferring_cancellation(cleanup_task)
+            if cleanup_cancellation is not None:
+                raise cleanup_cancellation
             raise
         except asyncio.CancelledError as cancellation:
             cleanup_task = asyncio.create_task(
@@ -2493,72 +2503,88 @@ class _HTTPBridgeRequestSubmitMixin:
                 if settlement_cancellation is not None:
                     raise settlement_cancellation
             else:
-                # Once the operation-tagged frame has been handed to the
-                # socket, the transport exception is ambiguous: upstream may
-                # have accepted it even though this worker saw no
-                # acknowledgement. Persist UNKNOWN under the owner fence
-                # before cleanup can retire the closed session and release
-                # that fence.
-                if (
-                    request_state.operation_dispatched
-                    and request_state.operation_registered
-                    and request_state.operation_id is not None
-                    and session.durable_session_id is not None
-                    and session.durable_owner_epoch is not None
-                ):
-                    mark_operation_unknown = getattr(self._durable_bridge, "mark_operation_unknown", None)
-                    marked_unknown = False
-                    if callable(mark_operation_unknown):
-                        try:
-                            marked_unknown = await mark_operation_unknown(
-                                operation_id=request_state.operation_id,
-                                session_id=session.durable_session_id,
-                                instance_id=_service_get_settings().http_responses_session_bridge_instance_id,
-                                owner_epoch=session.durable_owner_epoch,
+
+                async def settle_ambiguous_send_failure() -> tuple[str, str]:
+                    settled_error_code = error_code
+                    settled_error_message = failure_error_message
+                    # Once the operation-tagged frame has been handed to the
+                    # socket, the transport exception is ambiguous: upstream
+                    # may have accepted it even though this worker saw no
+                    # acknowledgement. Persist UNKNOWN under the owner fence
+                    # before cleanup can retire the closed session and release
+                    # that fence.
+                    if (
+                        request_state.operation_dispatched
+                        and request_state.operation_registered
+                        and request_state.operation_id is not None
+                        and session.durable_session_id is not None
+                        and session.durable_owner_epoch is not None
+                    ):
+                        mark_operation_unknown = getattr(self._durable_bridge, "mark_operation_unknown", None)
+                        marked_unknown = False
+                        if callable(mark_operation_unknown):
+                            try:
+                                marked_unknown = await mark_operation_unknown(
+                                    operation_id=request_state.operation_id,
+                                    session_id=session.durable_session_id,
+                                    instance_id=_service_get_settings().http_responses_session_bridge_instance_id,
+                                    owner_epoch=session.durable_owner_epoch,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Failed to mark ambiguous HTTP bridge operation UNKNOWN operation_id=%s",
+                                    request_state.operation_id,
+                                    exc_info=True,
+                                )
+                        if not marked_unknown:
+                            request_state.operation_registered = False
+                            settled_error_code = "bridge_continuity_persistence_failed"
+                            settled_error_message = (
+                                "Ambiguous response operation could not be persisted; retry the request."
                             )
-                        except Exception:
-                            logger.warning(
-                                "Failed to mark ambiguous HTTP bridge operation UNKNOWN operation_id=%s",
-                                request_state.operation_id,
-                                exc_info=True,
+                            _record_continuity_fail_closed(
+                                surface="http_bridge",
+                                reason="ambiguous_operation_unknown_persistence_failed",
+                                previous_response_id=request_state.previous_response_id,
+                                session_id=request_state.session_id,
+                                upstream_error_code=settled_error_code,
                             )
-                    if not marked_unknown:
-                        request_state.operation_registered = False
-                        error_code = "bridge_continuity_persistence_failed"
-                        failure_error_message = (
-                            "Ambiguous response operation could not be persisted; retry the request."
-                        )
-                        _record_continuity_fail_closed(
-                            surface="http_bridge",
-                            reason="ambiguous_operation_unknown_persistence_failed",
-                            previous_response_id=request_state.previous_response_id,
-                            session_id=request_state.session_id,
-                            upstream_error_code=error_code,
-                        )
-                await self._cleanup_http_bridge_submit_interruption(
-                    session,
-                    request_state=request_state,
-                    gate_acquired=gate_acquired,
-                    request_enqueued=request_enqueued,
-                    counted_in_queue=True,
-                    admission_waiter_registered=admission_waiter_registered,
+                    await self._cleanup_http_bridge_submit_interruption(
+                        session,
+                        request_state=request_state,
+                        gate_acquired=gate_acquired,
+                        request_enqueued=request_enqueued,
+                        counted_in_queue=True,
+                        admission_waiter_registered=admission_waiter_registered,
+                    )
+                    await self._fail_pending_websocket_requests(
+                        account=session.account,
+                        account_id_value=session.account.id,
+                        pending_requests=deque([request_state]),
+                        pending_lock=fast_lock(),
+                        error_code=settled_error_code,
+                        error_message=settled_error_message,
+                        api_key=None,
+                        response_create_gate=session.response_create_gate,
+                        penalize_account=not account_neutral,
+                    )
+                    session.closed = True
+                    try:
+                        await session.upstream.close()
+                    except Exception:
+                        logger.debug("Failed to close HTTP bridge upstream websocket after send failure", exc_info=True)
+                    return settled_error_code, settled_error_message
+
+                settlement_task = asyncio.create_task(
+                    settle_ambiguous_send_failure(),
+                    name=f"http-bridge-ambiguous-send-settlement-{request_state.request_id}",
                 )
-                await self._fail_pending_websocket_requests(
-                    account=session.account,
-                    account_id_value=session.account.id,
-                    pending_requests=deque([request_state]),
-                    pending_lock=fast_lock(),
-                    error_code=error_code,
-                    error_message=failure_error_message,
-                    api_key=None,
-                    response_create_gate=session.response_create_gate,
-                    penalize_account=not account_neutral,
-                )
-                session.closed = True
-                try:
-                    await session.upstream.close()
-                except Exception:
-                    logger.debug("Failed to close HTTP bridge upstream websocket after send failure", exc_info=True)
+                (
+                    (error_code, failure_error_message),
+                    settlement_cancellation,
+                ) = await _await_task_deferring_cancellation(settlement_task)
+                if settlement_cancellation is not None:
+                    raise settlement_cancellation
             # Always raise 502 so the client can retry with
             # previous_response_id intact.  Returning 400
             # previous_response_not_found causes the client to drop

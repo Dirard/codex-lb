@@ -98,6 +98,7 @@ from app.modules.proxy._service.http_bridge.service_stubs import (
     _classify_upstream_close,
     _find_websocket_request_state_by_response_id,
     _http_error_status_from_payload,
+    _install_verified_fresh_replay,
     _is_account_neutral_transport_drop,
     _is_missing_tool_output_error,
     _is_previous_response_not_found_error,
@@ -3412,9 +3413,6 @@ class _HTTPBridgeUpstreamEventsMixin:
                 and status_request_state.previous_response_id is not None
                 and status_request_state.preferred_account_id is not None
             ):
-                # Imported at dispatch time to avoid the HTTP/WebSocket mixin cycle.
-                from app.modules.proxy._service.websocket.helpers import _install_verified_fresh_replay
-
                 previous_request_state = (
                     status_request_state.request_text,
                     status_request_state.previous_response_id,

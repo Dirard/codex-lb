@@ -1367,7 +1367,7 @@ async def test_proxy_responses_native_codex_shape_preserves_vendor_events(async_
 
 
 @pytest.mark.asyncio
-async def test_proxy_responses_native_codex_openai_shape_aborts_incomplete_transport(
+async def test_proxy_responses_native_codex_openai_shape_reports_incomplete_transport(
     async_client,
     monkeypatch,
 ):
@@ -1394,21 +1394,23 @@ async def test_proxy_responses_native_codex_openai_shape_aborts_incomplete_trans
         "stream": True,
         "truncation": "disabled",
     }
-    with pytest.raises(proxy_client_module.ProxyResponseError) as exc_info:
-        async with async_client.stream(
-            "POST",
-            "/backend-api/codex/responses",
-            json=payload,
-            headers={
-                "accept": "text/event-stream",
-                "originator": "codex_exec",
-                "user-agent": "codex_exec/0.150.1 (Ubuntu 24.4.0; x86_64) dumb",
-            },
-        ):
-            pass
+    async with async_client.stream(
+        "POST",
+        "/backend-api/codex/responses",
+        json=payload,
+        headers={
+            "accept": "text/event-stream",
+            "originator": "codex_exec",
+            "user-agent": "codex_exec/0.150.1 (Ubuntu 24.4.0; x86_64) dumb",
+        },
+    ) as response:
+        assert response.status_code == 200
+        events = list(_iter_sse_events([line async for line in response.aiter_lines() if line]))
 
-    assert exc_info.value.status_code == 502
-    assert exc_info.value.payload["error"]["code"] == "stream_incomplete"
+    failures = [event for event in events if event.get("type") == "response.failed"]
+    assert len(failures) == 1
+    assert failures[0]["response"]["error"]["code"] == "stream_incomplete"
+    assert not any(event.get("type") == "response.completed" for event in events)
 
 
 @pytest.mark.asyncio

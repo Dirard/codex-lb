@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.core.clients.native_egress import _NATIVE_PROTOCOL_VERSION, _REQUIRED_NATIVE_CAPABILITIES
 
@@ -39,6 +40,14 @@ def test_linux_container_builds_and_installs_locked_native_egress(dockerfile_nam
     runtime = dockerfile.rsplit(" AS runtime", maxsplit=1)[1]
     assert "cargo build" not in runtime
     assert "COPY --from=native-egress-build" in runtime
+
+
+def test_development_compose_rebuilds_native_egress_inputs() -> None:
+    compose = yaml.safe_load((_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    watched = compose["services"]["server"]["develop"]["watch"]
+    rebuild_paths = {entry["path"] for entry in watched if entry["action"] == "rebuild"}
+
+    assert {"./Cargo.toml", "./Cargo.lock", "./crates"} <= rebuild_paths
 
 
 def test_native_egress_lockfile_pins_codex_release_family() -> None:

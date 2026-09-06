@@ -24,7 +24,7 @@ from app.core.openai.requests import ResponsesRequest
 from app.core.types import JsonValue
 from app.core.utils.sse import CODEX_KEEPALIVE_FRAME
 from app.db.models import Account, DashboardSettings
-from app.modules.proxy._service.support import _RequestLogFailureMetadata
+from app.modules.proxy._service.support import _RequestLogFailureMetadata, _WebSocketRequestState
 
 T = TypeVar("T")
 
@@ -43,6 +43,19 @@ def _service_module() -> Any:
 
 def _service_global(name: str) -> Any:
     return getattr(_service_module(), name)
+
+
+def _install_verified_fresh_replay(
+    request_state: _WebSocketRequestState,
+    *,
+    require_proxy_injected_previous_response_id: bool = True,
+    require_account_neutral: bool = True,
+) -> str | None:
+    return cast(Callable[..., str | None], _service_global("_install_verified_fresh_replay"))(
+        request_state,
+        require_proxy_injected_previous_response_id=require_proxy_injected_previous_response_id,
+        require_account_neutral=require_account_neutral,
+    )
 
 
 def _response_create_compatibility_metadata_headers() -> tuple[str, ...]:

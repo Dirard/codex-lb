@@ -2,7 +2,15 @@
 
 ## Purpose and Scope
 
-This note records implementation decisions behind the outbound client layer that do not change the normative contracts in `spec.md`. It currently covers how the TLS verification context is shared across connectors.
+This note records implementation decisions behind the outbound client layer; normative contracts live in `spec.md`.
+
+## Native response deadlines and terminal socket cleanup
+
+The native helper does not expose an exact post-connect/request-write timing signal. The first-response watchdog therefore uses the conservative envelope `min(total, connect + response_head)` when both phase budgets exist, rather than spending the read allowance on establishing the connection. If one phase is unbounded, the total deadline remains authoritative. Reqwest's `read_timeout` alone would not separate establishment from waiting for headers in the pinned version.
+
+For example, a valid 200 ms SOCKS handshake followed by prompt response headers must not fail merely because the read budget is 100 ms. The trade-off is that a pooled connection can receive unused connection allowance; the total budget and no-replay boundary remain unchanged. Local wire tests cover slow establishment and a stalled response head without contacting OpenAI.
+
+A terminal WebSocket command-channel error also ends ownership of that native socket: the helper removes and aborts its task. Leaving the task alive after Python has consumed the terminal event would leak the connection. Other multiplexed operations remain unaffected, and no queued frame is resent.
 
 ## Shared TLS verification context
 

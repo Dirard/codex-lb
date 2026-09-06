@@ -21,7 +21,7 @@ See `openspec/specs/responses-api-compat/spec.md` for normative requirements.
 - `include` values must be on the documented allowlist.
 - `truncation` is rejected.
 - `previous_response_id` is forwarded when `conversation` is absent, but the `conversation + previous_response_id` conflict remains rejected.
-- HTTP `/v1/responses` and HTTP `/backend-api/codex/responses` now use a server-side upstream websocket session bridge by default so repeated compatible requests can keep upstream response/session continuity without forcing clients onto the public websocket route.
+- HTTP Responses routes can use the server-side upstream websocket session bridge to preserve session continuity. Under automatic transport and the smart policy, native Codex HTTP traffic instead stays on HTTP; explicit operator transport selection remains authoritative.
 - Codex-affinity HTTP bridge sessions can optionally use a conservative first-request prewarm (`generate=false`), but that behavior now stays behind an explicit flag so production defaults do not pay an extra upstream request unless operators opt in.
 - When operators configure a multi-instance bridge ring, deterministic owner enforcement now applies only to hard continuity keys such as `x-codex-turn-state` and explicit session headers. Prompt-cache-derived bridge keys remain stable for local reuse, but in gateway-safe mode a non-owner replica may tolerate that locality miss and create or reuse a local session instead of failing with `bridge_instance_mismatch`.
 - Codex-facing websocket routes now advertise `x-codex-turn-state` during websocket accept and honor client-provided turn-state on reconnect so routing can stay sticky at turn granularity even when the public websocket reconnects.
@@ -38,6 +38,16 @@ See `openspec/specs/responses-api-compat/spec.md` for normative requirements.
 - HTTP bridge settlement ownership is explicit: `closed` rejects new work but does not imply that a submitter owns existing siblings. Only a liveness-failed send claims whole-deque settlement under the lifecycle lock; otherwise the reader remains responsible for settling pending requests when the transport dies.
 - A DRAINING durable row with a live lease is still owned. Foreign `claim_live_session` and local session create must not steal it, including when forced recovery would otherwise run because the owner endpoint is missing; expired or ownerless DRAINING rows remain recoverable.
 - Hard-affinity retry-circuit evidence is request-lifecycle evidence: retirement counts only while the bridge still owns an eventless pending request. Idle no-pending retirement remains observable but neutral, so routine socket churn cannot manufacture the first strike for a later real timeout.
+
+## Native HTTP Transport Failure Framing
+
+The native egress boundary does not change how the downstream HTTP response reports failure. A timeout detected before response commitment uses the existing HTTP error response. Once streaming has started, the existing terminal failure normalizer ends the body cleanly. For example, `response.created` followed by upstream EOF becomes `response.failed`, not a successful completion and not a chunked-body decoding error. Internal synthetic-failure markers do not reach clients.
+
+The service retains its account ownership, settlement, and no-replay decisions for ambiguous dispatch. Downstream keepalives maintain liveness while waiting; they do not dispatch model work. These rules also apply to native clients using a model source. Correct error framing does not repair an unreachable or resetting upstream connection.
+
+Readiness and database checks do not exercise the outgoing transport. The regression tests therefore cover startup errors, late errors and EOF over a real local HTTP socket without contacting OpenAI. See [the owning requirement](spec.md#requirement-native-codex-preserves-upstream-failure-lifecycle).
+
+Bridge cleanup must also finish when a downstream disconnect arrives during error handling. After an ambiguous send failure, one owned task performs the durable `unknown` write attempt, queue/gate cleanup, failure settlement and socket close; caller cancellation propagates only afterward. A rejected pre-dispatch request uses the same ownership pattern for rollback without ever sending upstream. This closes a pre-existing leak path without adding retries or changing quota failover.
 
 ## Fast Mode and Service Tiers
 

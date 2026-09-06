@@ -4956,7 +4956,6 @@ async def _source_responses_response(
     enforce_openai_sdk_contract: bool = True,
     native_codex_heartbeat: bool = False,
 ) -> Response:
-    preserve_native_failure_lifecycle = not enforce_openai_sdk_contract and _is_native_codex_request(request.headers)
     # This is the first point where the request is known to be served by a
     # model source rather than a subscription account, so it is the only place
     # the reasoning-effort workaround can be undone safely.
@@ -5048,7 +5047,6 @@ async def _source_responses_response(
                         response.body_iterator,
                         enforce_openai_sdk_contract=enforce_openai_sdk_contract,
                         native_codex_heartbeat=native_codex_heartbeat,
-                        preserve_native_failure_lifecycle=preserve_native_failure_lifecycle,
                     ),
                     media_type=response.media_type,
                     status_code=response.status_code,
@@ -5060,7 +5058,6 @@ async def _source_responses_response(
                 stream.body,
                 enforce_openai_sdk_contract=enforce_openai_sdk_contract,
                 native_codex_heartbeat=native_codex_heartbeat,
-                preserve_native_failure_lifecycle=preserve_native_failure_lifecycle,
             ),
             usage_holder=stream.usage_holder,
             request=request,
@@ -5823,7 +5820,6 @@ async def _wrap_source_responses_public_stream(
     *,
     enforce_openai_sdk_contract: bool = True,
     native_codex_heartbeat: bool = False,
-    preserve_native_failure_lifecycle: bool = False,
 ) -> AsyncIterator[str]:
     """Normalize and keep source-routed Responses SSE proxy-timeout friendly.
 
@@ -5846,20 +5842,15 @@ async def _wrap_source_responses_public_stream(
         event_blocks,
         enforce_openai_sdk_contract=enforce_openai_sdk_contract,
         forward_unparseable_data=True,
-        preserve_native_failure_lifecycle=preserve_native_failure_lifecycle,
     )
-    keepalive_stream = (
-        normalized
-        if preserve_native_failure_lifecycle
-        else inject_sse_keepalives(
-            normalized,
-            settings.sse_keepalive_interval_seconds,
-            keepalive_frame=keepalive_frame,
-            on_keepalive=lambda: _record_stream_keepalive("responses_source"),
-        )
+    keepalive_stream = inject_sse_keepalives(
+        normalized,
+        settings.sse_keepalive_interval_seconds,
+        keepalive_frame=keepalive_frame,
+        on_keepalive=lambda: _record_stream_keepalive("responses_source"),
     )
     outbound: AsyncIterator[str] = keepalive_stream
-    if use_codex_keepalive and not preserve_native_failure_lifecycle:
+    if use_codex_keepalive:
         outbound = _prepend_initial_sse_heartbeat(
             keepalive_stream,
             keepalive_frame,
@@ -6114,7 +6105,6 @@ async def _stream_responses(
         else {}
     )
     effective_headers = forwarded_headers or request.headers
-    preserve_native_failure_lifecycle = not enforce_openai_sdk_contract and _is_native_codex_request(effective_headers)
     bridge_active = await _http_bridge_active_for_request(
         payload,
         effective_headers,
@@ -6390,13 +6380,7 @@ async def _stream_responses(
                 owner_forward_rejected_event=responses_owner_forward_rejected_event,
             )
         )
-        native_transport_startup_failure = (
-            preserve_native_failure_lifecycle
-            and isinstance(startup_error, ProxyResponseError)
-            and startup_error_code
-            in {"stream_incomplete", "stream_idle_timeout", "upstream_request_timeout", "upstream_unavailable"}
-        )
-        if startup_recovery_allowed or native_transport_startup_failure:
+        if startup_recovery_allowed:
             assert isinstance(startup_error, ProxyResponseError)
 
             # A durable bridge can fail before the startup probe observes the
@@ -6447,28 +6431,25 @@ async def _stream_responses(
             recovery_stream_factory=recovery_stream_factory,
             allow_client_full_history_once=bridge_recovery_eligible,
             require_durable_recovery_fence=bridge_recovery_eligible,
-            preserve_native_failure_lifecycle=preserve_native_failure_lifecycle,
         ),
         enforce_openai_sdk_contract=enforce_openai_sdk_contract,
-        preserve_native_failure_lifecycle=preserve_native_failure_lifecycle,
     )
     service_stream = stream
     use_codex_keepalive = native_codex_heartbeat or not enforce_openai_sdk_contract
     keepalive_frame = CODEX_KEEPALIVE_FRAME if use_codex_keepalive else SSE_KEEPALIVE_FRAME
-    if use_codex_keepalive and not preserve_native_failure_lifecycle:
+    if use_codex_keepalive:
         stream = _prepend_initial_sse_heartbeat(
             stream,
             keepalive_frame,
             request_id=get_request_id(),
             route_family="responses",
         )
-    if not preserve_native_failure_lifecycle:
-        stream = inject_sse_keepalives(
-            stream,
-            get_settings().sse_keepalive_interval_seconds,
-            keepalive_frame=keepalive_frame,
-            on_keepalive=lambda: _record_stream_keepalive("responses"),
-        )
+    stream = inject_sse_keepalives(
+        stream,
+        get_settings().sse_keepalive_interval_seconds,
+        keepalive_frame=keepalive_frame,
+        on_keepalive=lambda: _record_stream_keepalive("responses"),
+    )
     # Outermost so a client close after the initial heartbeat still closes
     # the service stream, including when the startup probe already completed.
     stream = _guard_responses_startup_handoff(
@@ -7936,7 +7917,6 @@ async def _stream_response_error_events(
     recovery_stream_factory: Callable[[], AsyncIterator[str]] | None = None,
     allow_client_full_history_once: bool = False,
     require_durable_recovery_fence: bool = False,
-    preserve_native_failure_lifecycle: bool = False,
 ) -> AsyncIterator[str]:
     cleanup = reservation_cleanup or _ResponsesReservationCleanup(
         owns_reservation=owns_reservation,
@@ -8059,13 +8039,6 @@ async def _stream_response_error_events(
                     server_recovery_max_attempts,
                 )
         await release_owned_reservation()
-        if preserve_native_failure_lifecycle and error_code in {
-            "stream_incomplete",
-            "stream_idle_timeout",
-            "upstream_request_timeout",
-            "upstream_unavailable",
-        }:
-            raise
         response_id = None
         if isinstance(exc.payload, dict):
             response_id = _response_id_from_event_payload(cast(dict[str, JsonValue], exc.payload))
@@ -8829,7 +8802,6 @@ async def _normalize_public_responses_stream(
     *,
     enforce_openai_sdk_contract: bool = True,
     forward_unparseable_data: bool = False,
-    preserve_native_failure_lifecycle: bool = False,
 ) -> AsyncIterator[str]:
     stream = _normalize_reasoning_summary_stream(stream)
     """Normalize the upstream SSE event stream for the public /v1 surface.
@@ -8957,12 +8929,6 @@ async def _normalize_public_responses_stream(
         if payload.get(SYNTHETIC_TRANSPORT_FAILURE_MARKER) is True:
             payload = dict(payload)
             payload.pop(SYNTHETIC_TRANSPORT_FAILURE_MARKER, None)
-            if preserve_native_failure_lifecycle:
-                raise ProxyResponseError(
-                    502,
-                    openai_error("stream_incomplete", "Native upstream transport ended before a terminal event"),
-                    failure_phase="upstream",
-                )
         raw_event_type = payload.get("type")
         if (
             enforce_openai_sdk_contract
@@ -9095,15 +9061,6 @@ async def _normalize_public_responses_stream(
         # interpret (for example a successful source stream whose terminal
         # event was not valid JSON) as a failure.
         return
-    if preserve_native_failure_lifecycle:
-        # First-party Codex owns transport-failure interpretation. Preserve a
-        # missing terminal by aborting the body instead of manufacturing one
-        # on the LB boundary or completing a successful empty HTTP stream.
-        raise ProxyResponseError(
-            502,
-            openai_error("stream_incomplete", "Native upstream stream ended before a terminal event"),
-            failure_phase="upstream",
-        )
     error_kind = contract_violation_kind or (
         "upstream_stream_truncated" if enforce_openai_sdk_contract else "stream_incomplete"
     )

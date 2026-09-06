@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import secrets
@@ -13,6 +14,8 @@ from websockets.asyncio.server import serve as websocket_serve
 
 from app.core.clients.codex import CodexClient
 from app.core.clients.native_egress import (
+    NativeEgressRequest,
+    NativeEgressTransportError,
     SubprocessNativeEgressClient,
     close_discovered_native_egress_client,
     discover_native_egress_client,
@@ -43,16 +46,21 @@ async def _copy_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
         writer.close()
 
 
-@pytest.mark.asyncio
-async def test_direct_sse_and_routed_http_websocket_share_native_helper(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _native_test_binary() -> Path:
     helper_value = os.environ.get("CODEX_LB_NATIVE_EGRESS_TEST_BINARY")
     if not helper_value:
         pytest.skip("set CODEX_LB_NATIVE_EGRESS_TEST_BINARY to run the native route wire probe")
     helper = Path(helper_value)
     if not helper.is_file():
         pytest.skip(f"native helper is unavailable: {helper}")
+    return helper
+
+
+@pytest.mark.asyncio
+async def test_direct_sse_and_routed_http_websocket_share_native_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = _native_test_binary()
     access_token = secrets.token_urlsafe(32)
 
     proxy_hits: list[str] = []
@@ -219,3 +227,106 @@ async def test_direct_sse_and_routed_http_websocket_share_native_helper(
             await close_discovered_native_egress_client()
             direct_server.close()
             await direct_server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_native_http_read_deadline_preserves_connection_allowance() -> None:
+    helper = _native_test_binary()
+    origin_paths: list[str] = []
+    stalled_request_received = asyncio.Event()
+
+    async def origin_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+            path = head.split(b" ", 2)[1].decode("ascii")
+            origin_paths.append(path)
+            if path == "/ok":
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                await writer.drain()
+            else:
+                stalled_request_received.set()
+                await reader.read()
+        finally:
+            writer.close()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+
+    origin_server = await asyncio.start_server(origin_handler, "127.0.0.1", 0)
+    origin_port = origin_server.sockets[0].getsockname()[1]
+
+    async def socks_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        upstream_writer: asyncio.StreamWriter | None = None
+        try:
+            version, method_count = await reader.readexactly(2)
+            assert version == 5
+            await reader.readexactly(method_count)
+            await asyncio.sleep(0.2)
+            writer.write(b"\x05\x00")
+            await writer.drain()
+
+            version, command, _reserved, address_type = await reader.readexactly(4)
+            assert (version, command) == (5, 1)
+            if address_type == 1:
+                await reader.readexactly(4)
+            elif address_type == 3:
+                await reader.readexactly((await reader.readexactly(1))[0])
+            elif address_type == 4:
+                await reader.readexactly(16)
+            else:
+                raise AssertionError(f"unexpected SOCKS address type: {address_type}")
+            requested_port = int.from_bytes(await reader.readexactly(2))
+            assert requested_port == origin_port
+
+            upstream_reader, upstream_writer = await asyncio.open_connection("127.0.0.1", origin_port)
+            writer.write(b"\x05\x00\x00\x01\x7f\x00\x00\x01" + origin_port.to_bytes(2))
+            await writer.drain()
+            await asyncio.gather(
+                _copy_stream(reader, upstream_writer),
+                _copy_stream(upstream_reader, writer),
+            )
+        finally:
+            if upstream_writer is not None:
+                upstream_writer.close()
+            writer.close()
+
+    socks_server = await asyncio.start_server(socks_handler, "127.0.0.1", 0)
+    socks_port = socks_server.sockets[0].getsockname()[1]
+    client = SubprocessNativeEgressClient(helper)
+    try:
+        response = await client.request(
+            NativeEgressRequest(
+                method="GET",
+                url=f"http://deadline.test:{origin_port}/ok",
+                headers={},
+                timeout_seconds=2.0,
+                connect_timeout_seconds=0.5,
+                response_head_timeout_seconds=0.1,
+                proxy_url=f"socks5h://127.0.0.1:{socks_port}",
+            )
+        )
+        assert await response.read() == b"ok"
+
+        started_at = asyncio.get_running_loop().time()
+        with pytest.raises(NativeEgressTransportError, match="response head timed out") as exc_info:
+            await client.request(
+                NativeEgressRequest(
+                    method="GET",
+                    url=f"http://127.0.0.1:{origin_port}/stall",
+                    headers={},
+                    timeout_seconds=1.0,
+                    connect_timeout_seconds=0.1,
+                    response_head_timeout_seconds=0.1,
+                )
+            )
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+        assert stalled_request_received.is_set()
+        assert origin_paths == ["/ok", "/stall"]
+        assert 0.15 <= elapsed < 0.8
+        assert exc_info.value.retryable_same_contract is False
+    finally:
+        await client.aclose()
+        socks_server.close()
+        await socks_server.wait_closed()
+        origin_server.close()
+        await origin_server.wait_closed()

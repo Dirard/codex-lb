@@ -5722,26 +5722,66 @@ WebSocket requests MUST remain on their dedicated WebSocket path.
 - **WHEN** the operator explicitly configures upstream WebSocket transport
 - **THEN** the explicit WebSocket selection remains authoritative
 
+### Requirement: Ambiguous HTTP bridge send settlement survives caller cancellation
+
+After an HTTP bridge `response.create` send has started and reports an ambiguous transport failure, the proxy MUST finish the durable ambiguity update and release the request's local queue, admission, and reservation ownership before propagating caller cancellation. It MUST retire the affected upstream session and MUST NOT resend the ambiguously dispatched request. Failure of the durable ambiguity update MUST NOT prevent local ownership cleanup.
+
+#### Scenario: Cancellation interrupts durable ambiguity marking
+
+- **GIVEN** an HTTP bridge request may have been dispatched upstream
+- **AND** its durable operation is being marked `unknown`
+- **WHEN** caller cancellation arrives before that write completes
+- **THEN** the proxy finishes the write attempt and local request cleanup before propagating cancellation
+- **AND** the request is not sent upstream again
+
+#### Scenario: Durable ambiguity marking fails
+
+- **GIVEN** an HTTP bridge send reports an ambiguous transport failure
+- **WHEN** persisting the operation as `unknown` fails
+- **THEN** the proxy still releases the request's queue, admission, and reservation ownership
+- **AND** the affected upstream session is retired without replaying the request
+
+### Requirement: Pre-dispatch HTTP bridge cleanup survives caller cancellation
+
+When an HTTP bridge request is rejected before upstream dispatch, the proxy MUST finish any durable operation rollback and release the request's local queue and admission ownership before propagating caller cancellation. It MUST preserve the original pre-dispatch classification and MUST NOT send the rejected request upstream.
+
+#### Scenario: Cancellation interrupts pre-dispatch rollback
+
+- **GIVEN** an HTTP bridge request is rejected before its upstream send begins
+- **AND** its pre-dispatch operation rollback is in progress
+- **WHEN** caller cancellation arrives before the rollback completes
+- **THEN** the proxy finishes rollback and releases the response-create gate before propagating cancellation
+- **AND** no upstream request is sent
+
 ### Requirement: Native Codex preserves upstream failure lifecycle
 
-For a native Codex HTTP/SSE Responses request, an upstream transport timeout or
-stream EOF without a terminal Responses event MUST terminate the downstream
-stream without synthesizing `response.failed`, `error`, or `[DONE]`. The proxy
-MUST still execute reservation, request-log, account-health, and owned-resource
-cleanup before propagating the termination. Non-native and OpenAI-compatible
-clients MUST retain the existing stable terminal-error shaping.
+For a native Codex HTTP/SSE Responses request, an upstream transport timeout or stream EOF without a terminal Responses event MUST remain a failure while preserving valid downstream framing. A failure observed by the startup probe before the downstream response is committed MUST retain the existing non-success HTTP error response, unless existing explicitly eligible server recovery owns that failure. After HTTP response commitment, the proxy MUST emit the existing terminal `response.failed` shape and finish the HTTP body instead of raising a transport error out of the downstream body iterator. The proxy MUST NOT manufacture a successful terminal event or add replay eligibility for an ambiguously dispatched upstream request. Reservation, request-log, account-health, and owned-resource cleanup MUST still complete under their existing ownership rules. Native requests MUST retain the existing downstream initial and periodic liveness frames. Non-native and OpenAI-compatible clients MUST retain the existing stable terminal-error shaping.
 
-#### Scenario: Native Codex sees a truncated SSE lifecycle
+#### Scenario: Native Codex sees a truncated upstream SSE lifecycle
 
 - **GIVEN** a native Codex HTTP request has received a non-terminal SSE event
 - **WHEN** upstream closes without a terminal event
-- **THEN** downstream closes without a synthetic terminal event or `[DONE]`
-- **AND** proxy cleanup and failure accounting still complete
+- **THEN** downstream receives a terminal `response.failed` and a complete HTTP body
+- **AND** proxy cleanup and failure accounting still complete without replaying the request
+
+#### Scenario: A transport failure is known before HTTP startup
+
+- **WHEN** the startup probe observes a native transport failure before committing the response and no existing eligible server recovery owns it
+- **THEN** the proxy returns the existing non-success HTTP error instead of `200 OK` with an aborted body
+
+#### Scenario: Marked synthetic transport errors retain their diagnosis
+
+- **WHEN** a started native stream receives an internally marked synthetic transport-failure event
+- **THEN** the proxy removes the internal marker and sends the structured terminal failure without aborting the HTTP body
+
+#### Scenario: Native upstream silence retains downstream liveness
+
+- **WHEN** a native HTTP Responses stream waits longer than the configured keepalive interval for an upstream event
+- **THEN** the existing downstream keepalive is emitted without adding an upstream request
 
 #### Scenario: Non-native client keeps the terminal umbrella
 
-- **GIVEN** an OpenAI SDK or other non-native client receives the same upstream
-  truncation
+- **GIVEN** an OpenAI SDK or other non-native client receives the same upstream truncation
 - **WHEN** codex-lb normalizes the stream
 - **THEN** the client receives the existing terminal `response.failed` shape
 

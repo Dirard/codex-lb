@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+import uvicorn
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from starlette.requests import Request
@@ -22,6 +24,7 @@ from app.core.auth import generate_unique_account_id
 from app.core.auth.refresh import RefreshError
 from app.core.clients import proxy as core_proxy
 from app.core.clients.proxy import ProxyResponseError
+from app.core.errors import openai_error
 from app.core.upstream_proxy import (
     ResolvedProxyEndpoint,
     ResolvedUpstreamRoute,
@@ -2938,15 +2941,22 @@ async def test_source_responses_stream_reassembles_crlf_event_blocks(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_source_responses_forwards_unparseable_blocks_without_synthetic_terminal(monkeypatch):
-    """Unparseable source data passes through verbatim instead of becoming response.failed."""
+@pytest.mark.parametrize(("truncated", "sdk_contract"), [(False, True), (True, True), (True, False)])
+async def test_source_responses_only_synthesizes_failure_for_parseable_truncation(
+    monkeypatch, truncated: bool, sdk_contract: bool
+):
+    """Native source EOF gets a framed failure; malformed source data remains verbatim."""
     from app.db.models import ModelSource
     from app.modules.model_sources.forwarding import SourceResponsesStream, SourceUsageHolder
 
-    malformed_block = 'data: {"type":"response.completed","response":{"id":"resp_unparseable"}\n\n'
+    upstream_block = (
+        'data: {"type":"response.created","response":{"id":"resp_source_truncated"}}\n\n'
+        if truncated
+        else 'data: {"type":"response.completed","response":{"id":"resp_unparseable"}\n\n'
+    )
 
     async def malformed_body():
-        yield malformed_block.encode("utf-8")
+        yield upstream_block.encode("utf-8")
 
     async def fake_stream_source_responses(_source, _payload):
         return SourceResponsesStream(
@@ -2968,8 +2978,8 @@ async def test_source_responses_forwards_unparseable_blocks_without_synthetic_te
         {
             "type": "http",
             "method": "POST",
-            "path": "/v1/responses",
-            "headers": [],
+            "path": "/v1/responses" if sdk_contract else "/backend-api/codex/responses",
+            "headers": [] if sdk_contract else [(b"user-agent", b"codex_exec/0.150.1")],
             "client": ("203.0.113.9", 54321),
         }
     )
@@ -2993,13 +3003,20 @@ async def test_source_responses_forwards_unparseable_blocks_without_synthetic_te
         api_key=None,
         rate_limit_headers={},
         pre_normalization_effort=None,
+        enforce_openai_sdk_contract=sdk_contract,
     )
 
     assert isinstance(response, StreamingResponse)
     chunks = [cast(str, chunk) async for chunk in response.body_iterator]
     joined = "".join(chunks)
-    assert malformed_block in joined
-    assert "response.failed" not in joined
+    if truncated:
+        assert "resp_source_truncated" in joined
+        event_types = [event.get("type") for event in _sse_data_events(joined.splitlines())]
+        assert "response.failed" in event_types
+        assert "response.completed" not in event_types
+    else:
+        assert upstream_block in joined
+        assert "response.failed" not in joined
 
 
 @pytest.mark.asyncio
@@ -3556,7 +3573,7 @@ async def test_source_responses_normalize_error_still_settles_reservation(monkey
 
 
 @pytest.mark.asyncio
-async def test_backend_desktop_openai_shape_preserves_native_event_order(
+async def test_backend_desktop_openai_shape_preserves_liveness_and_native_event_order(
     async_client,
     monkeypatch,
 ):
@@ -3572,10 +3589,79 @@ async def test_backend_desktop_openai_shape_preserves_native_event_order(
     )
 
     event_types = [event.get("type") for event in _sse_data_events(lines)]
-    assert event_types[0] == "codex.rate_limits"
-    assert "codex.keepalive" not in event_types
+    assert event_types[0] == "codex.keepalive"
+    assert event_types.count("codex.keepalive") >= 2
+    assert "codex.rate_limits" in event_types
     assert "response.created" not in event_types
     assert "response.completed" in event_types
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["startup", "exception", "marked", "eof"])
+async def test_native_transport_failure_keeps_http_body_decodable(
+    async_client, app_instance, monkeypatch, failure: str
+):
+    """Exercise the native route over a real socket, not an ASGI body collector."""
+    await _import_account(async_client, "native_wire_account", "native-wire@example.com")
+    attempts = 0
+
+    async def upstream(*args, **kwargs):
+        nonlocal attempts
+        del args, kwargs
+        attempts += 1
+        if failure == "startup":
+            raise ProxyResponseError(502, openai_error("upstream_request_timeout", "test upstream timeout"))
+        yield _sse_event({"type": "response.created", "response": {"id": "resp_native_wire"}})
+        if failure == "exception":
+            raise ProxyResponseError(502, openai_error("upstream_request_timeout", "test upstream timeout"))
+        if failure == "marked":
+            yield _sse_event(
+                {
+                    "type": "response.failed",
+                    "_codex_lb_synthetic_transport_failure": True,
+                    "response": {
+                        "id": "resp_native_wire",
+                        "status": "failed",
+                        "error": {"code": "upstream_request_timeout", "message": "test upstream timeout"},
+                    },
+                }
+            )
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", upstream)
+    server = uvicorn.Server(
+        uvicorn.Config(app_instance, host="127.0.0.1", port=0, lifespan="off", log_level="warning", access_log=False)
+    )
+    task = asyncio.create_task(server.serve())
+    try:
+        async with asyncio.timeout(10):
+            while not server.started:
+                if task.done():
+                    await task
+                await asyncio.sleep(0.01)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/backend-api/codex/responses",
+                headers={"user-agent": "Codex Desktop/0.1.0", "originator": "Codex Desktop"},
+                json={"model": "gpt-5.1", "input": "wire regression", "stream": True},
+            )
+        if failure == "startup":
+            assert response.status_code == 502
+            assert response.json()["error"]["code"] == "upstream_request_timeout"
+        else:
+            assert response.status_code == 200
+            events = _sse_data_events(response.text.splitlines())
+            failed = [event for event in events if event.get("type") == "response.failed"]
+            assert len(failed) == 1
+            assert failed[0]["response"]["error"]["code"] in {"stream_incomplete", "upstream_request_timeout"}
+            assert not any(event.get("type") == "response.completed" for event in events)
+            assert "_codex_lb_synthetic_transport_failure" not in response.text
+            assert events[-1]["type"] == "response.failed"
+            assert response.text.endswith("\n\n")
+        assert attempts == 1
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(task, timeout=10)
 
 
 @pytest.mark.asyncio

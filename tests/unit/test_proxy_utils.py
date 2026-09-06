@@ -9305,72 +9305,34 @@ async def test_public_responses_stream_normalizes_raw_error_after_created():
 
 
 @pytest.mark.asyncio
-async def test_native_codex_stream_preserves_missing_terminal_without_synthesis() -> None:
+async def test_codex_stream_reports_missing_terminal_as_failure() -> None:
     async def truncated_stream() -> AsyncIterator[str]:
         yield 'data: {"type":"response.created","response":{"id":"resp_native_truncated"}}\n\n'
 
     iterator = proxy_api._normalize_public_responses_stream(
         truncated_stream(),
         enforce_openai_sdk_contract=False,
-        preserve_native_failure_lifecycle=True,
     )
 
     assert parse_sse_data_json(await iterator.__anext__()) == {
         "type": "response.created",
         "response": {"id": "resp_native_truncated"},
     }
-    with pytest.raises(proxy_module.ProxyResponseError):
+    failure = parse_sse_data_json(await iterator.__anext__())
+    assert failure is not None
+    assert failure["type"] == "response.failed"
+    assert cast(dict[str, Any], failure["response"])["error"]["code"] == "stream_incomplete"
+    with pytest.raises(StopAsyncIteration):
         await iterator.__anext__()
 
 
 @pytest.mark.asyncio
-async def test_native_codex_stream_suppresses_marked_synthetic_transport_terminal() -> None:
+@pytest.mark.parametrize("error_code", ["stream_incomplete", "upstream_request_timeout"])
+async def test_codex_stream_emits_synthetic_transport_terminal_without_internal_marker(error_code: str) -> None:
     async def synthetic_failure_stream() -> AsyncIterator[str]:
         yield (
             'data: {"type":"response.failed","_codex_lb_synthetic_transport_failure":true,'
-            '"response":{"status":"failed","error":{"code":"upstream_request_timeout",'
-            '"message":"Proxy request budget exhausted"}}}\n\n'
-        )
-        yield "data: [DONE]\n\n"
-
-    with pytest.raises(proxy_module.ProxyResponseError):
-        _ = [
-            event_block
-            async for event_block in proxy_api._normalize_public_responses_stream(
-                synthetic_failure_stream(),
-                enforce_openai_sdk_contract=False,
-                preserve_native_failure_lifecycle=True,
-            )
-        ]
-
-
-@pytest.mark.asyncio
-async def test_native_codex_stream_suppresses_marked_incomplete_terminal_as_eof() -> None:
-    async def synthetic_failure_stream() -> AsyncIterator[str]:
-        yield (
-            'data: {"type":"response.failed","_codex_lb_synthetic_transport_failure":true,'
-            '"response":{"status":"failed","error":{"code":"stream_incomplete",'
-            '"message":"Upstream closed stream without completion"}}}\n\n'
-        )
-        yield "data: [DONE]\n\n"
-
-    with pytest.raises(proxy_module.ProxyResponseError):
-        _ = [
-            event_block
-            async for event_block in proxy_api._normalize_public_responses_stream(
-                synthetic_failure_stream(),
-                enforce_openai_sdk_contract=False,
-                preserve_native_failure_lifecycle=True,
-            )
-        ]
-
-
-@pytest.mark.asyncio
-async def test_non_native_stream_emits_synthetic_transport_terminal_without_internal_marker() -> None:
-    async def synthetic_failure_stream() -> AsyncIterator[str]:
-        yield (
-            'data: {"type":"response.failed","_codex_lb_synthetic_transport_failure":true,'
-            '"response":{"status":"failed","error":{"code":"upstream_request_timeout",'
+            f'"response":{{"status":"failed","error":{{"code":"{error_code}",'
             '"message":"Proxy request budget exhausted"}}}\n\n'
         )
 
@@ -9384,11 +9346,12 @@ async def test_non_native_stream_emits_synthetic_transport_terminal_without_inte
 
     assert events[0] is not None
     assert events[0]["type"] == "response.failed"
+    assert cast(dict[str, Any], events[0]["response"])["error"]["code"] == error_code
     assert "_codex_lb_synthetic_transport_failure" not in events[0]
 
 
 @pytest.mark.asyncio
-async def test_native_codex_stream_reraises_transport_failure_without_terminal_event() -> None:
+async def test_codex_stream_reports_transport_exception_as_terminal_failure() -> None:
     async def failed_stream() -> AsyncIterator[str]:
         raise proxy_module.ProxyResponseError(
             502,
@@ -9396,18 +9359,18 @@ async def test_native_codex_stream_reraises_transport_failure_without_terminal_e
         )
         yield ""  # pragma: no cover
 
-    with pytest.raises(proxy_module.ProxyResponseError) as exc_info:
-        _ = [
-            event
-            async for event in proxy_api._stream_response_error_events(
-                failed_stream(),
-                owns_reservation=False,
-                reservation=None,
-                preserve_native_failure_lifecycle=True,
-            )
-        ]
-
-    assert _proxy_error_code(exc_info.value) == "upstream_request_timeout"
+    events = [
+        parse_sse_data_json(event)
+        async for event in proxy_api._stream_response_error_events(
+            failed_stream(),
+            owns_reservation=False,
+            reservation=None,
+        )
+    ]
+    assert len(events) == 1
+    assert events[0] is not None
+    assert events[0]["type"] == "response.failed"
+    assert cast(dict[str, Any], events[0]["response"])["error"]["code"] == "upstream_request_timeout"
 
 
 def test_stream_startup_error_response_preserves_exact_retry_after_header() -> None:
@@ -52378,7 +52341,123 @@ async def test_submit_http_bridge_marks_ambiguous_operation_before_releasing_own
 
 
 @pytest.mark.asyncio
-async def test_submit_http_bridge_preflight_failure_keeps_operation_pre_dispatch(monkeypatch):
+@pytest.mark.parametrize("mark_outcome", ["cancel", "error"])
+async def test_submit_http_bridge_ambiguous_send_settlement_keeps_cleanup_owned(
+    monkeypatch: pytest.MonkeyPatch,
+    mark_outcome: str,
+) -> None:
+    service = proxy_service.ProxyService.__new__(proxy_service.ProxyService)
+    proxy_service._initialize_http_bridge_retry_circuit(service)
+    mark_started = asyncio.Event()
+    finish_mark = asyncio.Event()
+    mark_finished = asyncio.Event()
+
+    async def mark_operation_unknown(**_kwargs: object) -> bool:
+        mark_started.set()
+        if mark_outcome == "error":
+            raise RuntimeError("durable write failed")
+        await finish_mark.wait()
+        mark_finished.set()
+        return True
+
+    service._durable_bridge = SimpleNamespace(mark_operation_unknown=mark_operation_unknown)
+    request_state = proxy_service._WebSocketRequestState(
+        request_id=f"req-ambiguous-settlement-{mark_outcome}",
+        model="gpt-5.5",
+        service_tier=None,
+        reasoning_effort=None,
+        api_key_reservation=None,
+        started_at=0.0,
+        awaiting_response_created=True,
+        event_queue=asyncio.Queue(),
+        request_text='{"type":"response.create","model":"gpt-5.5"}',
+        operation_id=f"operation-ambiguous-settlement-{mark_outcome}",
+        operation_registered=True,
+    )
+    send_text = AsyncMock(
+        side_effect=UpstreamWebSocketTransportError(
+            "upstream websocket closed after dispatch",
+            error_code="proxy_network_unavailable",
+        )
+    )
+    close = AsyncMock()
+    response_create_gate = asyncio.Semaphore(1)
+    session = proxy_service._HTTPBridgeSession(
+        key=proxy_service._HTTPBridgeSessionKey("session_header", f"sid-ambiguous-{mark_outcome}", None),
+        headers={},
+        affinity=proxy_service._AffinityPolicy(key=f"sid-ambiguous-{mark_outcome}"),
+        request_model="gpt-5.5",
+        account=_make_account(f"acc-ambiguous-{mark_outcome}"),
+        upstream=cast(UpstreamWebSocket, SimpleNamespace(send_text=send_text, close=close)),
+        upstream_control=proxy_service._WebSocketUpstreamControl(),
+        pending_requests=deque(),
+        pending_lock=anyio.Lock(),
+        response_create_gate=response_create_gate,
+        queued_request_count=0,
+        last_used_at=0.0,
+        idle_ttl_seconds=120.0,
+        durable_session_id=f"durable-ambiguous-{mark_outcome}",
+        durable_owner_epoch=4,
+        account_lease=cast(Any, object()),
+    )
+    fail_pending = AsyncMock()
+
+    async def acquire_response_create(
+        state: proxy_service._WebSocketRequestState,
+        *,
+        response_create_gate: asyncio.Semaphore,
+        **_kwargs: object,
+    ) -> None:
+        await response_create_gate.acquire()
+        state.response_create_gate = response_create_gate
+        state.response_create_gate_acquired = True
+
+    monkeypatch.setattr(service, "_http_bridge_precreated_retry_allowed", AsyncMock(return_value=True))
+    monkeypatch.setattr(service, "_inline_http_bridge_image_urls", AsyncMock(return_value=request_state.request_text))
+    monkeypatch.setattr(service, "_maybe_prewarm_http_bridge_session", AsyncMock())
+    monkeypatch.setattr(service, "_acquire_request_state_response_create_admission", acquire_response_create)
+    monkeypatch.setattr(service, "_start_request_state_api_key_reservation_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(service, "_retire_stale_pending_http_bridge_session", AsyncMock())
+    monkeypatch.setattr(service, "_maybe_release_idle_http_bridge_session_lease", AsyncMock())
+    monkeypatch.setattr(service, "_fail_pending_websocket_requests", fail_pending)
+
+    submit = asyncio.create_task(
+        service._submit_http_bridge_request(
+            session,
+            request_state=request_state,
+            text_data=request_state.request_text or "",
+            queue_limit=1,
+        )
+    )
+    if mark_outcome == "cancel":
+        await asyncio.wait_for(mark_started.wait(), timeout=1)
+        submit.cancel()
+        await asyncio.sleep(0)
+        assert not submit.done()
+        finish_mark.set()
+        with pytest.raises(asyncio.CancelledError):
+            await submit
+        assert mark_finished.is_set()
+    else:
+        with pytest.raises(proxy_module.ProxyResponseError) as exc_info:
+            await submit
+        assert _proxy_error_code(exc_info.value) == "bridge_continuity_persistence_failed"
+
+    assert send_text.await_count == 1
+    assert session.pending_requests == deque()
+    assert session.queued_request_count == 0
+    assert response_create_gate._value == 1
+    assert request_state.response_create_gate_acquired is False
+    fail_pending.assert_awaited_once()
+    close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_during_cleanup", [False, True])
+async def test_submit_http_bridge_preflight_failure_keeps_operation_pre_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_during_cleanup: bool,
+) -> None:
     service = proxy_service.ProxyService.__new__(proxy_service.ProxyService)
     service._durable_bridge = None
     proxy_service._initialize_http_bridge_retry_circuit(service)
@@ -52419,9 +52498,16 @@ async def test_submit_http_bridge_preflight_failure_keeps_operation_pre_dispatch
         )
     )
     cleanup_dispatched: list[bool] = []
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
 
     async def cleanup(*_args: object, **_kwargs: object) -> None:
+        cleanup_started.set()
+        if cancel_during_cleanup:
+            await finish_cleanup.wait()
         cleanup_dispatched.append(request_state.operation_dispatched)
+        cleanup_finished.set()
 
     monkeypatch.setattr(proxy_http_bridge_request_submit, "_send_http_bridge_request_text_with_archive_id", send_frame)
     monkeypatch.setattr(service, "_inline_http_bridge_image_urls", AsyncMock(return_value=request_state.request_text))
@@ -52431,17 +52517,30 @@ async def test_submit_http_bridge_preflight_failure_keeps_operation_pre_dispatch
     monkeypatch.setattr(service, "_cleanup_http_bridge_submit_interruption", cleanup)
     monkeypatch.setattr(service, "_retire_http_bridge_after_drain_if_ready", AsyncMock())
 
-    with pytest.raises(proxy_module.ProxyResponseError) as exc_info:
-        await service._submit_http_bridge_request(
+    submit = asyncio.create_task(
+        service._submit_http_bridge_request(
             session,
             request_state=request_state,
             text_data=request_state.request_text or "",
             queue_limit=1,
         )
+    )
+    if cancel_during_cleanup:
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        submit.cancel()
+        await asyncio.sleep(0)
+        assert not submit.done()
+        finish_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await submit
+    else:
+        with pytest.raises(proxy_module.ProxyResponseError) as exc_info:
+            await submit
+        assert exc_info.value.status_code == 400
 
-    assert exc_info.value.status_code == 400
     send_frame.assert_awaited_once()
     assert cleanup_dispatched == [False]
+    assert cleanup_finished.is_set()
     assert request_state.recovery_attempt_dispatched is False
     assert request_state.operation_dispatched is False
 

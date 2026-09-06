@@ -337,6 +337,11 @@ async fn dispatch_websocket_command(
             mpsc::error::TrySendError::Full(_) => "native websocket command channel is full",
             mpsc::error::TrySendError::Closed(_) => "native websocket command channel closed",
         };
+        if let Some(ActiveRequest::WebSocket { abort, .. }) =
+            active.lock().await.remove(&request_id)
+        {
+            abort.abort();
+        }
         emit_websocket_setup_error(output, &request_id, Some(command_id), message).await?;
     }
     Ok(())
@@ -373,11 +378,14 @@ pub(crate) async fn emit(output: &Output, event: &NativeEvent) -> Result<(), std
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Once;
+    use std::sync::{Arc, Once};
+    use std::time::Duration;
 
     use futures_util::SinkExt;
     use futures_util::StreamExt;
+    use tokio::io::BufWriter;
     use tokio::net::TcpListener;
+    use tokio::sync::{Mutex, mpsc};
     use tokio_tungstenite::accept_hdr_async_with_config;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -389,7 +397,7 @@ mod tests {
     };
     use codex_lb_protocol::NativeWebSocketRequest;
 
-    use crate::websocket::{connect_native_websocket, native_websocket_config};
+    use crate::websocket::{WebSocketCommand, connect_native_websocket, native_websocket_config};
 
     static INSTALL_PROVIDER: Once = Once::new();
 
@@ -399,6 +407,72 @@ mod tests {
                 .install_default()
                 .expect("install test crypto provider");
         });
+    }
+
+    #[tokio::test]
+    async fn full_websocket_command_channel_aborts_only_its_task() {
+        let active: super::ActiveRequests = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let output: super::Output = Arc::new(Mutex::new(BufWriter::new(tokio::io::stdout())));
+        let (full_sender, _full_receiver) = mpsc::channel(1);
+        assert!(
+            full_sender
+                .try_send(WebSocketCommand::Send {
+                    command_id: "queued".to_owned(),
+                    message: Message::Text("queued".into()),
+                })
+                .is_ok()
+        );
+        let full_task = tokio::spawn(std::future::pending::<()>());
+        let (healthy_sender, _healthy_receiver) = mpsc::channel(1);
+        let healthy_task = tokio::spawn(std::future::pending::<()>());
+        {
+            let mut active = active.lock().await;
+            active.insert(
+                "full".to_owned(),
+                super::ActiveRequest::WebSocket {
+                    commands: full_sender,
+                    abort: full_task.abort_handle(),
+                },
+            );
+            active.insert(
+                "healthy".to_owned(),
+                super::ActiveRequest::WebSocket {
+                    commands: healthy_sender,
+                    abort: healthy_task.abort_handle(),
+                },
+            );
+        }
+
+        super::dispatch_websocket_command(
+            &active,
+            &output,
+            "full".to_owned(),
+            "overflow".to_owned(),
+            WebSocketCommand::Send {
+                command_id: "overflow".to_owned(),
+                message: Message::Text("overflow".into()),
+            },
+        )
+        .await
+        .expect("emit terminal overflow error");
+
+        let active = active.lock().await;
+        assert!(!active.contains_key("full"));
+        assert!(active.contains_key("healthy"));
+        drop(active);
+        let cancellation = tokio::time::timeout(Duration::from_secs(1), full_task)
+            .await
+            .expect("overflowed websocket task must stop")
+            .expect_err("overflowed websocket task must be aborted");
+        assert!(cancellation.is_cancelled());
+        assert!(!healthy_task.is_finished());
+        healthy_task.abort();
+        assert!(
+            healthy_task
+                .await
+                .expect_err("healthy test task cleanup must be cancelled")
+                .is_cancelled()
+        );
     }
 
     #[test]

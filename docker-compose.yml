@@ -37,6 +37,12 @@ services:
           path: ./uv.lock
         - action: rebuild
           path: ./Dockerfile
+        - action: rebuild
+          path: ./Cargo.toml
+        - action: rebuild
+          path: ./Cargo.lock
+        - action: rebuild
+          path: ./crates
     restart: unless-stopped
 
   frontend:
