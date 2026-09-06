@@ -153,6 +153,37 @@ describe("AccountCard", () => {
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 
+  it("renders subscription countdown states beside plan metadata", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T12:00:00.000Z"));
+    render(
+      <>
+        <AccountCard
+          account={createAccountSummary({
+            accountId: "acc-future",
+            subscriptionActiveUntil: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+          })}
+        />
+        <AccountCard
+          account={createAccountSummary({
+            accountId: "acc-ended",
+            subscriptionActiveUntil: new Date(Date.now() - 86_400_000).toISOString(),
+          })}
+        />
+        <AccountCard
+          account={createAccountSummary({ accountId: "acc-unknown", subscriptionActiveUntil: null })}
+        />
+      </>,
+    );
+
+    expect(screen.getAllByTestId("subscription-remaining").map((node) => node.textContent)).toEqual([
+      "Subscription: 3d",
+      "Recorded period ended",
+      "Subscription: unknown",
+    ]);
+    vi.useRealTimers();
+  });
+
   it("renders re-auth status and action for re-auth required accounts", () => {
     const account = createAccountSummary({ status: "reauth_required" });
 

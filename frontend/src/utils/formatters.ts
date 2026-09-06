@@ -441,8 +441,11 @@ export type SingleUnitRemaining = {
   expiringSoon: boolean;
 };
 
-export function formatSingleUnitRemaining(expiresAtIso: string): SingleUnitRemaining {
-  const ms = new Date(expiresAtIso).getTime() - Date.now();
+export function formatSingleUnitRemaining(
+  expiresAtIso: string,
+  nowMs = Date.now(),
+): SingleUnitRemaining {
+  const ms = new Date(expiresAtIso).getTime() - nowMs;
   if (ms <= 0) {
     return { label: t("formatters.now"), expiringSoon: true };
   }

@@ -10,6 +10,7 @@ import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
 import { useSmoothPercent } from "@/hooks/use-smooth-percent";
 import { StatusBadge } from "@/components/status-badge";
 import { MiniQuotaBar } from "@/components/mini-quota-bar";
+import { SubscriptionRemaining } from "@/features/accounts/components/subscription-remaining";
 import type {
   AccountRoutingPolicy,
   AccountSummary,
@@ -118,6 +119,12 @@ export function AccountListItem({
           </p>
           <p className="truncate text-xs text-muted-foreground" title={showAccountId ? t("accounts.detail.accountIdTitle", { accountId: account.accountId }) : undefined}>
             {emailSubtitle ? <><span className={blurred ? "privacy-blur" : undefined}>{emailSubtitle}</span> | {slotSubtitle}{idSuffix}</> : <>{slotSubtitle}{idSuffix}</>}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            <SubscriptionRemaining
+              activeUntil={account.subscriptionActiveUntil}
+              displayFormat={dateDisplayFormat}
+            />
           </p>
         </div>
         {showRoutingPolicy ? (

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -19,11 +21,18 @@ from app.modules.usage.repository import UsageRepository
 pytestmark = pytest.mark.integration
 
 
+def _encode_jwt(payload: dict) -> str:
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    body = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    return f"header.{body}.sig"
+
+
 def _make_account(
     account_id: str,
     email: str,
     plan_type: str = "plus",
     status: AccountStatus = AccountStatus.ACTIVE,
+    id_token: str = "id",
 ) -> Account:
     encryptor = TokenEncryptor()
     return Account(
@@ -32,11 +41,39 @@ def _make_account(
         plan_type=plan_type,
         access_token_encrypted=encryptor.encrypt("access"),
         refresh_token_encrypted=encryptor.encrypt("refresh"),
-        id_token_encrypted=encryptor.encrypt("id"),
+        id_token_encrypted=encryptor.encrypt(id_token),
         last_refresh=utcnow(),
         status=status,
         deactivation_reason=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_overview_exposes_subscription_without_auth(async_client, db_setup):
+    active_until = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+    async with SessionLocal() as session:
+        await AccountsRepository(session).upsert(
+            _make_account(
+                "acc_dash_subscription",
+                "dash-subscription@example.com",
+                plan_type="pro",
+                id_token=_encode_jwt(
+                    {
+                        "https://api.openai.com/auth": {
+                            "chatgpt_plan_type": "pro",
+                            "chatgpt_subscription_active_until": int(active_until.timestamp()),
+                        }
+                    }
+                ),
+            )
+        )
+
+    response = await async_client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    account = next(item for item in response.json()["accounts"] if item["accountId"] == "acc_dash_subscription")
+    assert account["subscriptionActiveUntil"] == "2026-10-01T12:00:00Z"
+    assert account["auth"] is None
 
 
 def test_weekly_credit_pace_timing_treats_naive_reset_as_utc():

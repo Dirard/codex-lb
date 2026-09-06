@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import stat
+from datetime import datetime, timezone
 
 import pytest
 from cryptography.fernet import InvalidToken
@@ -26,6 +27,56 @@ def test_extract_id_token_claims_valid_payload():
     claims = extract_id_token_claims(token)
     assert claims.email == "user@example.com"
     assert claims.chatgpt_account_id == "acc_123"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            int(datetime(2026, 9, 25, 10, 14, 25, tzinfo=timezone.utc).timestamp()),
+            datetime(2026, 9, 25, 10, 14, 25, tzinfo=timezone.utc),
+        ),
+        (
+            "2026-09-25T10:14:25Z",
+            datetime(2026, 9, 25, 10, 14, 25, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_extract_id_token_claims_parses_subscription_active_until(value, expected):
+    token = _encode_jwt(
+        {
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "pro",
+                "chatgpt_subscription_active_until": value,
+            }
+        }
+    )
+
+    claims = extract_id_token_claims(token)
+
+    assert claims.auth is not None
+    assert claims.auth.chatgpt_subscription_active_until == expected
+
+
+def test_extract_id_token_claims_ignores_malformed_subscription_active_until():
+    token = _encode_jwt(
+        {
+            "email": "user@example.com",
+            "chatgpt_account_id": "acc_123",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "pro",
+                "chatgpt_subscription_active_until": "not-a-date",
+            },
+        }
+    )
+
+    claims = extract_id_token_claims(token)
+
+    assert claims.email == "user@example.com"
+    assert claims.chatgpt_account_id == "acc_123"
+    assert claims.auth is not None
+    assert claims.auth.chatgpt_plan_type == "pro"
+    assert claims.auth.chatgpt_subscription_active_until is None
 
 
 def test_claims_from_auth_prefers_token_account_id():

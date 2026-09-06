@@ -240,6 +240,40 @@ describe("AccountListItem", () => {
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
+  it("renders subscription countdown states beside account metadata", () => {
+    render(
+      <>
+        <AccountListItem
+          account={createAccountSummary({
+            accountId: "acc-future",
+            subscriptionActiveUntil: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+          })}
+          selected={false}
+          onSelect={vi.fn()}
+        />
+        <AccountListItem
+          account={createAccountSummary({
+            accountId: "acc-ended",
+            subscriptionActiveUntil: new Date(Date.now() - 86_400_000).toISOString(),
+          })}
+          selected={false}
+          onSelect={vi.fn()}
+        />
+        <AccountListItem
+          account={createAccountSummary({ accountId: "acc-unknown", subscriptionActiveUntil: null })}
+          selected={false}
+          onSelect={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(screen.getAllByTestId("subscription-remaining").map((node) => node.textContent)).toEqual([
+      "Subscription: 3d",
+      "Recorded period ended",
+      "Subscription: unknown",
+    ]);
+  });
+
   it("hides the reset-credit badge when no credits are available", () => {
     const account = createAccountSummary({ availableResetCredits: 0 });
 

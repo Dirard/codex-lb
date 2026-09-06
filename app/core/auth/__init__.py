@@ -4,10 +4,10 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_EMAIL = "unknown@example.com"
 DEFAULT_PLAN = "unknown"
@@ -48,6 +48,7 @@ class OpenAIAuthClaims(BaseModel):
         ),
     )
     chatgpt_plan_type: str | None = None
+    chatgpt_subscription_active_until: datetime | None = None
     workspace_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -58,6 +59,25 @@ class OpenAIAuthClaims(BaseModel):
             "tenant_id",
         ),
     )
+
+    @field_validator("chatgpt_subscription_active_until", mode="before")
+    @classmethod
+    def _parse_subscription_active_until(cls, value: object) -> datetime | None:
+        if value is None or isinstance(value, datetime):
+            return value
+        try:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                parsed = datetime.fromtimestamp(float(value), tz=timezone.utc)
+            elif isinstance(value, str):
+                parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+            else:
+                return None
+        except (ValueError, OverflowError, OSError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
     workspace_label: str | None = Field(
         default=None,
         validation_alias=AliasChoices(

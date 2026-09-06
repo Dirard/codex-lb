@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.core import usage as usage_core
-from app.core.auth import DEFAULT_EMAIL, DEFAULT_PLAN, extract_id_token_claims, token_expiry_epoch_ms
+from app.core.auth import (
+    DEFAULT_EMAIL,
+    DEFAULT_PLAN,
+    IdTokenClaims,
+    extract_id_token_claims,
+    token_expiry_epoch_ms,
+)
 from app.core.config import settings as config_settings
 from app.core.crypto import TokenEncryptor
 from app.core.plan_types import coerce_account_plan_type
@@ -111,7 +117,10 @@ def _account_to_summary(
     reset_credits_snapshot: RateLimitResetCreditsSnapshot | None = None,
 ) -> AccountSummary:
     plan_type = coerce_account_plan_type(account.plan_type, DEFAULT_PLAN)
-    auth_status = _build_auth_status(account, encryptor) if include_auth else None
+    id_token = _decrypt_token(encryptor, account.id_token_encrypted)
+    id_claims = extract_id_token_claims(id_token) if id_token else IdTokenClaims()
+    auth_status = _build_auth_status(account, encryptor, id_claims) if include_auth else None
+    subscription_active_until = id_claims.auth.chatgpt_subscription_active_until if id_claims.auth is not None else None
     effective_primary_usage, effective_secondary_usage = _effective_usage_windows(
         primary_usage,
         secondary_usage,
@@ -261,6 +270,7 @@ def _account_to_summary(
         workspace_label=account.workspace_label,
         seat_type=account.seat_type,
         plan_type=plan_type,
+        subscription_active_until=subscription_active_until,
         status=effective_status.value,
         routing_policy=_normalize_account_routing_policy(account.routing_policy),
         security_work_authorized=bool(account.security_work_authorized),
@@ -443,18 +453,17 @@ def _effective_usage_windows(
     return None, secondary_usage
 
 
-def _build_auth_status(account: Account, encryptor: TokenEncryptor) -> AccountAuthStatus:
+def _build_auth_status(
+    account: Account,
+    encryptor: TokenEncryptor,
+    id_claims: IdTokenClaims,
+) -> AccountAuthStatus:
     access_token = _decrypt_token(encryptor, account.access_token_encrypted)
     refresh_token = _decrypt_token(encryptor, account.refresh_token_encrypted)
-    id_token = _decrypt_token(encryptor, account.id_token_encrypted)
 
     access_expires = _token_expiry(access_token)
     refresh_state = "stored" if refresh_token else "missing"
-    id_state = "unknown"
-    if id_token:
-        claims = extract_id_token_claims(id_token)
-        if claims.model_dump(exclude_none=True):
-            id_state = "parsed"
+    id_state = "parsed" if id_claims.model_dump(exclude_none=True) else "unknown"
 
     return AccountAuthStatus(
         access=AccountTokenStatus(expires_at=access_expires),

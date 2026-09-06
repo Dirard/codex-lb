@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import type { AccountAction } from "@/features/dashboard/components/account-card";
+import { SubscriptionRemaining } from "@/features/accounts/components/subscription-remaining";
 import {
   accountSubscriptionCredits,
   formatCreditValue,
@@ -402,7 +403,12 @@ export function AccountList({
 	                    t("dashboard.accountList.idShort", { id: compactId })
 	                  )}
 	                  {showAccountId && emailSubtitle ? ` | ${t("dashboard.accountList.idShort", { id: compactId })}` : ""}
-	                </p>
+                  <SubscriptionRemaining
+                    activeUntil={account.subscriptionActiveUntil}
+                    displayFormat={dateDisplayFormat}
+                    className="mt-0.5 block whitespace-nowrap"
+                  />
+                </p>
               </div>
               <StatusBadge status={status} />
               <span className="text-xs text-muted-foreground">{formatSlug(account.planType)}</span>

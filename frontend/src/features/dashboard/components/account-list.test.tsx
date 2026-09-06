@@ -51,6 +51,39 @@ describe("AccountList", () => {
     expect(screen.getByTestId("dashboard-account-list").firstElementChild).toHaveClass("min-w-[76rem]");
   });
 
+  it("renders subscription countdown states beside each account", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T12:00:00.000Z"));
+    render(
+      <AccountList
+        accounts={[
+          createAccountSummary({
+            accountId: "acc-future",
+            displayName: "Future Account",
+            subscriptionActiveUntil: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+          }),
+          createAccountSummary({
+            accountId: "acc-ended",
+            displayName: "Ended Account",
+            subscriptionActiveUntil: new Date(Date.now() - 86_400_000).toISOString(),
+          }),
+          createAccountSummary({
+            accountId: "acc-unknown",
+            displayName: "Unknown Account",
+            subscriptionActiveUntil: null,
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByTestId("subscription-remaining").map((node) => node.textContent)).toEqual([
+      "Subscription: 3d",
+      "Recorded period ended",
+      "Subscription: unknown",
+    ]);
+    vi.useRealTimers();
+  });
+
   it("renders primary idle warm-up attempts as 5h", () => {
     const attemptedAt = new Date("2026-06-03T12:00:00Z").toISOString();
     const account = createAccountSummary({

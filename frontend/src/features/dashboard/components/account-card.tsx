@@ -11,6 +11,7 @@ import {
   formatCreditValue,
   formatPurchasedCredits,
 } from "@/features/dashboard/account-credit-display";
+import { SubscriptionRemaining } from "@/features/accounts/components/subscription-remaining";
 import { cn } from "@/lib/utils";
 import type { AccountSummary } from "@/features/dashboard/schemas";
 import { formatCompactAccountId } from "@/utils/account-identifiers";
@@ -161,6 +162,12 @@ export function AccountCard({ account, showAccountId = false, readOnly = false, 
               <span className={blurred ? "privacy-blur" : undefined}>{emailSubtitle}</span>{showAccountId ? ` | ID ${compactId}` : ""}
             </p>
           ) : null}
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            <SubscriptionRemaining
+              activeUntil={account.subscriptionActiveUntil}
+              displayFormat={dateDisplayFormat}
+            />
+          </p>
         </div>
         <StatusBadge status={status} />
       </div>

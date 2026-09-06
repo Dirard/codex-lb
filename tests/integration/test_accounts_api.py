@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from copy import copy
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -70,6 +70,53 @@ async def test_import_and_list_accounts(async_client):
     accounts = list_response.json()["accounts"]
     account = next(account for account in accounts if account["accountId"] == expected_account_id)
     assert "usageRefreshedAt" not in account
+
+
+@pytest.mark.asyncio
+async def test_accounts_list_exposes_recorded_subscription_active_until(async_client):
+    active_until = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    elapsed_until = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cases = [
+        ("valid", int(active_until.timestamp()), active_until),
+        ("elapsed", int(elapsed_until.timestamp()), elapsed_until),
+        ("missing", None, None),
+        ("malformed", "not-a-date", None),
+    ]
+    imported_accounts = []
+    for name, subscription_until, _ in cases:
+        auth_claims = {"chatgpt_plan_type": "pro"}
+        if subscription_until is not None:
+            auth_claims["chatgpt_subscription_active_until"] = subscription_until
+        auth_json = {
+            "tokens": {
+                "idToken": _encode_jwt(
+                    {
+                        "email": f"{name}@example.com",
+                        "chatgpt_account_id": f"acc_subscription_{name}",
+                        "https://api.openai.com/auth": auth_claims,
+                    }
+                ),
+                "accessToken": "access",
+                "refreshToken": "refresh",
+                "accountId": f"acc_subscription_{name}",
+            }
+        }
+        response = await async_client.post(
+            "/api/accounts/import",
+            files={"auth_json": ("auth.json", json.dumps(auth_json), "application/json")},
+        )
+        assert response.status_code == 200, response.text
+        imported_accounts.append(response.json()["accountId"])
+
+    list_response = await async_client.get("/api/accounts")
+    assert list_response.status_code == 200
+    accounts = {account["accountId"]: account for account in list_response.json()["accounts"]}
+
+    for account_id, (_, _, expected) in zip(imported_accounts, cases, strict=True):
+        assert accounts[account_id]["subscriptionActiveUntil"] == (
+            expected.isoformat().replace("+00:00", "Z") if expected else None
+        )
+    assert accounts[imported_accounts[-1]]["auth"]["idToken"]["state"] == "parsed"
 
 
 @pytest.mark.asyncio
