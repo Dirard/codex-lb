@@ -67,6 +67,7 @@ from app.modules.proxy._service.websocket.helpers import (
     _websocket_input_items_are_self_contained_fresh_replay,
 )
 from app.modules.proxy.affinity import (
+    _AffinityPolicy,
     _is_synthesized_turn_state,
     _owner_lookup_session_id_from_headers,
     _prompt_cache_key_from_request_model,
@@ -760,7 +761,7 @@ class _StreamingRetryMixin:
             # Only a proxy-injected owner anchor with locally verified full
             # input may move; the failed owner stays excluded so sticky
             # selection cannot immediately loop back to it.
-            nonlocal affinity, payload, payload_replay_required_account_id
+            nonlocal affinity, headers, payload, payload_replay_required_account_id
             nonlocal preferred_account_id, require_preferred_account, verified_fresh_replay_payload
             if not (
                 is_upstream_quota_failover_error_code(upstream_error_code)
@@ -779,7 +780,8 @@ class _StreamingRetryMixin:
             excluded_account_ids.add(account_id)
             preferred_account_id = None
             require_preferred_account = False
-            affinity = replace(affinity, reallocate_sticky=True)
+            affinity = _AffinityPolicy(reallocate_sticky=True)
+            headers = {key: value for key, value in headers.items() if key.lower() != "x-codex-turn-state"}
             logger.info(
                 "cross_transport_verified_fresh_replay request_id=%s outcome=%s account_id=%s",
                 request_id,
@@ -1523,22 +1525,6 @@ class _StreamingRetryMixin:
                             )
                         yield format_sse_event(event)
                         return
-                    if (
-                        require_preferred_account
-                        and preferred_account_id is not None
-                        and verified_fresh_replay_payload is not None
-                    ):
-                        excluded_account_ids.add(preferred_account_id)
-                        payload = verified_fresh_replay_payload
-                        verified_fresh_replay_payload = None
-                        preferred_account_id = None
-                        require_preferred_account = False
-                        affinity = replace(affinity, reallocate_sticky=True)
-                        logger.info(
-                            "cross_transport_verified_fresh_replay request_id=%s outcome=owner_unavailable",
-                            request_id,
-                        )
-                        continue
                     await _drain_pending_post_refresh_penalty_on_terminal(settlement)
                     if propagate_http_errors and last_transient_exc is not None:
                         raise last_transient_exc
@@ -1710,63 +1696,51 @@ class _StreamingRetryMixin:
                     and preferred_account_id is not None
                     and account.id != preferred_account_id
                 ):
-                    if verified_fresh_replay_payload is not None:
-                        payload = verified_fresh_replay_payload
-                        verified_fresh_replay_payload = None
-                        excluded_account_ids.add(preferred_account_id)
-                        preferred_account_id = None
-                        require_preferred_account = False
-                        affinity = replace(affinity, reallocate_sticky=True)
-                        logger.info(
-                            "cross_transport_verified_fresh_replay request_id=%s outcome=alternate_selected",
-                            request_id,
+                    error_code = "previous_response_owner_unavailable"
+                    message = "Previous response owner account is unavailable; retry later."
+                    reason = "owner_account_unavailable"
+                    upstream_error_code = "upstream_unavailable"
+                    if selection.error_code == "continuity_owner_conflict":
+                        error_code = "continuity_owner_conflict"
+                        message = (
+                            selection.error_message
+                            or "Account-owned continuity sources conflict; retry the logical turn"
                         )
-                    else:
-                        error_code = "previous_response_owner_unavailable"
-                        message = "Previous response owner account is unavailable; retry later."
-                        reason = "owner_account_unavailable"
-                        upstream_error_code = "upstream_unavailable"
-                        if selection.error_code == "continuity_owner_conflict":
-                            error_code = "continuity_owner_conflict"
-                            message = (
-                                selection.error_message
-                                or "Account-owned continuity sources conflict; retry the logical turn"
-                            )
-                            reason = "owner_conflict"
-                            upstream_error_code = selection.error_code
-                        _record_continuity_fail_closed(
-                            surface="http_stream",
-                            reason=reason,
-                            previous_response_id=payload.previous_response_id,
-                            session_id=headers.get("x-codex-turn-state") or headers.get("session_id"),
-                            upstream_error_code=upstream_error_code,
-                        )
-                        event = response_failed_event(
-                            error_code,
-                            message,
-                            response_id=request_id,
-                        )
-                        yield format_sse_event(event)
-                        await proxy._write_request_log(
-                            account_id=preferred_account_id,
-                            api_key=api_key,
-                            request_id=request_id,
-                            model=payload.model,
-                            latency_ms=int((time.monotonic() - start) * 1000),
-                            status="error",
-                            error_code=error_code,
-                            error_message=message,
-                            reasoning_effort=payload.reasoning.effort if payload.reasoning else None,
-                            transport=request_transport,
-                            upstream_transport=upstream_stream_transport,
-                            service_tier=payload.service_tier,
-                            requested_service_tier=payload.service_tier,
-                            useragent=useragent,
-                            useragent_group=useragent_group,
-                            conversation_id=conversation_id,
-                            client_ip=client_ip,
-                        )
-                        return
+                        reason = "owner_conflict"
+                        upstream_error_code = selection.error_code
+                    _record_continuity_fail_closed(
+                        surface="http_stream",
+                        reason=reason,
+                        previous_response_id=payload.previous_response_id,
+                        session_id=headers.get("x-codex-turn-state") or headers.get("session_id"),
+                        upstream_error_code=upstream_error_code,
+                    )
+                    event = response_failed_event(
+                        error_code,
+                        message,
+                        response_id=request_id,
+                    )
+                    yield format_sse_event(event)
+                    await proxy._write_request_log(
+                        account_id=preferred_account_id,
+                        api_key=api_key,
+                        request_id=request_id,
+                        model=payload.model,
+                        latency_ms=int((time.monotonic() - start) * 1000),
+                        status="error",
+                        error_code=error_code,
+                        error_message=message,
+                        reasoning_effort=payload.reasoning.effort if payload.reasoning else None,
+                        transport=request_transport,
+                        upstream_transport=upstream_stream_transport,
+                        service_tier=payload.service_tier,
+                        requested_service_tier=payload.service_tier,
+                        useragent=useragent,
+                        useragent_group=useragent_group,
+                        conversation_id=conversation_id,
+                        client_ip=client_ip,
+                    )
+                    return
                 try:
                     remaining_budget = _facade()._remaining_budget_seconds(deadline)
                     if remaining_budget <= 0:
@@ -2441,12 +2415,6 @@ class _StreamingRetryMixin:
                                         current_account_lease = None
                                         excluded_account_ids.add(account.id)
                                         break
-                                await proxy._handle_stream_error(
-                                    account,
-                                    _upstream_error_from_openai(error),
-                                    code,
-                                    http_status=tex.status_code,
-                                )
                                 raise
                             error_code = tex.code if isinstance(tex, _TransientStreamError) else "server_error"
                             error_payload: UpstreamError = (
@@ -2584,14 +2552,15 @@ class _StreamingRetryMixin:
                         outcome="owner_previsible_retryable_failure",
                         upstream_error_code=exc.code,
                     )
+                    await _handle_or_defer_keyed_stream_health(account, exc.error, exc.code)
+                    last_retryable_stream_error = exc
                     if (
                         require_preferred_account
                         and preferred_account_id == account.id
                         and not verified_owner_replay_moved
                     ):
-                        raise
-                    await _handle_or_defer_keyed_stream_health(account, exc.error, exc.code)
-                    last_retryable_stream_error = exc
+                        last_transient_exc = None
+                        break
                     if exc.exclude_account:
                         await _release_tracked_stream_lease(current_account_lease)
                         current_account_lease = None
@@ -3183,13 +3152,14 @@ class _StreamingRetryMixin:
                             excluded_account_ids.add(account.id)
                             require_security_work_authorized = True
                             continue
-                    health_write_allowed = await _drain_pending_post_refresh_penalty_on_terminal(settlement)
-                    if health_write_allowed and _facade()._should_penalize_stream_error(error_code):
-                        await proxy._handle_stream_error(
+                    if _facade()._should_penalize_stream_error(error_code):
+                        await _handle_or_defer_keyed_stream_health(
                             account,
                             _upstream_error_from_openai(error),
                             error_code,
+                            http_status=exc.status_code,
                         )
+                    await _drain_pending_post_refresh_penalty_on_terminal(settlement)
                     if propagate_http_errors:
                         raise
                     event = response_failed_event(

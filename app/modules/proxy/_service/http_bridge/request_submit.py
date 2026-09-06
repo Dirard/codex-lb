@@ -443,7 +443,9 @@ async def _send_http_bridge_request_text_with_archive_id(
         request_state.response_create_attempt = attempt
         request_state.response_create_sent_at = _service_time().monotonic()
         session.upstream_reader_wakeup.set()
+        health_error_was_handled = request_state.account_health_error_handled
         try:
+            request_state.account_health_error_handled = False
             await session.upstream.send_text(text_data)
         except BaseException:
             # A failed or cancelled send is settled by its caller. Disarm the
@@ -452,6 +454,7 @@ async def _send_http_bridge_request_text_with_archive_id(
             attempt.disarmed = True
             if request_state.response_create_attempt is attempt:
                 request_state.response_create_sent_at = None
+                request_state.account_health_error_handled = health_error_was_handled
             session.upstream_reader_wakeup.set()
             raise
     finally:
@@ -3815,6 +3818,7 @@ class _HTTPBridgeRequestSubmitMixin:
                 session,
                 request_state=request_state,
                 restart_reader=restart_reader,
+                selection_affinity=selection_affinity,
                 admission_claimed_leases=admission_claimed_leases,
                 retry_send_baselines=retry_send_baselines,
             )
@@ -3840,6 +3844,7 @@ class _HTTPBridgeRequestSubmitMixin:
         *,
         request_state: _WebSocketRequestState | None = None,
         restart_reader: bool = False,
+        selection_affinity: _AffinityPolicy | None = None,
         admission_claimed_leases: list[float] | None = None,
         retry_send_baselines: list[tuple[_WebSocketRequestState, int]] | None = None,
     ) -> bool:
@@ -4139,26 +4144,12 @@ class _HTTPBridgeRequestSubmitMixin:
                     **reconnect_reader_kwargs,
                 )
             else:
-                # Only pass the affinity when a caller supplied one: an
-                # explicit ``None`` would leak into reconnect call-shape
-                # assertions and mocks that predate the parameter.
-                if selection_affinity is None:
-                    await self._reconnect_http_bridge_session(
-                        session,
-                        request_state=request_state,
-                        **reconnect_reader_kwargs,
-                    )
-                else:
-                    # A quota-authorized replay retires the old hard-owner
-                    # generation, so its reallocate_sticky affinity must reach
-                    # account selection instead of the session's still-bound
-                    # policy; otherwise the exhausted owner stays preferred.
-                    await self._reconnect_http_bridge_session(
-                        session,
-                        request_state=request_state,
-                        selection_affinity=selection_affinity,
-                        **reconnect_reader_kwargs,
-                    )
+                await self._reconnect_http_bridge_session(
+                    session,
+                    request_state=request_state,
+                    selection_affinity=selection_affinity,
+                    **reconnect_reader_kwargs,
+                )
             if request_state.account_response_create_lease is None:
                 current_settings = await _service_get_settings_cache().get()
                 request_state.account_response_create_lease = (

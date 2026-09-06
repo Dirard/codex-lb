@@ -246,6 +246,87 @@ async def test_proxy_stream_bare_session_spills_under_cap_without_rebinding(asyn
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("affinity_source", ["session_id", "x-codex-turn-state", "legacy_thread"])
+async def test_verified_quota_replay_bypasses_persisted_hard_owner_only_for_replacement(
+    async_client, monkeypatch, affinity_source
+):
+    from unittest.mock import AsyncMock
+
+    from app.dependencies import get_proxy_service_for_app
+    from app.modules.proxy.sticky_repository import StickySessionsRepository
+
+    _install_proxy_settings_cache(monkeypatch, sticky_threads_enabled=False)
+    owner_id = await _import_account(async_client, "quota-hard-owner", "quota-hard-owner@example.com")
+    await _import_account(async_client, "quota-hard-replacement", "quota-hard-replacement@example.com")
+    raw_session = "quota-hard-session"
+    previous_response_id = "resp_quota_hard_owner"
+    initial_input = [{"role": "user", "content": "first turn"}]
+    full_input = [*initial_input, {"role": "user", "content": "full resend"}]
+    async with SessionLocal() as session:
+        await StickySessionsRepository(session).upsert(raw_session, owner_id, kind=StickySessionKind.CODEX_SESSION)
+
+    service = get_proxy_service_for_app(async_client._transport.app)
+    if affinity_source == "x-codex-turn-state":
+        monkeypatch.setattr(
+            service._durable_bridge,
+            "lookup_turn_state_target",
+            AsyncMock(return_value=SimpleNamespace(account_id=owner_id, session_id="quota-hard-durable")),
+        )
+    service._remember_websocket_previous_response_owner(
+        previous_response_id=previous_response_id, account_id=owner_id, api_key_id=None, session_id=raw_session
+    )
+    service._websocket_continuity_index[(raw_session, None)] = proxy_module._WebSocketContinuityState(
+        last_completed_response_id=previous_response_id,
+        last_completed_input_count=1,
+        last_completed_input_prefix_fingerprint=proxy_module._fingerprint_input_items(initial_input),
+    )
+    seen = []
+
+    async def fake_stream(payload, headers, access_token, account_id, **kwargs):
+        del access_token, kwargs
+        seen.append(account_id)
+        if account_id == "quota-hard-owner":
+            assert payload.previous_response_id == previous_response_id
+            yield (
+                'data: {"type":"response.failed","response":{"id":"resp_quota_denied",'
+                '"error":{"code":"usage_limit_reached","message":"quota exhausted"}}}\n\n'
+            )
+        else:
+            assert payload.previous_response_id is None
+            assert payload.input == full_input
+            assert not any(key.lower() == "x-codex-turn-state" for key in headers)
+            yield 'data: {"type":"response.completed","response":{"id":"resp_quota_replacement"}}\n\n'
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+    headers = (
+        {"session_id": raw_session, "thread-id": "quota-hard-thread"}
+        if affinity_source == "legacy_thread"
+        else {affinity_source: raw_session}
+    )
+    response = await async_client.post(
+        "/backend-api/codex/responses",
+        headers=headers,
+        json={
+            "model": "gpt-5.1",
+            "instructions": "continue",
+            "input": full_input,
+            "previous_response_id": previous_response_id,
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert '"type":"response.completed"' in response.text
+    assert "usage_limit_reached" not in response.text
+    assert seen == ["quota-hard-owner", "quota-hard-replacement"]
+    # The old key can still belong to other account-scoped continuations.
+    async with SessionLocal() as session:
+        assert (
+            await StickySessionsRepository(session).get_account_id(raw_session, kind=StickySessionKind.CODEX_SESSION)
+            == owner_id
+        )
+
+
+@pytest.mark.asyncio
 async def test_codex_goal_restart_retires_unavailable_legacy_owner_and_stays_on_replacement(
     async_client,
     monkeypatch,

@@ -10267,7 +10267,7 @@ def test_backend_responses_websocket_retries_stale_account_model_route_on_anothe
     )
 
 
-def test_backend_responses_websocket_previous_response_usage_limit_returns_upstream_unavailable(
+def test_backend_responses_websocket_previous_response_unsafe_quota_replay_preserves_upstream_error(
     app_instance,
     monkeypatch,
 ):
@@ -10379,9 +10379,9 @@ def test_backend_responses_websocket_previous_response_usage_limit_returns_upstr
             websocket.send_text(json.dumps(request_payload))
             event = json.loads(websocket.receive_text())
 
-    assert event["type"] == "response.failed"
-    assert event["response"]["error"]["code"] == "upstream_unavailable"
-    assert event["response"]["error"]["message"] == "Previous response owner account is unavailable; retry later."
+    assert event["type"] == "error"
+    assert event["error"]["code"] == "usage_limit_reached"
+    assert event["error"]["message"] == "The usage limit has been reached"
     assert connect_models == ["gpt-5.1"]
     assert captured_preferred_accounts == ["acct_ws_proxy_owner"]
     assert handled_error_codes == ["usage_limit_reached"]

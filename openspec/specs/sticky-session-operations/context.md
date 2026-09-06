@@ -78,3 +78,23 @@ mobile.
 Same-owner quota probing adds no setting or persisted timer. Operators should
 correlate owner-unavailable responses with upstream 429/cooldown events rather
 than assuming the locally reported quota reset is a continuation deadline.
+
+The fork preserves an active hard owner at local zero quota. Actual upstream
+quota exhaustion authorizes a verified account-neutral resend on another
+eligible account within the existing request and retry budgets, including
+client-supplied previous-response chains. For example, A can serve a continued
+turn at 0%; after A returns `usage_limit_reached`, a verified full resend goes
+to B without A's response/turn-state identifiers. File ownership, key scope,
+model/security eligibility, and visible-output safety still constrain recovery.
+No background quota probe or extra upstream request is introduced.
+
+Replacement selection drops the rejected hard affinity in addition to the
+payload anchor. Existing durable raw mappings remain unchanged because they
+may also identify unrelated account-bound continuations; the active bridge
+retains its canonical key and learns the replacement's new continuity.
+
+Keyed retries defer account-health writes until settlement or fallback release
+commits. A failed replacement keeps its socket generation bound to B but
+attributes a restored terminal quota error from A to A. Direct WebSocket
+continuity compare-and-clears an explicitly rejected proxy anchor, including
+fail-closed malformed-error metadata; a newer completion is never cleared.

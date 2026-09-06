@@ -4,7 +4,6 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import replace
 from typing import Any, TypeVar, cast
 
 import anyio
@@ -109,7 +108,6 @@ from app.modules.proxy._service.http_bridge.service_stubs import (
     _maybe_rewrite_websocket_previous_response_not_found_event,
     _pop_matching_websocket_request_states,
     _pop_terminal_websocket_request_state,
-    _prepare_websocket_request_state_for_account_switch,
     _previous_response_id_from_not_found_message,
     _release_websocket_response_create_gate,
     _response_output_item_done_tool_call,
@@ -206,6 +204,7 @@ from app.modules.proxy._service.warmup import (
     _WarmupUsageSnapshot as _WarmupUsageSnapshot,
 )
 from app.modules.proxy.affinity import (
+    _AffinityPolicy,
     _extract_model_class,
 )
 from app.modules.proxy.continuity import is_http_bridge_account_neutral_replay
@@ -2544,6 +2543,7 @@ class _HTTPBridgeUpstreamEventsMixin:
         claimed_terminal_request_states: list[_WebSocketRequestState],
     ) -> None:
         original_text = text
+        terminal_account_override: Account | None = None
         response_id = _websocket_response_id(event, payload)
         error_message = _websocket_event_error_message(event_type, payload)
         is_typeless_error_event = (
@@ -3412,6 +3412,9 @@ class _HTTPBridgeUpstreamEventsMixin:
                 and status_request_state.previous_response_id is not None
                 and status_request_state.preferred_account_id is not None
             ):
+                # Imported at dispatch time to avoid the HTTP/WebSocket mixin cycle.
+                from app.modules.proxy._service.websocket.helpers import _install_verified_fresh_replay
+
                 previous_request_state = (
                     status_request_state.request_text,
                     status_request_state.previous_response_id,
@@ -3431,7 +3434,10 @@ class _HTTPBridgeUpstreamEventsMixin:
                     status_request_state.error_param_override,
                     status_request_state.error_http_status_override,
                 )
-                safe_request_text = _prepare_websocket_request_state_for_account_switch(status_request_state)
+                safe_request_text = _install_verified_fresh_replay(
+                    status_request_state,
+                    require_proxy_injected_previous_response_id=False,
+                )
                 if safe_request_text is not None:
                     previous_account = session.account
                     previous_upstream_turn_state = session.upstream_turn_state
@@ -3440,10 +3446,7 @@ class _HTTPBridgeUpstreamEventsMixin:
                     session.downstream_turn_state = None
                     await self._release_request_state_account_response_create_lease(status_request_state)
                     status_request_state.excluded_account_ids.add(session.account.id)
-                    status_request_state.affinity_policy = replace(
-                        status_request_state.affinity_policy,
-                        reallocate_sticky=True,
-                    )
+                    status_request_state.affinity_policy = _AffinityPolicy(reallocate_sticky=True)
                     status_request_state.request_text = safe_request_text
                     # Only this verified upstream-quota replay may retire the
                     # old hard-owner anchor: the replacement payload is
@@ -3466,6 +3469,7 @@ class _HTTPBridgeUpstreamEventsMixin:
                         return
                     replacement_account_selected = session.account.id != previous_account.id
                     if replacement_account_selected:
+                        terminal_account_override = previous_account
                         session.upstream_control.reconnect_requested = True
                         session.upstream_control.retire_after_drain = True
                     else:
@@ -3492,10 +3496,6 @@ class _HTTPBridgeUpstreamEventsMixin:
                         status_request_state.error_http_status_override,
                     ) = previous_request_state
                     status_request_state.excluded_account_ids = previous_excluded_account_ids
-                    event_block = f"data: {original_text}\n\n"
-                    payload = parse_sse_data_json(event_block)
-                    event_type = classify_event_type(payload)
-                    event = parse_sse_event_payload(payload) if event_type in _LIFECYCLE_EVENT_TYPES else None
                     async with session.pending_lock:
                         if status_request_state in session.pending_requests:
                             session.pending_requests.remove(status_request_state)
@@ -4133,13 +4133,14 @@ class _HTTPBridgeUpstreamEventsMixin:
 
         terminal_strike_failures: int | None = None
         terminal_poison_detail: str | None = None
+        terminal_account = terminal_account_override or session.account
 
         async def _finalize_terminal_settlement(settled_request_state: _WebSocketRequestState) -> None:
             try:
                 await self._finalize_websocket_request_state(
                     settled_request_state,
-                    account=session.account,
-                    account_id_value=session.account.id,
+                    account=terminal_account,
+                    account_id_value=terminal_account.id,
                     event=settlement_event,
                     event_type=settlement_event_type,
                     payload=settlement_payload,
@@ -4161,7 +4162,7 @@ class _HTTPBridgeUpstreamEventsMixin:
             _log_http_bridge_event(
                 "terminal_error",
                 session.key,
-                account_id=session.account.id,
+                account_id=terminal_account.id,
                 model=session.request_model,
                 detail=error_code,
                 pending_count=await self._http_bridge_pending_count(session),

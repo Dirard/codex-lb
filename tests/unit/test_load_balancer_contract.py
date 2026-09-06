@@ -458,7 +458,7 @@ async def test_required_file_owner_miss_does_not_mark_healthy_pool_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     unavailable_owner = _account("contract-file-owner")
-    unavailable_owner.status = AccountStatus.QUOTA_EXCEEDED
+    unavailable_owner.status = AccountStatus.PAUSED
     available_alternate = _account("contract-file-alternate")
     balancer, _, _, _ = _balancer(
         [unavailable_owner, available_alternate],
@@ -483,11 +483,14 @@ async def test_required_file_owner_miss_does_not_mark_healthy_pool_degraded(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("policy_gate", ["scope", "security"])
+@pytest.mark.parametrize("continuity_owner", [True, False])
 async def test_required_continuity_owner_policy_conflict_does_not_fallback(
     selection_cache: AccountSelectionCache,
     policy_gate: str,
+    continuity_owner: bool,
 ) -> None:
     owner = _account("contract-policy-owner")
+    owner.status = AccountStatus.QUOTA_EXCEEDED
     alternate = _account("contract-policy-alternate", security_work_authorized=True)
     balancer, _, _, _ = _balancer([owner, alternate], selection_cache)
 
@@ -495,13 +498,14 @@ async def test_required_continuity_owner_policy_conflict_does_not_fallback(
         account_ids={alternate.id} if policy_gate == "scope" else None,
         required_account_id=owner.id,
         required_account_is_ownership_constraint=True,
-        required_continuity_owner=True,
+        required_continuity_owner=continuity_owner,
         require_security_work_authorized=policy_gate == "security",
         lease_kind="stream",
     )
 
     assert selection.account is None
-    assert selection.error_code == load_balancer_module.CONTINUITY_OWNER_POLICY_CONFLICT
+    if continuity_owner:
+        assert selection.error_code == load_balancer_module.CONTINUITY_OWNER_POLICY_CONFLICT
 
 
 @pytest.mark.asyncio

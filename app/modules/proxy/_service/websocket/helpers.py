@@ -1413,6 +1413,8 @@ def _rewrite_websocket_continuity_corruption_event(
             continuity_state=continuity_state,
         )
     else:
+        if reason == PREVIOUS_RESPONSE_MALFORMED_PARAM_REASON:
+            _retire_websocket_rejected_continuity_anchor(continuity_state, request_state)
         _record_continuity_fail_closed(
             surface="websocket_stream",
             reason=reason,
@@ -1548,6 +1550,7 @@ def _sanitize_websocket_previous_response_error(
         reason = PREVIOUS_RESPONSE_MALFORMED_PARAM_REASON
         if request_state is not None:
             request_state.previous_response_not_found_recovery_blocked = True
+            _retire_websocket_rejected_continuity_anchor(continuity_state, request_state)
     if not should_rewrite:
         return status_code, payload, error_code, error_message
 

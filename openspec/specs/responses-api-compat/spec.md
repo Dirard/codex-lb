@@ -3313,6 +3313,8 @@ When a streaming `/v1/responses` request encounters upstream instability, the pr
 ### Requirement: Streaming account-capacity waits keep clients alive
 When a streaming Responses request waits for temporary account capacity to recover before account selection can continue, the proxy MUST emit downstream progress events during the wait. HTTP/SSE and HTTP bridge streams MUST emit `codex.keepalive` events with `status = "waiting_for_account_capacity"`, request id, elapsed wait seconds, and retry-after seconds when known. HTTP bridge streams MAY also emit `response.in_progress` to satisfy OpenAI Responses stream parsers before later terminal events. WebSocket clients MUST receive equivalent `codex.keepalive` JSON messages. These progress events MUST NOT expose account emails, API keys, raw affinity keys, prompt content, or request payloads. Contract-shaped streams remain subject to the direct capacity-wait progress requirement, which suppresses non-standard progress events before startup when both HTTP error propagation and the OpenAI SDK stream contract are enabled.
 
+A startup probe that observes a capacity-wait marker MUST remain bounded by its existing signal-discovery deadline; if the paired ready signal does not arrive by that deadline, the probe MUST hand the still-running stream to the HTTP response instead of withholding response startup indefinitely.
+
 #### Scenario: HTTP/SSE capacity wait emits keepalive
 - **WHEN** `/v1/responses` streaming account selection can recover after a retry hint
 - **THEN** the stream emits `codex.keepalive` with `status = "waiting_for_account_capacity"`
@@ -3327,6 +3329,15 @@ When a streaming Responses request waits for temporary account capacity to recov
 - **WHEN** a WebSocket Responses request waits for account capacity recovery
 - **THEN** the downstream WebSocket receives a JSON `codex.keepalive` message with `status = "waiting_for_account_capacity"`
 - **AND** the connection remains open until selection retries, the request budget expires, or the client disconnects
+
+#### Scenario: Capacity startup marker cannot withhold HTTP response indefinitely
+
+- **GIVEN** a streaming Responses startup probe observes an account-capacity wait before the first upstream item
+- **AND** the paired capacity-ready signal does not arrive
+- **WHEN** the startup signal-discovery deadline expires
+- **THEN** the probe hands the still-running stream to the HTTP response
+- **AND** the downstream can receive its initial heartbeat and subsequent capacity-wait progress
+- **AND** the underlying capacity wait remains bounded by the original request budget
 
 ### Requirement: Downstream-HTTP upstream transport follows a configurable policy
 
@@ -4262,7 +4273,7 @@ When upstream returns a temporary model-capacity failure whose message says that
 
 The proxy MUST wait before replaying a pre-created HTTP bridge request with a selected-model capacity failure only
 when the failure happened before any downstream-visible response event and the request is still replayable as a fresh
-request.
+request. A hard owner MUST NOT be transferred solely because of a model-capacity message; transfer requires an explicit upstream quota-exhaustion classification and the existing account-neutral replay proof.
 
 #### Scenario: Public propagated-error streams do not receive pre-retry keepalives
 
@@ -4281,13 +4292,18 @@ request.
   `previous_response_id`
 - **THEN** the proxy MUST forward the terminal error promptly without sleeping for the model-capacity retry delay.
 
-#### Scenario: Retry-safe injected anchors still wait
+#### Scenario: Retry-safe injected anchors wait only after explicit quota rejection
 
-- **WHEN** the proxy injected `previous_response_id` and retained a fresh request body that is safe to replay without
+- **WHEN** the proxy injected `previous_response_id` and retained an account-neutral fresh request body that is safe to replay without
   that anchor
-- **AND** upstream returns a selected-model capacity error before visible output
+- **AND** upstream returns a selected-model capacity error explicitly classified as quota exhaustion before visible output
 - **THEN** the proxy MUST apply the model-capacity wait before stripping the injected anchor and replaying the fresh
   request.
+
+#### Scenario: Model capacity alone preserves a hard owner
+
+- **WHEN** upstream returns a selected-model capacity message without explicit quota exhaustion for an owner-bound turn
+- **THEN** the proxy MUST preserve the owner and normalized upstream error without cross-account replay.
 
 #### Scenario: Remote-owner relay preserves the hidden startup wait
 

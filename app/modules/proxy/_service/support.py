@@ -1227,6 +1227,7 @@ class _WebSocketRequestState:
     # (settlement-ordering invariant). Entries drop unapplied when neither
     # confirms.
     deferred_keyed_stream_health: list[_DeferredKeyedStreamHealthPenalty] = field(default_factory=list)
+    account_health_error_handled: bool = False
     deferred_reasoning_downstream_texts: list[str] = field(default_factory=list)
     suppress_next_created_downstream: bool = False
     replay_downstream_response_id: str | None = None

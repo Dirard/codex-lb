@@ -27,6 +27,7 @@ class _WebSocketServiceProtocol(Protocol):
     _finalize_websocket_request_state: Any
     _get_work_admission: Any
     _handle_precreated_websocket_auth_failure: Any
+    _handle_or_defer_precreated_stream_health: Any
     _handle_stream_error: Any
     _handle_websocket_connect_error: Any
     _load_balancer: Any

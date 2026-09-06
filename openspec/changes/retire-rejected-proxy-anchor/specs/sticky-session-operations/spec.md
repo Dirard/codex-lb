@@ -26,3 +26,9 @@ The failed turn MUST retain the normalized upstream error. A later self-containe
 - **WHEN** OpenAI returns `previous_response_not_found`
 - **THEN** the proxy returns the normalized error
 - **AND** it does not mutate live continuity under the proxy-anchor retirement rule
+
+#### Scenario: Malformed upstream error metadata does not revive a rejected proxy anchor
+
+- **WHEN** a previous-response rejection has malformed `param` metadata and the proxy fails closed
+- **THEN** the exact rejected proxy-injected anchor is still retired
+- **AND** the malformed error does not authorize transparent replay

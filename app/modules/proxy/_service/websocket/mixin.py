@@ -482,6 +482,7 @@ from app.modules.proxy.helpers import (
     _normalize_error_code,
     _parse_openai_error,
     _upstream_error_from_openai,
+    is_upstream_quota_failover_error_code,
 )
 from app.modules.proxy.http_bridge_forwarding import (
     HTTPBridgeForwardContext as HTTPBridgeForwardContext,
@@ -2481,9 +2482,10 @@ class _WebSocketMixin:
                         # the previous socket's account-scoped turn token while
                         # choosing and opening that replacement connection. If
                         # the client supplied the turn-state header, keep that
-                        # logical-turn anchor across the reconnect.
+                        # logical-turn anchor unless verified quota replay has
+                        # explicitly abandoned its account affinity.
                         upstream_turn_state = None
-                        if client_turn_state_header is None:
+                        if client_turn_state_header is None or request_state.affinity_policy.key is None:
                             filtered_headers = {
                                 key: value
                                 for key, value in filtered_headers.items()
@@ -3722,6 +3724,43 @@ class _WebSocketMixin:
                 continue
             except ProxyResponseError as exc:
                 confirmed_pre_dispatch = is_confirmed_pre_dispatch_transport_error(exc)
+                handshake_error = _parse_openai_error(exc.payload)
+                handshake_error_code = _normalize_error_code(
+                    handshake_error.code if handshake_error else None,
+                    handshake_error.type if handshake_error else None,
+                )
+                if (
+                    attempt < max_attempts - 1
+                    and is_upstream_quota_failover_error_code(handshake_error_code)
+                    and request_state.previous_response_id is not None
+                    and request_state.preferred_account_id is not None
+                    and request_state.fresh_upstream_request_is_retry_safe
+                    and request_state.fresh_upstream_request_text
+                ):
+                    safe_request_text = _install_verified_fresh_replay(
+                        request_state,
+                        require_proxy_injected_previous_response_id=False,
+                    )
+                    if safe_request_text is not None:
+                        await proxy._handle_or_defer_precreated_stream_health(
+                            request_state,
+                            account,
+                            _upstream_error_from_openai(handshake_error),
+                            handshake_error_code,
+                        )
+                        await proxy._load_balancer.release_account_lease(selected_stream_lease)
+                        selected_stream_lease = None
+                        excluded_account_ids.add(account.id)
+                        request_state.excluded_account_ids.add(account.id)
+                        request_state.request_text = safe_request_text
+                        headers = {key: value for key, value in headers.items() if key.lower() != "x-codex-turn-state"}
+                        request_state.affinity_policy = _AffinityPolicy(reallocate_sticky=True)
+                        sticky_key = None
+                        sticky_kind = None
+                        sticky_max_age_seconds = None
+                        last_failover_exc = exc
+                        last_failover_account = account
+                        continue
                 if selected_account_model_replacement:
                     # The account/model retry budget selected this replacement;
                     # its connection failure must be surfaced rather than
@@ -3788,6 +3827,9 @@ class _WebSocketMixin:
                 await proxy._load_balancer.release_account_lease(selected_stream_lease)
                 return None, None
             request_state.websocket_stream_lease = selected_stream_lease
+            # A recovered attempt's health was already recorded or deferred;
+            # the new upstream attempt must own its own terminal health result.
+            request_state.account_health_error_handled = False
             _clear_websocket_precreated_replay_fallback(request_state)
             return connect_result
 
@@ -5581,6 +5623,7 @@ class _WebSocketMixin:
             for grouped_request_state in grouped_previous_response_request_states:
                 if grouped_error_reason == PREVIOUS_RESPONSE_MALFORMED_PARAM_REASON:
                     grouped_request_state.previous_response_not_found_recovery_blocked = True
+                    _retire_websocket_rejected_continuity_anchor(continuity_state, grouped_request_state)
                     _record_continuity_fail_closed(
                         surface="websocket_stream",
                         reason=PREVIOUS_RESPONSE_MALFORMED_PARAM_REASON,
@@ -5736,22 +5779,26 @@ class _WebSocketMixin:
             and owner_pinned_quota_error_code is not None
             and request_state.previous_response_id is not None
             and request_state.preferred_account_id is not None
-            and request_state.proxy_injected_previous_response_id
             and request_state.fresh_upstream_request_is_retry_safe
             and request_state.fresh_upstream_request_text
         )
         if owner_pinned_retry_error and not retry_safe_previous_response_not_found and not retry_safe_owner_replay:
             assert retry_error_code is not None
-            await proxy._handle_stream_error(
+            await proxy._handle_or_defer_precreated_stream_health(
+                request_state,
                 account,
                 {"message": _websocket_event_error_message(event_type, payload) or "Upstream error"},
                 retry_error_code,
             )
             retry_error_code = None
         if retry_safe_owner_replay and not retry_safe_previous_response_not_found:
-            safe_request_text = _prepare_websocket_request_state_for_account_switch(request_state)
+            safe_request_text = _install_verified_fresh_replay(
+                request_state,
+                require_proxy_injected_previous_response_id=False,
+            )
             if safe_request_text is None:
-                await proxy._handle_stream_error(
+                await proxy._handle_or_defer_precreated_stream_health(
+                    request_state,
                     account,
                     {"message": _websocket_event_error_message(event_type, payload) or "Upstream error"},
                     retry_error_code,
@@ -5765,10 +5812,7 @@ class _WebSocketMixin:
                 # clear.
                 await proxy._release_request_state_account_response_create_lease(request_state)
                 request_state.excluded_account_ids.add(account.id)
-                request_state.affinity_policy = replace(
-                    request_state.affinity_policy,
-                    reallocate_sticky=True,
-                )
+                request_state.affinity_policy = _AffinityPolicy(reallocate_sticky=True)
                 request_state.request_text = safe_request_text
         if retry_error_code == _ACCOUNT_MODEL_UNSUPPORTED_ERROR_CODE:
             retry_text = None
@@ -5849,7 +5893,8 @@ class _WebSocketMixin:
                 _clear_websocket_request_error_overrides(request_state)
                 upstream_control.suppress_downstream_event = True
                 upstream_control.replay_request_state = request_state
-                await proxy._handle_stream_error(
+                await proxy._handle_or_defer_precreated_stream_health(
+                    request_state,
                     account,
                     {"message": _websocket_event_error_message(event_type, payload) or "Upstream error"},
                     retry_error_code,

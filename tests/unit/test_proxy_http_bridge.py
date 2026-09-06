@@ -23516,6 +23516,7 @@ async def test_http_bridge_owner_quota_replay_preserves_error_when_replacement_f
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("proxy_injected_anchor", [True, False], ids=["proxy-anchor", "client-anchor"])
 @pytest.mark.parametrize(
     "replacement_lease_fails",
     [False, True],
@@ -23524,6 +23525,7 @@ async def test_http_bridge_owner_quota_replay_preserves_error_when_replacement_f
 async def test_http_bridge_quota_owner_replay_rebinds_hard_thread_to_replacement(
     monkeypatch: pytest.MonkeyPatch,
     replacement_lease_fails: bool,
+    proxy_injected_anchor: bool,
 ) -> None:
     service = proxy_service.ProxyService(cast(Any, nullcontext()))
     fresh_text = (
@@ -23539,7 +23541,7 @@ async def test_http_bridge_quota_owner_replay_rebinds_hard_thread_to_replacement
         started_at=1.0,
         previous_response_id="resp_owner_quota",
         preferred_account_id="acc-limited",
-        proxy_injected_previous_response_id=True,
+        proxy_injected_previous_response_id=proxy_injected_anchor,
         fresh_upstream_request_text=fresh_text,
         fresh_upstream_request_is_retry_safe=True,
         hard_continuity_anchor=True,
@@ -23618,6 +23620,8 @@ async def test_http_bridge_quota_owner_replay_rebinds_hard_thread_to_replacement
     monkeypatch.setattr(service, "_handle_or_defer_precreated_stream_health", AsyncMock())
     monkeypatch.setattr(service, "_handle_stream_error", AsyncMock())
     monkeypatch.setattr(service, "_release_request_state_account_response_create_lease", AsyncMock())
+    finalize_request_state = AsyncMock()
+    monkeypatch.setattr(service, "_finalize_websocket_request_state", finalize_request_state)
     monkeypatch.setattr(service, "_select_account_with_budget_for_stream", select_account)
     monkeypatch.setattr(service, "_ensure_fresh_with_budget", ensure_fresh)
     monkeypatch.setattr(service, "_open_upstream_websocket_with_budget", open_upstream)
@@ -23657,11 +23661,19 @@ async def test_http_bridge_quota_owner_replay_rebinds_hard_thread_to_replacement
         assert error["code"] == "usage_limit_reached"
         assert session.upstream_control.reconnect_requested is True
         assert session.upstream_control.retire_after_drain is True
+        finalize_request_state.assert_awaited_once()
+        finalize_call = finalize_request_state.await_args
+        assert finalize_call is not None
+        assert finalize_call.kwargs["account"] is account_a
+        assert finalize_call.kwargs["account_id_value"] == account_a.id
     else:
         assert send_text.await_count == 1
-        sent_payload = json.loads(cast(str, send_text.await_args.args[0]))
+        send_call = send_text.await_args
+        assert send_call is not None
+        sent_payload = json.loads(cast(str, send_call.args[0]))
         assert "previous_response_id" not in sent_payload
         assert request_state.event_queue.empty()
+        finalize_request_state.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -32028,7 +32040,6 @@ async def test_http_bridge_submit_cooldown_suppression_spares_session_owned_by_c
         return allowed
 
     monkeypatch.setattr(service, "_http_bridge_precreated_retry_allowed", gate)
-    monkeypatch.setattr(service, "_http_bridge_fair_share_threshold_pct", AsyncMock(return_value=0))
     monkeypatch.setattr(
         service,
         "_ensure_http_bridge_session_stream_lease_locked",
