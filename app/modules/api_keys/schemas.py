@@ -26,6 +26,7 @@ class LimitRuleResponse(DashboardModel):
 
 class ApiKeyCreateRequest(DashboardModel):
     name: str = Field(min_length=1, max_length=128)
+    group_id: str | None = None
     allowed_models: list[str] | None = None
     apply_to_codex_model: bool = False
     enforced_model: str | None = Field(default=None, min_length=1)
@@ -45,6 +46,7 @@ class ApiKeyCreateRequest(DashboardModel):
 
 
 class ApiKeyUpdateRequest(DashboardModel):
+    group_id: str | None = None
     name: str | None = Field(default=None, min_length=1, max_length=128)
     allowed_models: list[str] | None = None
     apply_to_codex_model: bool | None = None
@@ -77,6 +79,7 @@ class ApiKeyResponse(DashboardModel):
     id: str
     name: str
     key_prefix: str
+    group_id: str | None = None
     allowed_models: list[str] | None
     apply_to_codex_model: bool = False
     enforced_model: str | None

@@ -42,6 +42,7 @@ def _to_response(row: ApiKeyData) -> ApiKeyResponse:
         id=row.id,
         name=row.name,
         key_prefix=row.key_prefix,
+        group_id=row.group_id,
         allowed_models=row.allowed_models,
         apply_to_codex_model=row.apply_to_codex_model,
         enforced_model=row.enforced_model,
@@ -128,6 +129,7 @@ async def create_api_key(
     _write_access=Depends(require_dashboard_write_access),
     context: ApiKeysContext = Depends(get_api_keys_context),
 ) -> ApiKeyCreateResponse:
+    fields = payload.model_fields_set
     limit_inputs = _build_limit_inputs(payload)
 
     try:
@@ -135,6 +137,9 @@ async def create_api_key(
             ApiKeyCreateData(
                 name=payload.name,
                 allowed_models=payload.allowed_models,
+                group_id=payload.group_id,
+                assigned_account_ids_set="assigned_account_ids" in fields,
+                limits_set="limits" in fields or "weekly_token_limit" in fields,
                 apply_to_codex_model=payload.apply_to_codex_model,
                 enforced_model=payload.enforced_model,
                 enforced_reasoning_effort=payload.enforced_reasoning_effort,
@@ -193,6 +198,8 @@ async def update_api_key(
     limit_inputs = _build_limit_inputs(payload) if limits_set else None
 
     update = ApiKeyUpdateData(
+        group_id=payload.group_id,
+        group_id_set="group_id" in fields,
         name=payload.name,
         name_set="name" in fields,
         allowed_models=payload.allowed_models,

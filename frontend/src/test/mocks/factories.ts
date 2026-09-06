@@ -14,9 +14,11 @@ import {
 } from "@/features/accounts/schemas";
 import type { ApiKey, ApiKeyCreateResponse } from "@/features/api-keys/schemas";
 import {
-	ApiKeyCreateResponseSchema,
-	ApiKeySchema,
+  ApiKeyCreateResponseSchema,
+  ApiKeySchema,
 } from "@/features/api-keys/schemas";
+import type { AccountGroup } from "@/features/account-groups/schemas";
+import { AccountGroupSchema } from "@/features/account-groups/schemas";
 import type {
 	ApiKeyTrendsResponse,
 	ApiKeyUsage7DayResponse,
@@ -856,6 +858,21 @@ export function createDefaultApiKeys(): ApiKey[] {
 			limits: [],
 		}),
 	];
+}
+
+export function createAccountGroup(overrides: Partial<AccountGroup> = {}): AccountGroup {
+	return AccountGroupSchema.parse({
+		id: "group_1",
+		name: "Team pool",
+		accountIds: [],
+		limits: [],
+		keyCount: 0,
+		...overrides,
+	});
+}
+
+export function createDefaultAccountGroups(): AccountGroup[] {
+	return [];
 }
 
 function createUsageTrendPoints(

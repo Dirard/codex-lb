@@ -12,6 +12,8 @@ from app.db.session import get_background_session, get_session
 from app.modules.accounts.auth_manager import AuthManager
 from app.modules.accounts.repository import AccountsRepository
 from app.modules.accounts.service import AccountsService
+from app.modules.api_keys.groups_repository import AccountGroupsRepository
+from app.modules.api_keys.groups_service import AccountGroupsService
 from app.modules.api_keys.repository import ApiKeysRepository
 from app.modules.api_keys.service import ApiKeysService
 from app.modules.audit.repository import AuditRepository
@@ -91,6 +93,13 @@ class ApiKeysContext:
     session: AsyncSession
     repository: ApiKeysRepository
     service: ApiKeysService
+
+
+@dataclass(slots=True)
+class AccountGroupsContext:
+    session: AsyncSession
+    repository: AccountGroupsRepository
+    service: AccountGroupsService
 
 
 @dataclass(slots=True)
@@ -267,6 +276,16 @@ def get_api_keys_context(
     usage_repository = UsageRepository(session)
     service = ApiKeysService(repository, usage_repository=usage_repository)
     return ApiKeysContext(session=session, repository=repository, service=service)
+
+
+def get_account_groups_context(
+    session: AsyncSession = Depends(get_session),
+) -> AccountGroupsContext:
+    api_keys_repository = ApiKeysRepository(session)
+    api_keys_service = ApiKeysService(api_keys_repository)
+    repository = AccountGroupsRepository(session)
+    service = AccountGroupsService(repository, api_keys_service)
+    return AccountGroupsContext(session=session, repository=repository, service=service)
 
 
 def get_model_sources_context(

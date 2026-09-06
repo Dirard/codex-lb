@@ -1144,6 +1144,27 @@ class ApiFirewallAllowlist(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
+class AccountGroup(Base):
+    __tablename__ = "account_groups"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    account_assignments: Mapped[list["AccountGroupAccount"]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+    limits: Mapped[list["AccountGroupLimit"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+
+
+class AccountGroupAccount(Base):
+    __tablename__ = "account_group_accounts"
+
+    account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    group_id: Mapped[str] = mapped_column(
+        String, ForeignKey("account_groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
     __table_args__ = (
@@ -1157,6 +1178,10 @@ class ApiKey(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     key_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     key_prefix: Mapped[str] = mapped_column(String, nullable=False)
+    group_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("account_groups.id", name="fk_api_keys_group_id"), index=True
+    )
+    group: Mapped["AccountGroup | None"] = relationship(lazy="selectin")
     allowed_models: Mapped[str | None] = mapped_column(Text, nullable=True)
     apply_to_codex_model: Mapped[bool] = mapped_column(
         Boolean,
@@ -1373,6 +1398,34 @@ class LimitWindow(str, Enum):
     MONTHLY = "monthly"
     FIVE_HOURS = "5h"
     SEVEN_DAYS = "7d"
+
+
+class AccountGroupLimit(Base):
+    __tablename__ = "account_group_limits"
+    __table_args__ = (
+        UniqueConstraint("group_id", "limit_type", "limit_window", "model_filter", name="uq_account_group_limit"),
+        Index(
+            "uq_account_group_limit_unfiltered",
+            "group_id",
+            "limit_type",
+            "limit_window",
+            unique=True,
+            sqlite_where=text("model_filter IS NULL"),
+            postgresql_where=text("model_filter IS NULL"),
+        ),
+        CheckConstraint("max_value > 0", name="ck_account_group_limit_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[str] = mapped_column(String, ForeignKey("account_groups.id", ondelete="CASCADE"), nullable=False)
+    limit_type: Mapped[LimitType] = mapped_column(
+        SqlEnum(LimitType, name="limit_type", validate_strings=True, values_callable=_enum_values), nullable=False
+    )
+    limit_window: Mapped[LimitWindow] = mapped_column(
+        SqlEnum(LimitWindow, name="limit_window", validate_strings=True, values_callable=_enum_values), nullable=False
+    )
+    max_value: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    model_filter: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ApiKeyLimit(Base):

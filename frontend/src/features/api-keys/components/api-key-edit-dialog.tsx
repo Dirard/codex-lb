@@ -17,6 +17,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -24,6 +25,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { GroupSelect } from "@/features/account-groups/components/group-select";
+import { useAccountGroups } from "@/features/account-groups/hooks/use-account-groups";
+import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { ExpiryPicker } from "@/features/api-keys/components/expiry-picker";
 import { LimitRulesEditor } from "@/features/api-keys/components/limit-rules-editor";
 import { AccountMultiSelect } from "@/features/api-keys/components/account-multi-select";
@@ -91,6 +95,7 @@ function hasSelectionChange(initialIds: string[], nextIds: string[]): boolean {
 }
 
 type ApiKeyEditDraft = {
+  groupId: string | null;
   selectedModels: string[];
   selectedAccountIds: string[];
   selectedSourceIds: string[];
@@ -109,6 +114,7 @@ type ApiKeyEditDraft = {
 
 function createApiKeyEditDraft(apiKey: ApiKey): ApiKeyEditDraft {
   return {
+    groupId: apiKey.groupId ?? null,
     selectedModels: apiKey.allowedModels || [],
     selectedAccountIds: apiKey.assignedAccountIds,
     selectedSourceIds: apiKey.assignedSourceIds,
@@ -135,6 +141,8 @@ function apiKeyEditDraftReducer(
 
 function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps) {
   const { t } = useTranslation();
+  const { groupsQuery } = useAccountGroups();
+  const { accountsQuery } = useAccounts();
   const formSchema = z.object({
     name: z.string().min(1, t("apiKeys.validation.nameRequired")),
     isActive: z.boolean(),
@@ -150,6 +158,17 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
   const initialLimitRules = useMemo(() => limitsToCreateRules(apiKey), [apiKey]);
   const [draft, updateDraft] = useReducer(apiKeyEditDraftReducer, apiKey, createApiKeyEditDraft);
   const hasMalformedReasoningPolicy = apiKey.allowedReasoningEfforts?.length === 0;
+  const grouped = draft.groupId !== null;
+  const selectedGroup = grouped
+    ? (groupsQuery.data ?? []).find((group) => group.id === draft.groupId) ?? null
+    : null;
+  const inheritedAccountLabels = selectedGroup
+    ? selectedGroup.accountIds.map(
+        (accountId) =>
+          (accountsQuery.data ?? []).find((account) => account.accountId === accountId)?.email
+          ?? accountId,
+      )
+    : [];
 
   const handleSubmit = async (values: FormValues) => {
     const normalizedLimits = normalizeLimitRules(draft.limitRules);
@@ -182,14 +201,17 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
       expiresAt: draft.expiresAt?.toISOString() ?? null,
       isActive: values.isActive,
     };
-    if (shouldSubmitAssignedAccountIds) {
+    if (!grouped && shouldSubmitAssignedAccountIds) {
       payload.assignedAccountIds = draft.selectedAccountIds;
     }
     if (shouldSubmitAssignedSourceIds) {
       payload.assignedSourceIds = draft.selectedSourceIds;
     }
-    if (hasLimitRuleChanges(initialLimitRules, draft.limitRules)) {
+    if (!grouped && hasLimitRuleChanges(initialLimitRules, draft.limitRules)) {
       payload.limits = normalizedLimits;
+    }
+    if (draft.groupId !== (apiKey.groupId ?? null)) {
+      payload.groupId = draft.groupId;
     }
     try {
       await onSubmit(payload);
@@ -238,8 +260,35 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
             </div>
 
             <div className="space-y-1">
+              <label htmlFor="edit-api-key-group" className="text-sm font-medium">{t("apiKeys.form.group")}</label>
+              <GroupSelect
+                value={draft.groupId}
+                onChange={(groupId) => updateDraft({ groupId })}
+                id="edit-api-key-group"
+              />
+            </div>
+
+            <div className="space-y-1">
               <div className="text-sm font-medium">{t("apiKeys.form.assignedAccounts")}</div>
-              <AccountMultiSelect value={draft.selectedAccountIds} onChange={(selectedAccountIds) => updateDraft({ selectedAccountIds })} />
+              {grouped ? (
+                <div className="space-y-2">
+                  <p className="rounded-md border p-2 text-xs text-muted-foreground">
+                    {t("apiKeys.form.managedByGroup")}
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {inheritedAccountLabels.map((label) => (
+                      <Badge key={label} variant="secondary" className="text-xs">
+                        {label}
+                      </Badge>
+                    ))}
+                    {selectedGroup && selectedGroup.accountIds.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">{t("apiKeys.accountSelect.empty")}</p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <AccountMultiSelect value={draft.selectedAccountIds} onChange={(selectedAccountIds) => updateDraft({ selectedAccountIds })} />
+              )}
             </div>
 
             <div className="space-y-1">
@@ -400,7 +449,13 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
           {/* Right column — Limits */}
           <div className="max-h-[55vh] space-y-3 overflow-y-auto overscroll-contain pl-1 pr-2 max-sm:mt-3 max-sm:border-t max-sm:pt-3">
             <h4 className="sticky top-0 bg-background pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("apiKeys.form.limits")}</h4>
-            <LimitRulesEditor rules={draft.limitRules} onChange={(limitRules) => updateDraft({ limitRules })} />
+            {grouped ? (
+              <p className="rounded-md border p-2 text-xs text-muted-foreground">
+                {t("apiKeys.form.managedByGroup")}
+              </p>
+            ) : (
+              <LimitRulesEditor rules={draft.limitRules} onChange={(limitRules) => updateDraft({ limitRules })} />
+            )}
 
             {apiKey.limits.length > 0 ? (
               <div className="space-y-1">

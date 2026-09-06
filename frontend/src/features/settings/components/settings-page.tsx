@@ -6,6 +6,7 @@ import { useLocation } from "react-router-dom";
 import { AlertMessage } from "@/components/alert-message";
 import { LoadingOverlay } from "@/components/layout/loading-overlay";
 import { Button } from "@/components/ui/button";
+import { AccountGroupsSection } from "@/features/account-groups/components/account-groups-section";
 import { ApiKeysSection } from "@/features/api-keys/components/api-keys-section";
 import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { FirewallSection } from "@/features/firewall/components/firewall-section";
@@ -178,6 +179,8 @@ export function SettingsPage() {
                 void handleSave(buildSettingsUpdateRequest(settings, { hideUpstreamQuotaFromApiKeys: enabled }))
               }
             />
+
+            <AccountGroupsSection disabled={controlsDisabled} />
 
             <TelemetrySettings disabled={controlsDisabled} />
 

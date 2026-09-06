@@ -4,7 +4,7 @@ import { HttpResponse, http } from "msw";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { createAccountSummary } from "@/test/mocks/factories";
+import { createAccountGroup, createAccountSummary } from "@/test/mocks/factories";
 import { server } from "@/test/mocks/server";
 import { renderWithProviders } from "@/test/utils";
 
@@ -237,6 +237,45 @@ describe("ApiKeyCreateDialog", () => {
 
     const payload = onSubmit.mock.calls[0][0];
     expect(payload.assignedAccountIds).toEqual(["acc_primary", "acc_secondary"]);
+  });
+
+  it("submits a group without direct account or limit settings", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    server.use(
+      http.get("/api/account-groups/", () =>
+        HttpResponse.json([
+          createAccountGroup({ id: "group_1", name: "Team pool" }),
+        ]),
+      ),
+    );
+
+    renderWithProviders(
+      <ApiKeyCreateDialog
+        open
+        busy={false}
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Name"), "Grouped key");
+    await user.click(await screen.findByRole("combobox", { name: "Group" }));
+    await user.click(screen.getByRole("option", { name: "Team pool" }));
+
+    expect(screen.queryByRole("button", { name: "All accounts" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Accounts and limits are managed by the selected group.")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    const payload = onSubmit.mock.calls[0][0];
+    expect(payload.groupId).toBe("group_1");
+    expect("assignedAccountIds" in payload).toBe(false);
+    expect("limits" in payload).toBe(false);
+    expect("weeklyTokenLimit" in payload).toBe(false);
   });
 
   it("clears selected assigned accounts when the dialog is dismissed", async () => {

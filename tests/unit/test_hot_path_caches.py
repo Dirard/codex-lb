@@ -335,6 +335,7 @@ async def test_regenerated_key_old_token_rejected_immediately() -> None:
         name="test-regen",
         key_hash=old_key_hash,
         key_prefix=plain_key[:15],
+        group_id=None,
         allowed_models=None,
         enforced_model=None,
         enforced_reasoning_effort=None,
@@ -344,6 +345,8 @@ async def test_regenerated_key_old_token_rejected_immediately() -> None:
         created_at=now,
         last_used_at=None,
         limits=[],
+        account_assignment_scope_enabled=False,
+        account_assignments=[],
     )
     new_plain = "sk-clb-new-key-regen"
     new_row = SimpleNamespace(
@@ -351,6 +354,7 @@ async def test_regenerated_key_old_token_rejected_immediately() -> None:
         name="test-regen",
         key_hash=hashlib.sha256(new_plain.encode()).hexdigest(),
         key_prefix=new_plain[:15],
+        group_id=None,
         allowed_models=None,
         enforced_model=None,
         enforced_reasoning_effort=None,
@@ -360,6 +364,8 @@ async def test_regenerated_key_old_token_rejected_immediately() -> None:
         created_at=now,
         last_used_at=None,
         limits=[],
+        account_assignment_scope_enabled=False,
+        account_assignments=[],
     )
 
     class _RegenRepo:
@@ -406,6 +412,7 @@ async def test_deactivated_key_rejected_immediately() -> None:
         name="test-deactivate",
         key_hash=key_hash,
         key_prefix=plain_key[:15],
+        group_id=None,
         allowed_models=None,
         enforced_model=None,
         enforced_reasoning_effort=None,
@@ -415,10 +422,15 @@ async def test_deactivated_key_rejected_immediately() -> None:
         created_at=now,
         last_used_at=None,
         limits=[],
+        account_assignment_scope_enabled=False,
+        account_assignments=[],
     )
 
     class _UpdateOnlyRepo:
         async def get_by_id(self, _key_id: str) -> SimpleNamespace:
+            return deactivated_row
+
+        async def get_by_id_for_update(self, _key_id: str) -> SimpleNamespace:
             return deactivated_row
 
         async def update(self, _key_id: str, **_kwargs: object) -> SimpleNamespace:

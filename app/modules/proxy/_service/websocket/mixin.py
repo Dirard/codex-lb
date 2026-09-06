@@ -1882,6 +1882,22 @@ class _WebSocketMixin:
                                         downstream_activity=downstream_activity,
                                     )
                                     continue
+                                effective_api_key = request_state.api_key
+                                if (
+                                    effective_api_key is not None
+                                    and effective_api_key.group_id is not None
+                                    and upstream is not None
+                                    and account is not None
+                                    and account.id not in effective_api_key.assigned_account_ids
+                                ):
+                                    raise ProxyResponseError(
+                                        403,
+                                        openai_error(
+                                            "account_group_scope_mismatch",
+                                            "The connected account is no longer in this API key's account group.",
+                                            error_type="permission_error",
+                                        ),
+                                    )
                             except ProxyResponseError as exc:
                                 error = _parse_openai_error(exc.payload)
                                 error_code = _normalize_error_code(

@@ -12,12 +12,16 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from app.core.utils.time import utcnow
 from app.db.models import (
     Account,
+    AccountGroup,
+    AccountGroupAccount,
+    AccountGroupLimit,
     AccountStatus,
     ApiKey,
     ApiKeyAccountAssignment,
     ApiKeyLimit,
     ApiKeyModelSourceAssignment,
     LimitType,
+    LimitWindow,
     ModelSource,
     UsageHistory,
 )
@@ -71,6 +75,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
         self._account_assignments: dict[str, list[ApiKeyAccountAssignment]] = {}
         self._source_assignments: dict[str, list[ApiKeyModelSourceAssignment]] = {}
         self._accounts: dict[str, Account] = {}
+        self._groups: dict[str, AccountGroup] = {}
         self._model_sources: dict[str, ModelSource] = {}
         self._limit_id_seq = 0
         self._reservations: dict[str, UsageReservationData] = {}
@@ -87,6 +92,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
         row.limits = []
         row.account_assignments = []
         row.source_assignments = []
+        row.group = self._groups.get(row.group_id) if row.group_id is not None else None
         return row
 
     async def get_by_id(self, key_id: str) -> ApiKey | None:
@@ -95,7 +101,15 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
             row.limits = self._limits.get(key_id, [])
             row.account_assignments = self._account_assignments.get(key_id, [])
             row.source_assignments = self._source_assignments.get(key_id, [])
+            row.group = self._groups.get(row.group_id) if row.group_id is not None else None
         return row
+
+    async def get_by_id_for_update(self, key_id: str) -> ApiKey | None:
+        return await self.get_by_id(key_id)
+
+    async def get_group_by_id(self, group_id: str, *, for_key_reference: bool = False) -> AccountGroup | None:
+        del for_key_reference
+        return self._groups.get(group_id)
 
     async def get_for_limit_enforcement(self, key_id: str) -> ApiKey | None:
         return await self.get_by_id(key_id)
@@ -106,6 +120,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
                 row.limits = self._limits.get(row.id, [])
                 row.account_assignments = self._account_assignments.get(row.id, [])
                 row.source_assignments = self._source_assignments.get(row.id, [])
+                row.group = self._groups.get(row.group_id) if row.group_id is not None else None
                 return row
         return None
 
@@ -115,6 +130,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
             row.limits = self._limits.get(row.id, [])
             row.account_assignments = self._account_assignments.get(row.id, [])
             row.source_assignments = self._source_assignments.get(row.id, [])
+            row.group = self._groups.get(row.group_id) if row.group_id is not None else None
         return result
 
     async def list_accounts_by_ids(self, account_ids: list[str]) -> list[Account]:
@@ -147,6 +163,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
         self,
         key_id: str,
         *,
+        group_id: str | None | _Unset = _UNSET,
         name: str | _Unset = _UNSET,
         allowed_models: str | None | _Unset = _UNSET,
         apply_to_codex_model: bool | _Unset = _UNSET,
@@ -170,6 +187,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
         if row is None:
             return None
         for field, value in {
+            "group_id": group_id,
             "name": name,
             "allowed_models": allowed_models,
             "apply_to_codex_model": apply_to_codex_model,
@@ -192,6 +210,7 @@ class _FakeApiKeysRepository(ApiKeysRepositoryProtocol):
             setattr(row, field, value)
         row.limits = self._limits.get(key_id, [])
         row.source_assignments = self._source_assignments.get(key_id, [])
+        row.group = self._groups.get(row.group_id) if row.group_id is not None else None
         return row
 
     async def delete(self, key_id: str) -> bool:
@@ -2722,3 +2741,153 @@ async def test_create_key_rejects_invalid_usage_sections() -> None:
                 usage_sections="bad_section",
             )
         )
+
+
+def _make_account_group(
+    *,
+    group_id: str = "group-1",
+    account_ids: tuple[str, ...] = ("account-1",),
+    max_value: int = 100,
+) -> AccountGroup:
+    group = AccountGroup(id=group_id, name=group_id, created_at=utcnow())
+    group.account_assignments = [
+        AccountGroupAccount(group_id=group_id, account_id=account_id) for account_id in account_ids
+    ]
+    group.limits = [
+        AccountGroupLimit(
+            group_id=group_id,
+            limit_type=LimitType.TOTAL_TOKENS,
+            limit_window=LimitWindow.WEEKLY,
+            max_value=max_value,
+            model_filter=None,
+        )
+    ]
+    return group
+
+
+@pytest.mark.asyncio
+async def test_grouped_keys_materialize_independent_limit_ledgers() -> None:
+    repo = _FakeApiKeysRepository()
+    repo._groups["group-1"] = _make_account_group()
+    service = ApiKeysService(repo)
+
+    first = await service.create_key(ApiKeyCreateData(name="first", allowed_models=None, group_id="group-1"))
+    second = await service.create_key(ApiKeyCreateData(name="second", allowed_models=None, group_id="group-1"))
+
+    assert first.group_id == second.group_id == "group-1"
+    assert first.account_assignment_scope_enabled is second.account_assignment_scope_enabled is True
+    assert first.assigned_account_ids == second.assigned_account_ids == ["account-1"]
+    assert first.limits[0].id != second.limits[0].id
+
+    await service.record_usage(first.id, model="model-alpha", input_tokens=30, output_tokens=5)
+
+    assert repo._limits[first.id][0].current_value == 35
+    assert repo._limits[second.id][0].current_value == 0
+
+
+@pytest.mark.asyncio
+async def test_grouped_key_rejects_direct_managed_overrides_without_partial_update() -> None:
+    repo = _FakeApiKeysRepository()
+    repo._groups["group-1"] = _make_account_group()
+    service = ApiKeysService(repo)
+
+    with pytest.raises(ApiKeyValidationError, match="managed by the API key group"):
+        await service.create_key(
+            ApiKeyCreateData(
+                name="invalid",
+                allowed_models=None,
+                group_id="group-1",
+                assigned_account_ids=[],
+                assigned_account_ids_set=True,
+            )
+        )
+
+    created = await service.create_key(ApiKeyCreateData(name="grouped", allowed_models=None, group_id="group-1"))
+    with pytest.raises(ApiKeyValidationError, match="managed by the API key group"):
+        await service.update_key(
+            created.id,
+            ApiKeyUpdateData(
+                group_id="group-1",
+                group_id_set=True,
+                name="must-not-stick",
+                name_set=True,
+                limits=[],
+                limits_set=True,
+            ),
+        )
+
+    assert repo.rows[created.id].name == "grouped"
+
+
+@pytest.mark.asyncio
+async def test_detach_group_keeps_effective_accounts_limits_and_regeneration_state() -> None:
+    repo = _FakeApiKeysRepository()
+    group = _make_account_group(account_ids=("account-1", "account-2"))
+    repo._groups[group.id] = group
+    service = ApiKeysService(repo)
+    created = await service.create_key(ApiKeyCreateData(name="grouped", allowed_models=None, group_id=group.id))
+    await service.record_usage(created.id, model="model-alpha", input_tokens=20, output_tokens=5)
+
+    detached = await service.update_key(
+        created.id,
+        ApiKeyUpdateData(group_id=None, group_id_set=True),
+    )
+    regenerated = await service.regenerate_key(created.id)
+
+    assert detached.group_id is None
+    assert detached.account_assignment_scope_enabled is True
+    assert detached.assigned_account_ids == ["account-1", "account-2"]
+    assert detached.limits[0].current_value == 25
+    assert regenerated.group_id is None
+    assert regenerated.assigned_account_ids == detached.assigned_account_ids
+    assert regenerated.limits[0].current_value == 25
+
+
+@pytest.mark.asyncio
+async def test_group_amount_sync_preserves_outstanding_reservation_row_and_settles_once() -> None:
+    repo = _FakeApiKeysRepository()
+    repo._groups["group-1"] = _make_account_group(max_value=100)
+    service = ApiKeysService(repo)
+    first = await service.create_key(ApiKeyCreateData(name="first", allowed_models=None, group_id="group-1"))
+    second = await service.create_key(ApiKeyCreateData(name="second", allowed_models=None, group_id="group-1"))
+
+    reservation = await service.enforce_limits_for_request(
+        first.id,
+        request_model="model-alpha",
+        request_usage_budget=ApiKeyRequestUsageBudget(input_tokens=40, output_tokens=0),
+    )
+    assert reservation is not None
+    original = repo._limits[first.id][0]
+    original_id = original.id
+    original_reset_at = original.reset_at
+
+    await service.sync_group_limits(
+        [second.id, first.id],
+        [LimitRuleInput(limit_type="total_tokens", limit_window="weekly", max_value=30)],
+        now=utcnow(),
+    )
+
+    assert repo._limits[first.id][0] is original
+    assert (original.id, original.current_value, original.max_value, original.reset_at) == (
+        original_id,
+        40,
+        30,
+        original_reset_at,
+    )
+    assert repo._limits[second.id][0].current_value == 0
+
+    await service.finalize_usage_reservation(
+        reservation.reservation_id,
+        model="model-alpha",
+        input_tokens=25,
+        output_tokens=0,
+    )
+    await service.finalize_usage_reservation(
+        reservation.reservation_id,
+        model="model-alpha",
+        input_tokens=25,
+        output_tokens=0,
+    )
+
+    assert original.current_value == 25
+    assert repo._limits[second.id][0].current_value == 0

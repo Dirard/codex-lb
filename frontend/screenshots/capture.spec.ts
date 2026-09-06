@@ -18,6 +18,7 @@ import {
   unauthenticatedSession,
 } from "./fixtures";
 import {
+  createAccountGroup,
   createAccountSummary,
   createConversationDetails,
   createConversationEntry,
@@ -104,6 +105,7 @@ async function interceptApi(
     }
     if (p === "/api/models") return fulfill(route, { models });
     if (p === "/api/api-keys" || p === "/api/api-keys/") return fulfill(route, apiKeys);
+    if (p === "/api/account-groups" || p === "/api/account-groups/") return fulfill(route, []);
 
     return route.abort();
   });
@@ -183,6 +185,31 @@ async function capture(
 }
 
 // ── Scenes ──
+
+for (const width of [1440, 390]) {
+  test(`account groups — ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await applyTheme(page, "light");
+    await interceptApi(page);
+    const group = createAccountGroup({
+      name: "Project Alpha",
+      accountIds: accounts.slice(0, 2).map((account) => account.accountId),
+      limits: [{ limitType: "total_tokens", limitWindow: "weekly", maxValue: 1_000_000, modelFilter: null }],
+      keyCount: 2,
+    });
+    await page.route(/\/api\/account-groups\/?$/, (route) => fulfill(route, [group]));
+    await page.goto(`${BASE_URL}/settings`, { waitUntil: "networkidle" });
+    const section = page.locator("section").filter({ has: page.getByRole("heading", { name: /account groups/i }) });
+    await expect(section.getByText("Project Alpha", { exact: true })).toBeVisible();
+    await section.screenshot({ path: testInfo.outputPath("account-groups.png") });
+    await page.getByRole("button", { name: "Edit Project Alpha account group" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("textbox").first()).toHaveValue("Project Alpha");
+    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+    await dialog.screenshot({ path: testInfo.outputPath("account-group-dialog.png") });
+  });
+}
 
 test("dashboard — light", async ({ page }) => {
   await capture(page, { file: "dashboard.jpg", theme: "light", route: "/dashboard" });

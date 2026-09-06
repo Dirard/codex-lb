@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { GroupSelect } from "@/features/account-groups/components/group-select";
 import { AccountMultiSelect } from "@/features/api-keys/components/account-multi-select";
 import { ExpiryPicker } from "@/features/api-keys/components/expiry-picker";
 import { LimitRulesEditor } from "@/features/api-keys/components/limit-rules-editor";
@@ -64,6 +65,7 @@ type ApiKeyCreateFormProps = {
 };
 
 type ApiKeyCreateDraft = {
+  groupId: string | null;
   selectedModels: string[];
   selectedAccountIds: string[];
   selectedSourceIds: string[];
@@ -80,6 +82,7 @@ type ApiKeyCreateDraft = {
 };
 
 const initialApiKeyCreateDraft: ApiKeyCreateDraft = {
+  groupId: null,
   selectedModels: [],
   selectedAccountIds: [],
   selectedSourceIds: [],
@@ -115,12 +118,16 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
   const [draft, updateDraft] = useReducer(apiKeyCreateDraftReducer, initialApiKeyCreateDraft);
 
   const handleSubmit = async (values: FormValues) => {
+    const grouped = draft.groupId !== null;
     const validLimits = draft.limitRules.filter((rule) => rule.maxValue > 0);
     const payload: ApiKeyCreateRequest = {
       name: values.name,
       allowedModels: draft.selectedModels.length > 0 ? draft.selectedModels : undefined,
       applyToCodexModel: draft.applyToCodexModel,
-      ...(draft.selectedAccountIds.length > 0 ? { assignedAccountIds: draft.selectedAccountIds } : {}),
+      ...(grouped ? { groupId: draft.groupId } : {}),
+      ...(!grouped && draft.selectedAccountIds.length > 0
+        ? { assignedAccountIds: draft.selectedAccountIds }
+        : {}),
       ...(draft.selectedSourceIds.length > 0 ? { assignedSourceIds: draft.selectedSourceIds } : {}),
       usageSections: draft.usageSections,
       enforcedModel: draft.enforcedModel.trim() ? draft.enforcedModel.trim() : null,
@@ -135,7 +142,7 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
       trafficClass: draft.trafficClass,
       transportPolicyOverride: draft.transportPolicyOverride,
       expiresAt: draft.expiresAt?.toISOString(),
-      limits: validLimits.length > 0 ? validLimits : undefined,
+      ...(!grouped && validLimits.length > 0 ? { limits: validLimits } : {}),
     };
 
     try {
@@ -189,8 +196,23 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
             </div>
 
             <div className="space-y-1">
+              <label htmlFor="create-api-key-group" className="text-sm font-medium">{t("apiKeys.form.group")}</label>
+              <GroupSelect
+                value={draft.groupId}
+                onChange={(groupId) => updateDraft({ groupId })}
+                id="create-api-key-group"
+              />
+            </div>
+
+            <div className="space-y-1">
               <p className="text-sm font-medium">{t("apiKeys.form.assignedAccounts")}</p>
-              <AccountMultiSelect value={draft.selectedAccountIds} onChange={(selectedAccountIds) => updateDraft({ selectedAccountIds })} />
+              {draft.groupId ? (
+                <p className="rounded-md border p-2 text-xs text-muted-foreground">
+                  {t("apiKeys.form.managedByGroup")}
+                </p>
+              ) : (
+                <AccountMultiSelect value={draft.selectedAccountIds} onChange={(selectedAccountIds) => updateDraft({ selectedAccountIds })} />
+              )}
             </div>
 
             <div className="space-y-1">
@@ -315,7 +337,13 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
 
             <div className="space-y-3 pl-1 pr-2 max-sm:mt-3 max-sm:border-t max-sm:pt-3">
             <h4 className="sticky top-0 bg-background pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("apiKeys.form.limits")}</h4>
-            <LimitRulesEditor rules={draft.limitRules} onChange={(limitRules) => updateDraft({ limitRules })} />
+            {draft.groupId ? (
+              <p className="rounded-md border p-2 text-xs text-muted-foreground">
+                {t("apiKeys.form.managedByGroup")}
+              </p>
+            ) : (
+              <LimitRulesEditor rules={draft.limitRules} onChange={(limitRules) => updateDraft({ limitRules })} />
+            )}
           </div>
         </div>
         </div>

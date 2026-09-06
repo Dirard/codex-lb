@@ -5,7 +5,11 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LimitRuleCreate } from "@/features/api-keys/schemas";
-import { createAccountSummary, createApiKey } from "@/test/mocks/factories";
+import {
+  createAccountGroup,
+  createAccountSummary,
+  createApiKey,
+} from "@/test/mocks/factories";
 import { server } from "@/test/mocks/server";
 import { renderWithProviders } from "@/test/utils";
 
@@ -75,6 +79,186 @@ describe("ApiKeyEditDialog", () => {
     expect(payload.applyToCodexModel).toBe(false);
     expect("assignedAccountIds" in payload).toBe(false);
     expect("limits" in payload).toBe(false);
+    expect("groupId" in payload).toBe(false);
+  });
+
+  function mockGroupedKeyFixtures() {
+    server.use(
+      http.get("/api/accounts", () =>
+        HttpResponse.json({ accounts: [createAccountSummary()] }),
+      ),
+      http.get("/api/account-groups/", () =>
+        HttpResponse.json([
+          createAccountGroup({
+            id: "group_1",
+            name: "Team pool",
+            accountIds: ["acc_primary"],
+          }),
+          createAccountGroup({ id: "group_2", name: "Pool B" }),
+        ]),
+      ),
+    );
+  }
+
+  it("shows inherited group settings and omits group-managed fields on unrelated edits", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const apiKey = createApiKey({
+      groupId: "group_1",
+      assignedAccountIds: ["acc_primary"],
+      accountAssignmentScopeEnabled: true,
+    });
+    mockGroupedKeyFixtures();
+
+    renderWithProviders(
+      <ApiKeyEditDialog
+        open
+        busy={false}
+        apiKey={apiKey}
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Group" })).toHaveTextContent("Team pool");
+    });
+    expect(screen.queryByRole("button", { name: "All accounts" })).not.toBeInTheDocument();
+    expect(await screen.findByText("primary@example.com")).toBeInTheDocument();
+    expect(screen.getAllByText("Accounts and limits are managed by the selected group.")).toHaveLength(2);
+    expect(screen.getByText(/Tokens \(weekly, all\)/)).toBeInTheDocument();
+
+    const nameInput = screen.getByLabelText("Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Renamed grouped key");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    const payload = onSubmit.mock.calls[0][0];
+    expect("groupId" in payload).toBe(false);
+    expect("assignedAccountIds" in payload).toBe(false);
+    expect("limits" in payload).toBe(false);
+  });
+
+  it("switches a key to another group", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const apiKey = createApiKey({
+      groupId: "group_1",
+      assignedAccountIds: ["acc_primary"],
+      accountAssignmentScopeEnabled: true,
+    });
+    mockGroupedKeyFixtures();
+
+    renderWithProviders(
+      <ApiKeyEditDialog
+        open
+        busy={false}
+        apiKey={apiKey}
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(await screen.findByRole("combobox", { name: "Group" }));
+    await user.click(screen.getByRole("option", { name: "Pool B" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    const payload = onSubmit.mock.calls[0][0];
+    expect(payload.groupId).toBe("group_2");
+    expect("assignedAccountIds" in payload).toBe(false);
+    expect("limits" in payload).toBe(false);
+  });
+
+  it("detaches a group and keeps its last effective settings as the individual draft", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const apiKey = createApiKey({
+      groupId: "group_1",
+      assignedAccountIds: ["acc_primary"],
+      accountAssignmentScopeEnabled: true,
+    });
+    mockGroupedKeyFixtures();
+
+    renderWithProviders(
+      <ApiKeyEditDialog
+        open
+        busy={false}
+        apiKey={apiKey}
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(await screen.findByRole("combobox", { name: "Group" }));
+    await user.click(screen.getByRole("option", { name: "No group" }));
+
+    expect(screen.getByRole("button", { name: "1 account selected" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    const payload = onSubmit.mock.calls[0][0];
+    expect(payload.groupId).toBeNull();
+    expect("assignedAccountIds" in payload).toBe(false);
+    expect("limits" in payload).toBe(false);
+  });
+
+  it("does not show No group for a selected group while loading or on load error", async () => {
+    const apiKey = createApiKey({
+      groupId: "group_1",
+      assignedAccountIds: ["acc_primary"],
+      accountAssignmentScopeEnabled: true,
+    });
+
+    server.use(
+      http.get("/api/account-groups/", () => new Promise<Response>(() => {})),
+    );
+    const { unmount } = renderWithProviders(
+      <ApiKeyEditDialog
+        open
+        busy={false}
+        apiKey={apiKey}
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const pendingTrigger = screen.getByRole("combobox", { name: "Group" });
+    expect(pendingTrigger).toBeDisabled();
+    expect(pendingTrigger).toHaveTextContent("Loading");
+    expect(pendingTrigger).not.toHaveTextContent("No group");
+    unmount();
+
+    server.use(
+      http.get("/api/account-groups/", () =>
+        HttpResponse.json(
+          { error: { code: "server_error", message: "Group backend down" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderWithProviders(
+      <ApiKeyEditDialog
+        open
+        busy={false}
+        apiKey={apiKey}
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const errorTrigger = await screen.findByRole("combobox", { name: "Group" });
+    await waitFor(() => {
+      expect(errorTrigger).toHaveTextContent("Group backend down");
+    });
+    expect(errorTrigger).toBeDisabled();
+    expect(errorTrigger).not.toHaveTextContent("No group");
   });
 
   it("omits limits from payload when only isActive changes", async () => {

@@ -13,6 +13,7 @@ from sqlalchemy.orm import load_only, raiseload, selectinload
 from app.core.utils.time import utcnow
 from app.db.models import (
     Account,
+    AccountGroup,
     AccountStatus,
     ApiKey,
     ApiKeyAccountAssignment,
@@ -153,6 +154,7 @@ class ApiKeysRepository:
                 selectinload(ApiKey.limits),
                 selectinload(ApiKey.account_assignments),
                 selectinload(ApiKey.source_assignments),
+                selectinload(ApiKey.group).selectinload(AccountGroup.account_assignments),
             )
         )
 
@@ -168,12 +170,33 @@ class ApiKeysRepository:
         result = await self._session.execute(self._select_api_key().where(ApiKey.id == key_id))
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(self, key_id: str) -> ApiKey | None:
+        stmt = self._select_api_key().where(ApiKey.id == key_id)
+        if self._session.get_bind().dialect.name == "postgresql":
+            stmt = stmt.with_for_update(key_share=True)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_group_by_id(self, group_id: str, *, for_key_reference: bool = False) -> AccountGroup | None:
+        stmt = (
+            select(AccountGroup)
+            .options(
+                selectinload(AccountGroup.account_assignments),
+                selectinload(AccountGroup.limits),
+            )
+            .where(AccountGroup.id == group_id)
+        )
+        if for_key_reference and self._session.get_bind().dialect.name == "postgresql":
+            stmt = stmt.with_for_update(read=True)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_for_limit_enforcement(self, key_id: str) -> ApiKey | None:
         """Admission-path load for ``enforce_limits_for_request``.
 
         The enforcement transaction reads only ``is_active``/``expires_at``
         plus the ``limits`` collection, so this skips the
-        ``account_assignments``/``source_assignments`` selectin round trips
+        ``group``/``account_assignments``/``source_assignments`` selectin round trips
         that ``get_by_id`` pays on every proxied request. ``raiseload`` keeps
         the narrowing fail-loud: any future enforcement code that touches an
         unlisted column or relationship raises instead of silently lazy
@@ -201,6 +224,7 @@ class ApiKeysRepository:
             .options(
                 load_only(ApiKey.is_active, ApiKey.expires_at, raiseload=True),
                 selectinload(ApiKey.limits),
+                raiseload(ApiKey.group),
                 raiseload(ApiKey.account_assignments),
                 raiseload(ApiKey.source_assignments),
             )
@@ -347,6 +371,7 @@ class ApiKeysRepository:
         self,
         key_id: str,
         *,
+        group_id: str | None | _Unset = _UNSET,
         name: str | _Unset = _UNSET,
         allowed_models: str | None | _Unset = _UNSET,
         apply_to_codex_model: bool | _Unset = _UNSET,
@@ -368,6 +393,9 @@ class ApiKeysRepository:
         row = await self.get_by_id(key_id)
         if row is None:
             return None
+        if group_id is not _UNSET:
+            assert group_id is None or isinstance(group_id, str)
+            row.group_id = group_id
         if name is not _UNSET:
             assert isinstance(name, str)
             row.name = name

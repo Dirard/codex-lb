@@ -9,6 +9,7 @@ import threading
 import time
 import tomllib
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -608,6 +609,54 @@ def _capability_test_api_key(key_id: str) -> ApiKeyData:
         created_at=datetime(2026, 7, 29, tzinfo=timezone.utc),
         last_used_at=None,
     )
+
+
+@pytest.mark.parametrize("path", ["/backend-api/codex/responses", "/v1/responses"])
+def test_websocket_group_membership_refresh_blocks_removed_live_owner(app_instance, monkeypatch, path):
+    first_policy = replace(
+        _capability_test_api_key("group-key"),
+        group_id="group",
+        account_assignment_scope_enabled=True,
+        assigned_account_ids=["group-account"],
+    )
+    updated_policy = replace(first_policy, assigned_account_ids=["other-group-account"])
+    upstream = _SequencedUpstreamWebSocket(
+        [],
+        deferred_message_batches=[
+            _websocket_response_batch("resp_group_first"),
+            _websocket_response_batch("resp_group_must_not_dispatch"),
+        ],
+    )
+
+    async def authorize(_authorization, *, request=None):
+        return first_policy
+
+    async def connect(self, headers, **kwargs):
+        return SimpleNamespace(id="group-account"), upstream
+
+    refresh = AsyncMock(side_effect=[first_policy, updated_policy])
+    monkeypatch.setattr(proxy_api_module, "validate_proxy_api_key_authorization", authorize)
+    monkeypatch.setattr(proxy_api_module, "_websocket_firewall_denial_response", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        proxy_module, "get_settings_cache", lambda: SimpleNamespace(get=AsyncMock(return_value=_websocket_settings()))
+    )
+    monkeypatch.setattr(proxy_module.ProxyService, "_refresh_websocket_api_key_policy", refresh)
+    monkeypatch.setattr(proxy_module.ProxyService, "_reserve_websocket_api_key_usage", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_module.ProxyService, "_connect_proxy_websocket", connect)
+
+    with TestClient(app_instance) as client:
+        with client.websocket_connect(path) as websocket:
+            for expected_type in ("response.completed", "response.failed"):
+                websocket.send_json({"type": "response.create", "model": "gpt-5.6-sol", "input": "hello"})
+                for _ in range(5):
+                    event = websocket.receive_json()
+                    if event["type"] in {"response.completed", "response.failed", "error"}:
+                        break
+                assert event["type"] == expected_type
+            assert event["response"]["error"]["code"] == "account_group_scope_mismatch"
+
+    assert refresh.await_count == 2
+    assert len(upstream.sent_text) == 1
 
 
 def test_responses_websocket_route_rejects_disallowed_reasoning_before_upstream(app_instance, monkeypatch):

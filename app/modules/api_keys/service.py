@@ -22,7 +22,17 @@ from app.core.usage.pricing import (
 )
 from app.core.usage.types import UsageWindowRow
 from app.core.utils.time import to_utc_naive, utcnow
-from app.db.models import Account, AccountStatus, ApiKey, ApiKeyLimit, LimitType, LimitWindow, ModelSource, UsageHistory
+from app.db.models import (
+    Account,
+    AccountGroup,
+    AccountStatus,
+    ApiKey,
+    ApiKeyLimit,
+    LimitType,
+    LimitWindow,
+    ModelSource,
+    UsageHistory,
+)
 from app.db.session import sqlite_writer_section
 from app.modules.api_keys.last_used_coalescer import ApiKeyLastUsedCoalescer, get_api_key_last_used_coalescer
 from app.modules.api_keys.limit_windows import advance_limit_reset, limit_window_delta, next_limit_reset
@@ -59,6 +69,10 @@ class ApiKeysRepositoryProtocol(Protocol):
 
     async def get_by_id(self, key_id: str) -> ApiKey | None: ...
 
+    async def get_by_id_for_update(self, key_id: str) -> ApiKey | None: ...
+
+    async def get_group_by_id(self, group_id: str, *, for_key_reference: bool = False) -> AccountGroup | None: ...
+
     async def get_for_limit_enforcement(self, key_id: str) -> ApiKey | None: ...
 
     async def get_by_hash(self, key_hash: str) -> ApiKey | None: ...
@@ -83,6 +97,7 @@ class ApiKeysRepositoryProtocol(Protocol):
         self,
         key_id: str,
         *,
+        group_id: str | None | _Unset = ...,
         name: str | _Unset = ...,
         allowed_models: str | None | _Unset = ...,
         apply_to_codex_model: bool | _Unset = ...,
@@ -288,6 +303,9 @@ class ApiKeyCreateData:
     assigned_account_ids: list[str] | None = None
     assigned_source_ids: list[str] | None = None
     limits: list[LimitRuleInput] = field(default_factory=list)
+    group_id: str | None = None
+    assigned_account_ids_set: bool = False
+    limits_set: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +341,8 @@ class ApiKeyUpdateData:
     limits: list[LimitRuleInput] | None = None
     limits_set: bool = False
     reset_usage: bool = False
+    group_id: str | None = None
+    group_id_set: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +370,7 @@ class ApiKeyData:
     assigned_account_ids: list[str] = field(default_factory=list)
     assigned_source_ids: list[str] = field(default_factory=list)
     pooled_credits: "PooledCreditData | None" = None
+    group_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,12 +492,36 @@ class ApiKeysService:
         self._last_used_coalescer = last_used_coalescer or get_api_key_last_used_coalescer()
 
     async def create_key(self, payload: ApiKeyCreateData) -> ApiKeyCreatedData:
-        _validate_unique_limit_rule_identities(payload.limits)
+        try:
+            async with sqlite_writer_section():
+                return await self._create_key_once(payload)
+        except Exception:
+            await self._repository.rollback()
+            raise
+
+    async def _create_key_once(self, payload: ApiKeyCreateData) -> ApiKeyCreatedData:
+        group_id = _normalize_group_id(payload.group_id)
+        if group_id is not None and (
+            payload.assigned_account_ids_set
+            or payload.assigned_account_ids is not None
+            or payload.limits_set
+            or bool(payload.limits)
+        ):
+            raise ApiKeyValidationError("assigned_account_ids and limits are managed by the API key group")
+        group = None
+        if group_id is not None:
+            group = await self._repository.get_group_by_id(group_id, for_key_reference=True)
+            if group is None:
+                raise ApiKeyValidationError(f"Unknown account group id: {group_id}")
+        effective_limits = _group_limit_inputs(group) if group is not None else payload.limits
+        _validate_unique_limit_rule_identities(effective_limits)
         now = utcnow()
         expires_at = _normalize_expires_at(payload.expires_at)
         plain_key = _generate_plain_key()
         normalized_allowed_models = _normalize_allowed_models(payload.allowed_models)
-        assigned_account_ids = await self._resolve_assigned_account_ids(payload.assigned_account_ids)
+        assigned_account_ids = (
+            [] if group is not None else await self._resolve_assigned_account_ids(payload.assigned_account_ids)
+        )
         assigned_source_ids = await self._resolve_assigned_source_ids(payload.assigned_source_ids)
         enforced_model = _normalize_model_slug(payload.enforced_model)
         enforced_reasoning_effort = _normalize_reasoning_effort(payload.enforced_reasoning_effort)
@@ -495,13 +540,14 @@ class ApiKeysService:
             name=_normalize_name(payload.name),
             key_hash=_hash_key(plain_key),
             key_prefix=plain_key[:15],
+            group_id=group_id,
             allowed_models=_serialize_allowed_models(normalized_allowed_models),
             apply_to_codex_model=bool(payload.apply_to_codex_model),
             enforced_model=enforced_model,
             enforced_reasoning_effort=enforced_reasoning_effort,
             allowed_reasoning_efforts=_serialize_allowed_reasoning_efforts(allowed_reasoning_efforts),
             enforced_service_tier=enforced_service_tier,
-            account_assignment_scope_enabled=bool(assigned_account_ids),
+            account_assignment_scope_enabled=group is not None or bool(assigned_account_ids),
             source_assignment_scope_enabled=bool(assigned_source_ids),
             traffic_class=traffic_class,
             transport_policy_override=transport_policy_override,
@@ -519,13 +565,12 @@ class ApiKeysService:
             if assigned_source_ids:
                 await self._repository.replace_source_assignments(created.id, assigned_source_ids, commit=False)
 
-            if payload.limits:
-                limit_rows = [_limit_input_to_row(li, created.id, now) for li in payload.limits]
+            if effective_limits:
+                limit_rows = [_limit_input_to_row(li, created.id, now) for li in effective_limits]
                 await self._repository.upsert_limits(created.id, limit_rows, commit=False)
 
             await self._repository.commit()
         except Exception as exc:
-            await self._repository.rollback()
             if isinstance(exc, IntegrityError) and _is_reasoning_policy_constraint_error(exc):
                 raise ApiKeyValidationError(
                     "enforced_reasoning_effort and allowed_reasoning_efforts cannot be configured together"
@@ -544,11 +589,9 @@ class ApiKeysService:
 
         pooled_by_key: dict[str, PooledCreditData] = {}
         if self._usage_repository is not None:
-            assigned_ids_by_key = {
-                row.id: [a.account_id for a in getattr(row, "account_assignments", [])] for row in rows
-            }
+            assigned_ids_by_key = {row.id: _effective_assigned_account_ids(row) for row in rows}
             needs_all_accounts = any(
-                not assigned_ids_by_key[row.id] and not row.account_assignment_scope_enabled for row in rows
+                not assigned_ids_by_key[row.id] and not _effective_account_scope_enabled(row) for row in rows
             )
             if needs_all_accounts:
                 all_accounts = await self._repository.list_all_accounts()
@@ -575,7 +618,7 @@ class ApiKeysService:
                     all_accounts=all_accounts,
                     primary_usage=primary_usage,
                     secondary_usage=secondary_usage,
-                    account_assignment_scope_enabled=row.account_assignment_scope_enabled,
+                    account_assignment_scope_enabled=_effective_account_scope_enabled(row),
                 )
 
         return [
@@ -591,13 +634,41 @@ class ApiKeysService:
         self,
         key_id: str,
         payload: ApiKeyUpdateData,
-        *,
-        _retry_attempt: int = 0,
     ) -> ApiKeyData:
+        for attempt in range(_SQLITE_BUSY_RETRY_ATTEMPTS):
+            try:
+                async with sqlite_writer_section():
+                    return await self._update_key_once(key_id, payload)
+            except OperationalError as exc:
+                await self._repository.rollback()
+                if not _is_sqlite_database_locked(exc) or attempt == _SQLITE_BUSY_RETRY_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(_SQLITE_BUSY_RETRY_BASE_SECONDS * (2**attempt))
+            except Exception:
+                await self._repository.rollback()
+                raise
+        raise RuntimeError("unreachable")
+
+    async def _update_key_once(self, key_id: str, payload: ApiKeyUpdateData) -> ApiKeyData:
+        requested_group_id = _normalize_group_id(payload.group_id) if payload.group_id_set else None
+        target_group = None
+        if requested_group_id is not None:
+            target_group = await self._repository.get_group_by_id(requested_group_id, for_key_reference=True)
+            if target_group is None:
+                raise ApiKeyValidationError(f"Unknown account group id: {requested_group_id}")
+
         expires_at = _normalize_expires_at(payload.expires_at) if payload.expires_at_set else None
-        existing = await self._repository.get_by_id(key_id)
+        existing = await self._repository.get_by_id_for_update(key_id)
         if existing is None:
             raise ApiKeyNotFoundError(f"API key not found: {key_id}")
+
+        effective_group_id = requested_group_id if payload.group_id_set else existing.group_id
+        if effective_group_id is not None and (payload.assigned_account_ids_set or payload.limits_set):
+            raise ApiKeyValidationError("assigned_account_ids and limits are managed by the API key group")
+        if effective_group_id is not None and target_group is None:
+            target_group = existing.group
+            if target_group is None:
+                raise ApiKeyValidationError(f"Unknown account group id: {effective_group_id}")
 
         if payload.allowed_models_set:
             allowed_models = _normalize_allowed_models(payload.allowed_models)
@@ -606,6 +677,9 @@ class ApiKeysService:
         if payload.assigned_account_ids_set:
             assigned_account_ids = await self._resolve_assigned_account_ids(payload.assigned_account_ids)
             account_assignment_scope_enabled: bool | _Unset = bool(assigned_account_ids)
+        elif existing.group_id is not None and effective_group_id is None:
+            assigned_account_ids = _effective_assigned_account_ids(existing)
+            account_assignment_scope_enabled = True
         else:
             assigned_account_ids = None
             account_assignment_scope_enabled = _UNSET
@@ -683,6 +757,9 @@ class ApiKeysService:
                 allowed_reasoning_efforts=effective_allowed_reasoning_efforts,
             )
 
+        group_limit_inputs = (
+            _group_limit_inputs(target_group) if payload.group_id_set and target_group is not None else None
+        )
         limit_rows: list[ApiKeyLimit] | None = None
         if payload.limits_set:
             now = utcnow()
@@ -696,7 +773,7 @@ class ApiKeysService:
                 reset_usage=payload.reset_usage,
                 repository=self._repository,
             )
-        elif payload.reset_usage:
+        elif payload.reset_usage and group_limit_inputs is None:
             now = utcnow()
             existing_limits = await self._repository.get_limits_by_key(key_id)
             limit_rows = _build_reset_limit_rows(key_id=key_id, now=now, existing_limits=existing_limits)
@@ -704,6 +781,7 @@ class ApiKeysService:
         try:
             row = await self._repository.update(
                 key_id,
+                group_id=(effective_group_id if payload.group_id_set else _UNSET),
                 name=_normalize_name(payload.name or "") if payload.name_set else _UNSET,
                 allowed_models=_serialize_allowed_models(allowed_models) if payload.allowed_models_set else _UNSET,
                 apply_to_codex_model=apply_to_codex_model,
@@ -729,8 +807,7 @@ class ApiKeysService:
             if row is None:
                 raise ApiKeyNotFoundError(f"API key not found: {key_id}")
 
-            if payload.assigned_account_ids_set:
-                assert assigned_account_ids is not None
+            if assigned_account_ids is not None:
                 await self._repository.replace_account_assignments(key_id, assigned_account_ids, commit=False)
             if payload.assigned_source_ids_set:
                 assert assigned_source_ids is not None
@@ -743,14 +820,16 @@ class ApiKeysService:
                     commit=False,
                     preserve_matched_usage=not payload.reset_usage,
                 )
+            elif group_limit_inputs is not None:
+                now = utcnow()
+                await self.sync_group_limits([key_id], group_limit_inputs, now=now)
+                if payload.reset_usage:
+                    synced_limits = await self._repository.get_limits_by_key(key_id)
+                    reset_rows = _build_reset_limit_rows(key_id=key_id, now=now, existing_limits=synced_limits)
+                    await self._repository.upsert_limits(key_id, reset_rows, commit=False)
 
             await self._repository.commit()
         except Exception as exc:
-            await self._repository.rollback()
-            if isinstance(exc, OperationalError) and _is_sqlite_database_locked(exc):
-                if _retry_attempt < _SQLITE_BUSY_RETRY_ATTEMPTS - 1:
-                    await asyncio.sleep(_SQLITE_BUSY_RETRY_BASE_SECONDS * (2**_retry_attempt))
-                    return await self.update_key(key_id, payload, _retry_attempt=_retry_attempt + 1)
             if isinstance(exc, IntegrityError) and _is_reasoning_policy_constraint_error(exc):
                 raise ApiKeyValidationError(
                     "enforced_reasoning_effort and allowed_reasoning_efforts cannot be configured together"
@@ -758,7 +837,8 @@ class ApiKeysService:
             raise
 
         if (
-            payload.assigned_account_ids_set
+            payload.group_id_set
+            or payload.assigned_account_ids_set
             or payload.assigned_source_ids_set
             or limit_rows is not None
             or payload.name_set
@@ -807,6 +887,32 @@ class ApiKeysService:
             missing = ", ".join(missing_source_ids)
             raise ApiKeyValidationError(f"Unknown model source ids: {missing}")
         return normalized_source_ids
+
+    async def sync_group_limits(
+        self,
+        key_ids: list[str],
+        limits: list[LimitRuleInput],
+        *,
+        now: datetime,
+    ) -> None:
+        """Materialize group templates into each key's existing limit ledger."""
+        _validate_unique_limit_rule_identities(limits)
+        for key_id in sorted(set(key_ids)):
+            existing_limits = await self._repository.get_limits_by_key(key_id)
+            rows = await _build_limit_rows_for_update(
+                key_id=key_id,
+                now=now,
+                submitted_limits=limits,
+                existing_limits=existing_limits,
+                reset_usage=False,
+                repository=self._repository,
+            )
+            await self._repository.upsert_limits(
+                key_id,
+                rows,
+                commit=False,
+                preserve_matched_usage=True,
+            )
 
     async def delete_key(self, key_id: str) -> None:
         row = await self._repository.get_by_id(key_id)
@@ -1365,6 +1471,15 @@ def _normalize_name(name: str) -> str:
     return normalized
 
 
+def _normalize_group_id(group_id: str | None) -> str | None:
+    if group_id is None:
+        return None
+    normalized = group_id.strip()
+    if not normalized:
+        raise ApiKeyValidationError("Account group id cannot be empty")
+    return normalized
+
+
 _VALID_USAGE_SECTIONS = {"upstream_limits", "account_pool_usage"}
 _DEFAULT_USAGE_SECTIONS = "upstream_limits,account_pool_usage"
 
@@ -1818,6 +1933,7 @@ def _to_created_data(data: ApiKeyData, key: str) -> ApiKeyCreatedData:
         source_assignment_scope_enabled=data.source_assignment_scope_enabled,
         assigned_account_ids=data.assigned_account_ids,
         assigned_source_ids=data.assigned_source_ids,
+        group_id=data.group_id,
         key=key,
     )
 
@@ -1829,7 +1945,6 @@ def _to_api_key_data(
     pooled_credits: PooledCreditData | None = None,
 ) -> ApiKeyData:
     limits = [_to_limit_rule_data(limit) for limit in row.limits] if row.limits else []
-    account_assignments = getattr(row, "account_assignments", [])
     source_assignments = getattr(row, "source_assignments", [])
     return ApiKeyData(
         id=row.id,
@@ -1854,12 +1969,37 @@ def _to_api_key_data(
         last_used_at=row.last_used_at,
         limits=limits,
         usage_summary=usage_summary,
-        account_assignment_scope_enabled=getattr(row, "account_assignment_scope_enabled", False),
+        account_assignment_scope_enabled=_effective_account_scope_enabled(row),
         source_assignment_scope_enabled=getattr(row, "source_assignment_scope_enabled", False),
-        assigned_account_ids=[assignment.account_id for assignment in account_assignments],
+        assigned_account_ids=_effective_assigned_account_ids(row),
         assigned_source_ids=[assignment.source_id for assignment in source_assignments],
         pooled_credits=pooled_credits,
+        group_id=row.group_id,
     )
+
+
+def _effective_account_scope_enabled(row: ApiKey) -> bool:
+    return row.group_id is not None or row.account_assignment_scope_enabled
+
+
+def _effective_assigned_account_ids(row: ApiKey) -> list[str]:
+    if row.group_id is None:
+        return [assignment.account_id for assignment in row.account_assignments]
+    if row.group is None:
+        raise RuntimeError(f"API key references missing account group: {row.group_id}")
+    return [assignment.account_id for assignment in row.group.account_assignments]
+
+
+def _group_limit_inputs(group: AccountGroup) -> list[LimitRuleInput]:
+    return [
+        LimitRuleInput(
+            limit_type=limit.limit_type.value,
+            limit_window=limit.limit_window.value,
+            max_value=limit.max_value,
+            model_filter=limit.model_filter,
+        )
+        for limit in group.limits
+    ]
 
 
 def _to_usage_summary_data(summary: ApiKeyUsageSummary | None) -> ApiKeyUsageSummaryData | None:

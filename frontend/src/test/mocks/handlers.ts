@@ -6,6 +6,7 @@ import {
   LIMIT_WINDOWS,
   TRAFFIC_CLASSES,
 } from "@/features/api-keys/schemas";
+import type { AccountGroup } from "@/features/account-groups/schemas";
 import {
   type AccountSummary,
   type ApiKey,
@@ -13,6 +14,7 @@ import {
   type ConversationEntry,
   createAccountSummary,
   createAccountTrends,
+  createAccountGroup,
   createApiKey,
   createApiKeyCreateResponse,
   createApiKeyTrends,
@@ -24,6 +26,7 @@ import {
   createDashboardProjections,
   createDashboardSettings,
   createDefaultAccounts,
+  createDefaultAccountGroups,
   createDefaultApiKeys,
   createDefaultConversations,
   createDefaultModelSources,
@@ -65,8 +68,22 @@ const ApiKeyCreatePayloadSchema = z.looseObject({
   name: z.string().optional(),
   trafficClass: z.enum(TRAFFIC_CLASSES).optional(),
   transportPolicyOverride: z.enum(["smart", "always_http", "always_websocket"]).nullable().optional(),
+  groupId: z.string().nullable().optional(),
   assignedAccountIds: z.array(z.string()).optional(),
   assignedSourceIds: z.array(z.string()).optional(),
+});
+
+const LimitRulePayloadSchema = z.object({
+  limitType: z.enum(LIMIT_TYPES),
+  limitWindow: z.enum(LIMIT_WINDOWS),
+  maxValue: z.number(),
+  modelFilter: z.string().nullable().optional(),
+});
+
+const AccountGroupPayloadSchema = z.looseObject({
+  name: z.string().optional(),
+  accountIds: z.array(z.string()).optional(),
+  limits: z.array(LimitRulePayloadSchema).optional(),
 });
 
 const FirewallIpCreatePayloadSchema = z.looseObject({
@@ -79,19 +96,11 @@ const ApiKeyUpdatePayloadSchema = z.looseObject({
   trafficClass: z.enum(TRAFFIC_CLASSES).optional(),
   transportPolicyOverride: z.enum(["smart", "always_http", "always_websocket"]).nullable().optional(),
   isActive: z.boolean().optional(),
+  groupId: z.string().nullable().optional(),
   assignedAccountIds: z.array(z.string()).optional(),
   assignedSourceIds: z.array(z.string()).optional(),
   resetUsage: z.boolean().optional(),
-  limits: z
-    .array(
-      z.object({
-        limitType: z.enum(LIMIT_TYPES),
-        limitWindow: z.enum(LIMIT_WINDOWS),
-        maxValue: z.number(),
-        modelFilter: z.string().nullable().optional(),
-      }),
-    )
-    .optional(),
+  limits: z.array(LimitRulePayloadSchema).optional(),
 });
 
 const AccountAliasPayloadSchema = z.object({
@@ -263,6 +272,7 @@ type MockState = {
   upstreamProxyAdmin: UpstreamProxyAdmin;
   quotaPlannerForecast: QuotaPlannerForecast;
   apiKeys: ApiKey[];
+  accountGroups: AccountGroup[];
   automations: Array<{
     id: string;
     name: string;
@@ -356,6 +366,7 @@ function createInitialState(): MockState {
     upstreamProxyAdmin: createUpstreamProxyAdmin(),
     quotaPlannerForecast: createQuotaPlannerForecast(),
     apiKeys: createDefaultApiKeys(),
+    accountGroups: createDefaultAccountGroups(),
     automations: [],
     automationRuns: {},
     modelSources: createDefaultModelSources(),
@@ -368,6 +379,43 @@ let state: MockState = createInitialState();
 
 export function resetMockState(): void {
   state = createInitialState();
+}
+
+function syncGroupKeyCounts(): void {
+  state.accountGroups = state.accountGroups.map((group) => ({
+    ...group,
+    keyCount: state.apiKeys.filter((key) => key.groupId === group.id).length,
+  }));
+}
+
+function groupMembershipConflict(candidateGroupId: string | null, accountIds: string[]): boolean {
+  return state.accountGroups.some(
+    (group) =>
+      group.id !== candidateGroupId && group.accountIds.some((id) => accountIds.includes(id)),
+  );
+}
+
+function materializeGroupLimits(
+  group: AccountGroup,
+  existing: ApiKey["limits"] = [],
+): ApiKey["limits"] {
+  return group.limits.map((rule, index) => {
+    const existingRule = existing.find(
+      (limit) =>
+        limit.limitType === rule.limitType &&
+        limit.limitWindow === rule.limitWindow &&
+        (limit.modelFilter ?? null) === (rule.modelFilter ?? null),
+    );
+    return {
+      id: existingRule?.id ?? index + 100,
+      limitType: rule.limitType,
+      limitWindow: rule.limitWindow,
+      maxValue: rule.maxValue,
+      currentValue: existingRule?.currentValue ?? 0,
+      modelFilter: rule.modelFilter ?? null,
+      resetAt: existingRule?.resetAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+  });
 }
 
 function parseDateValue(value: string | null): number | null {
@@ -2195,28 +2243,137 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
+  http.get("/api/account-groups/", () => {
+    syncGroupKeyCounts();
+    return HttpResponse.json(state.accountGroups);
+  }),
+
+  http.post("/api/account-groups/", async ({ request }) => {
+    const payload = await parseJsonBody(request, AccountGroupPayloadSchema);
+    if (!payload) {
+      return HttpResponse.json(
+        { error: { code: "invalid_request", message: "Invalid account group payload" } },
+        { status: 400 },
+      );
+    }
+    const accountIds = payload.accountIds ?? [];
+    if (groupMembershipConflict(null, accountIds)) {
+      return HttpResponse.json(
+        { error: { code: "conflict", message: "An account already belongs to another group" } },
+        { status: 409 },
+      );
+    }
+    const sequence = state.accountGroups.length + 1;
+    const group = createAccountGroup({
+      id: `group_${sequence}`,
+      name: payload.name ?? `Group ${sequence}`,
+      accountIds,
+      limits: payload.limits ?? [],
+      keyCount: 0,
+    });
+    state.accountGroups = [...state.accountGroups, group];
+    return HttpResponse.json(group);
+  }),
+
+  http.put("/api/account-groups/:groupId", async ({ params, request }) => {
+    const groupId = String(params.groupId);
+    const existing = state.accountGroups.find((group) => group.id === groupId);
+    if (!existing) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "Account group not found" } },
+        { status: 404 },
+      );
+    }
+    const payload = await parseJsonBody(request, AccountGroupPayloadSchema);
+    if (!payload) {
+      return HttpResponse.json(
+        { error: { code: "invalid_request", message: "Invalid account group payload" } },
+        { status: 400 },
+      );
+    }
+    const accountIds = payload.accountIds ?? [];
+    if (groupMembershipConflict(groupId, accountIds)) {
+      return HttpResponse.json(
+        { error: { code: "conflict", message: "An account already belongs to another group" } },
+        { status: 409 },
+      );
+    }
+    const updated = createAccountGroup({
+      ...existing,
+      name: payload.name ?? existing.name,
+      accountIds,
+      limits: payload.limits ?? [],
+    });
+    state.accountGroups = state.accountGroups.map((group) =>
+      group.id === groupId ? updated : group,
+    );
+    state.apiKeys = state.apiKeys.map((apiKey) =>
+      apiKey.groupId === groupId
+        ? createApiKey({
+            ...apiKey,
+            assignedAccountIds: accountIds,
+            accountAssignmentScopeEnabled: true,
+            limits: materializeGroupLimits(updated, apiKey.limits),
+          })
+        : apiKey,
+    );
+    syncGroupKeyCounts();
+    return HttpResponse.json(updated);
+  }),
+
+  http.delete("/api/account-groups/:groupId", ({ params }) => {
+    const groupId = String(params.groupId);
+    const existing = state.accountGroups.find((group) => group.id === groupId);
+    if (!existing) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "Account group not found" } },
+        { status: 404 },
+      );
+    }
+    if (state.apiKeys.some((apiKey) => apiKey.groupId === groupId)) {
+      return HttpResponse.json(
+        { error: { code: "conflict", message: "Account group has linked API keys" } },
+        { status: 409 },
+      );
+    }
+    state.accountGroups = state.accountGroups.filter((group) => group.id !== groupId);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   http.get("/api/api-keys/", () => {
     return HttpResponse.json(state.apiKeys);
   }),
 
   http.post("/api/api-keys/", async ({ request }) => {
     const payload = await parseJsonBody(request, ApiKeyCreatePayloadSchema);
+    const group = payload?.groupId
+      ? state.accountGroups.find((candidate) => candidate.id === payload.groupId)
+      : undefined;
+    if (payload?.groupId && !group) {
+      return HttpResponse.json(
+        { error: { code: "invalid_request", message: "Unknown account group" } },
+        { status: 400 },
+      );
+    }
     const sequence = state.apiKeys.length + 1;
     const created = createApiKeyCreateResponse({
       ...createApiKey({
         id: `key_${sequence}`,
         name: payload?.name ?? `API Key ${sequence}`,
+        groupId: group?.id ?? null,
         accountAssignmentScopeEnabled:
-          (payload?.assignedAccountIds?.length ?? 0) > 0,
+          group !== undefined || (payload?.assignedAccountIds?.length ?? 0) > 0,
         sourceAssignmentScopeEnabled:
           (payload?.assignedSourceIds?.length ?? 0) > 0,
-        assignedAccountIds: payload?.assignedAccountIds ?? [],
+        assignedAccountIds: group ? group.accountIds : payload?.assignedAccountIds ?? [],
         assignedSourceIds: payload?.assignedSourceIds ?? [],
         trafficClass: payload?.trafficClass ?? "foreground",
+        limits: group ? materializeGroupLimits(group) : [],
       }),
       key: `sk-test-generated-${sequence}`,
     });
     state.apiKeys = [...state.apiKeys, createApiKey(created)];
+    syncGroupKeyCounts();
     return HttpResponse.json(created);
   }),
 
@@ -2232,6 +2389,27 @@ export const handlers = [
     const payload = await parseJsonBody(request, ApiKeyUpdatePayloadSchema);
     if (!payload) {
       return HttpResponse.json(existing);
+    }
+
+    let groupOverride: Partial<ApiKey> = {};
+    if (payload.groupId !== undefined) {
+      if (payload.groupId === null) {
+        groupOverride = { groupId: null };
+      } else {
+        const group = state.accountGroups.find((candidate) => candidate.id === payload.groupId);
+        if (!group) {
+          return HttpResponse.json(
+            { error: { code: "invalid_request", message: "Unknown account group" } },
+            { status: 400 },
+          );
+        }
+        groupOverride = {
+          groupId: group.id,
+          accountAssignmentScopeEnabled: true,
+          assignedAccountIds: group.accountIds,
+          limits: materializeGroupLimits(group, existing.limits),
+        };
+      }
     }
 
     // Build override with converted limits (create format → response format)
@@ -2260,6 +2438,7 @@ export const handlers = [
             assignedSourceIds: payload.assignedSourceIds,
           }
         : {}),
+      ...groupOverride,
     };
 
     if (payload.limits) {
@@ -2282,6 +2461,7 @@ export const handlers = [
     state.apiKeys = state.apiKeys.map((item) =>
       item.id === keyId ? updated : item,
     );
+    syncGroupKeyCounts();
     return HttpResponse.json(updated);
   }),
 
