@@ -267,6 +267,45 @@ async def test_dashboard_overview_carries_weekly_runway_fields_and_attribution(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_overview_add_pro_accounts_includes_boundary_demand(
+    async_client,
+    db_setup,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fixed_now = datetime(2026, 8, 17, 12, 0, 0)
+    monkeypatch.setattr("app.modules.dashboard.service.utcnow", lambda: fixed_now)
+    reset_at = int(naive_utc_to_epoch(fixed_now + timedelta(hours=4)))
+
+    async with SessionLocal() as session:
+        await AccountsRepository(session).upsert(
+            _make_account("acc-boundary-demand", "boundary-demand@example.com", plan_type="pro")
+        )
+        usage_repo = UsageRepository(session)
+        for age, used_percent in (
+            (timedelta(days=8), 0.0),
+            (timedelta(days=6), 90.0),
+            (timedelta(days=3), 0.0),
+            (timedelta(minutes=1), 99.5),
+        ):
+            await usage_repo.add_entry(
+                "acc-boundary-demand",
+                used_percent,
+                window="secondary",
+                window_minutes=10_080,
+                reset_at=reset_at,
+                recorded_at=fixed_now - age,
+            )
+
+    response = await async_client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    pace = response.json()["weeklyCreditPace"]
+    assert pace is not None
+    assert pace["saturatedAccountCount"] == 1
+    assert pace["addProAccounts"] == 1
+
+
+@pytest.mark.asyncio
 async def test_dashboard_overview_omits_weekly_pace_value_without_weekly_data(
     async_client,
     db_setup,

@@ -255,7 +255,7 @@ The dashboard request logs view SHALL allow operators to filter rows by one or m
 
 ### Requirement: Dashboard weekly credits pace
 
-The dashboard SHALL show weekly quota pace when account weekly capacity credits, remaining credits, reset time, and window length are available. The pace calculation MUST use credit totals rather than averaging per-account percentages, because weekly ChatGPT quota credits are not the same unit as raw request tokens. The dashboard MUST prefer the backend-provided `weeklyCreditPace` object from `GET /api/dashboard/overview` when present, and MAY fall back to a local calculation only for older responses that do not include that field. The dashboard projections payload SHALL expose smoothed weekly pace gap fields for display while preserving instantaneous live usage fields.
+The dashboard SHALL show weekly quota pace when account weekly capacity credits, remaining credits, reset time, and window length are available. The pace calculation MUST use credit totals rather than averaging per-account percentages, because weekly ChatGPT quota credits are not the same unit as raw request tokens. The dashboard MUST prefer the backend-provided `weeklyCreditPace` object from `GET /api/dashboard/overview` when present, and MAY fall back to a local calculation only for older responses that do not include that field. The dashboard projections payload SHALL expose smoothed weekly pace gap fields for display while preserving instantaneous live usage fields. Trailing weekly demand SHALL include the positive change from the latest sample before the trailing window to the first sample inside that window.
 
 #### Scenario: Weekly credits pace uses account reset deadlines
 
@@ -299,6 +299,16 @@ The dashboard SHALL show weekly quota pace when account weekly capacity credits,
 
 - **WHEN** an account has high cumulative weekly usage from earlier in the window but no recent increase in weekly used percent
 - **THEN** the projected shortfall forecast is based on the recent slope and does not assume the earlier full-window average continues
+
+#### Scenario: Demand crossed the trailing-window boundary
+
+- **WHEN** an account's normalized weekly usage changed after the trailing window opened and its previous sample falls immediately before that boundary
+- **THEN** trailing weekly demand includes that boundary-crossing positive change
+
+#### Scenario: Quota reset does not count as demand
+
+- **WHEN** an account's normalized weekly used percent decreases across two samples
+- **THEN** trailing weekly demand does not add that negative change
 
 #### Scenario: Near-reset depletion is not a false alarm
 

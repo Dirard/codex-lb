@@ -76,3 +76,21 @@ If overview, projections, and request-log options return successfully while the 
 ### Testing notes
 
 The product-boundary regression renders the real `/dashboard` App route with the production query retry policy and MSW handlers. It counts each request family, seeds unique values for a statistic, quota surface, projection metric, and account control, focuses and keyboard-activates native Retry, holds the recovered listing response pending long enough to assert all healthy surfaces remain mounted, and then verifies the recovered row.
+
+## Weekly demand window baseline
+
+### Purpose and scope
+
+Trailing weekly demand estimates how many quota-weeks an operator needs. It is derived from positive weekly used-percent changes, so the first sample inside the seven-day boundary needs the latest sample before that boundary as its comparison point. Normative behavior lives in [`spec.md`](./spec.md).
+
+### Decision rationale
+
+Filtering to `recorded_at >= since` before computing the predecessor omits the boundary-crossing increase. The repository therefore fetches the in-window rows plus exactly one pre-window baseline row per account and normalized usage window, computes deltas in `(recorded_at, id)` order, and sums positive deltas only for current in-window rows. This preserves quota-reset decreases, the upper time bound, and legacy `NULL`-window primary normalization without scanning all history.
+
+### Failure mode and example
+
+If an account reports 0% eight days ago, 50% six days ago, and 75% five days ago, trailing seven-day demand is 75 percentage points. Ignoring the pre-window baseline would report only the final 25-point increase and could suppress the add-capacity recommendation.
+
+### Testing notes
+
+Repository coverage pins boundary inclusion, reset decreases, the upper bound, primary/secondary isolation, and `NULL`-window primary normalization. Dashboard overview coverage proves the corrected aggregate reaches the weekly-pace add-capacity result.

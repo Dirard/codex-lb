@@ -1444,6 +1444,55 @@ async def test_bulk_history_since_row_cap_exempts_uncapped_recent_floor_postgres
 
 
 @pytest.mark.asyncio
+async def test_positive_used_percent_deltas_include_one_pre_window_baseline(db_setup):
+    now = utcnow()
+    async with SessionLocal() as session:
+        accounts_repo = AccountsRepository(session)
+        repo = UsageRepository(session)
+        for account_id in ("acc-demand-boundary", "acc-demand-reset", "acc-demand-primary"):
+            await accounts_repo.upsert(_make_account(account_id))
+
+        rows = (
+            ("acc-demand-boundary", "secondary", 20.0, timedelta(days=9)),
+            ("acc-demand-boundary", "secondary", 0.0, timedelta(days=8)),
+            ("acc-demand-boundary", "secondary", 50.0, timedelta(days=6)),
+            ("acc-demand-boundary", "secondary", 75.0, timedelta(days=5)),
+            ("acc-demand-reset", "secondary", 80.0, timedelta(days=8)),
+            ("acc-demand-reset", "secondary", 20.0, timedelta(days=6)),
+            ("acc-demand-reset", "secondary", 40.0, timedelta(days=5)),
+            ("acc-demand-reset", "secondary", 60.0, timedelta(minutes=-1)),
+            ("acc-demand-primary", None, 5.0, timedelta(days=9)),
+            ("acc-demand-primary", None, 10.0, timedelta(days=8)),
+            ("acc-demand-primary", None, 35.0, timedelta(days=6)),
+            ("acc-demand-primary", "secondary", 80.0, timedelta(days=8)),
+            ("acc-demand-primary", "secondary", 40.0, timedelta(days=6)),
+        )
+        for account_id, window, used_percent, age in rows:
+            await repo.add_entry(
+                account_id,
+                used_percent,
+                window=window,
+                recorded_at=now - age,
+            )
+
+        deltas = await repo.positive_used_percent_deltas_by_account(
+            {
+                "acc-demand-boundary": "secondary",
+                "acc-demand-reset": "secondary",
+                "acc-demand-primary": "primary",
+            },
+            since=now - timedelta(days=7),
+            until=now,
+        )
+
+    assert deltas == {
+        "acc-demand-boundary": 75.0,
+        "acc-demand-reset": 20.0,
+        "acc-demand-primary": 25.0,
+    }
+
+
+@pytest.mark.asyncio
 async def test_bulk_history_since_capped_query_plan_is_index_only_postgresql(db_setup):
     """The capped lateral probes must stay heap-free on the covering indexes.
 

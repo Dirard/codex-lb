@@ -870,32 +870,88 @@ class UsageRepository:
         if not account_windows:
             return {}
         account_window_pairs = tuple(account_windows.items())
-        samples = (
-            select(
-                UsageHistory.account_id.label("account_id"),
-                UsageHistory.used_percent.label("used_percent"),
-                func.lag(UsageHistory.used_percent)
-                .over(
-                    partition_by=UsageHistory.account_id,
-                    order_by=(UsageHistory.recorded_at, UsageHistory.id),
-                )
-                .label("previous_used_percent"),
+        normalized_window = _normalized_window_expr().label("normalized_window")
+        requested_windows = (
+            values(
+                column("account_id", String),
+                column("window_name", String),
+                name="requested_usage_windows",
             )
+            .data(account_window_pairs)
+            .cte("requested_usage_windows")
+        )
+        baseline_recorded_at = (
+            select(func.max(UsageHistory.recorded_at))
             .where(
-                tuple_(UsageHistory.account_id, _normalized_window_expr()).in_(account_window_pairs),
-                UsageHistory.recorded_at >= since,
+                UsageHistory.account_id == requested_windows.c.account_id,
+                _normalized_window_expr() == requested_windows.c.window_name,
+                UsageHistory.recorded_at < since,
                 UsageHistory.recorded_at <= until,
             )
-            .subquery("weekly_demand_samples")
+            .correlate(requested_windows)
+            .scalar_subquery()
         )
-        delta = samples.c.used_percent - samples.c.previous_used_percent
+        baseline_id = (
+            select(UsageHistory.id)
+            .where(
+                UsageHistory.account_id == requested_windows.c.account_id,
+                _normalized_window_expr() == requested_windows.c.window_name,
+                UsageHistory.recorded_at == baseline_recorded_at,
+            )
+            .order_by(UsageHistory.id.desc())
+            .limit(1)
+            .correlate(requested_windows)
+            .scalar_subquery()
+        )
+        baseline_ids = select(
+            requested_windows.c.account_id.label("account_id"),
+            requested_windows.c.window_name.label("normalized_window"),
+            baseline_id.label("id"),
+        ).subquery("weekly_demand_baseline_ids")
+        in_window_rows = select(
+            UsageHistory.account_id.label("account_id"),
+            normalized_window,
+            UsageHistory.id.label("id"),
+            UsageHistory.recorded_at.label("recorded_at"),
+            UsageHistory.used_percent.label("used_percent"),
+        ).where(
+            UsageHistory.account_id == requested_windows.c.account_id,
+            _normalized_window_expr() == requested_windows.c.window_name,
+            UsageHistory.recorded_at >= since,
+            UsageHistory.recorded_at <= until,
+        )
+        baseline_rows = select(
+            UsageHistory.account_id.label("account_id"),
+            normalized_window,
+            UsageHistory.id.label("id"),
+            UsageHistory.recorded_at.label("recorded_at"),
+            UsageHistory.used_percent.label("used_percent"),
+        ).join(baseline_ids, UsageHistory.id == baseline_ids.c.id)
+        samples = union_all(in_window_rows, baseline_rows).subquery("weekly_demand_samples")
+        lagged_samples = select(
+            samples.c.account_id.label("account_id"),
+            samples.c.recorded_at.label("recorded_at"),
+            samples.c.used_percent.label("used_percent"),
+            func.lag(samples.c.used_percent)
+            .over(
+                partition_by=(samples.c.account_id, samples.c.normalized_window),
+                order_by=(samples.c.recorded_at, samples.c.id),
+            )
+            .label("previous_used_percent"),
+        ).subquery("weekly_demand_lagged_samples")
+        delta = lagged_samples.c.used_percent - lagged_samples.c.previous_used_percent
         statement = select(
-            samples.c.account_id,
+            lagged_samples.c.account_id,
             func.coalesce(
-                func.sum(case((delta > 0, delta), else_=0.0)),
+                func.sum(
+                    case(
+                        ((lagged_samples.c.recorded_at >= since) & (delta > 0), delta),
+                        else_=0.0,
+                    )
+                ),
                 0.0,
             ).label("positive_delta"),
-        ).group_by(samples.c.account_id)
+        ).group_by(lagged_samples.c.account_id)
         rows = (await self._session.execute(statement)).all()
         return {str(row.account_id): float(row.positive_delta) for row in rows}
 
