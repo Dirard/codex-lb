@@ -16,6 +16,20 @@ The rewrite SHALL preserve the existing Git repository, required licenses and at
 - **AND** required licenses, Git history, installed data and the running service are preserved
 - **AND** building and testing the Go implementation does not require the removed source directory
 
+### Requirement: Key group reports expose aggregate account subscription usage
+
+A grouped key's report SHALL include a separate aggregate percentage of used subscription quota across the group's non-deleted ChatGPT accounts when upstream-quota visibility is permitted by the global setting and the key's account-pool visibility setting. The group and its account membership MUST be derived in the same authorized read snapshot as the peer key summary. Each account SHALL contribute at most once per window regardless of membership in other groups. The percentage SHALL equal total estimated used subscription credits divided by total known subscription capacity for that window. Primary, weekly and monthly windows MUST NOT be combined. Missing, expired or unknown-capacity observations MUST NOT be treated as zero consumption; the report SHALL identify the number of contributing accounts and total subscription accounts so partial coverage is explicit. Unknown windows SHALL display unavailable rather than zero. Purchased credits MUST NOT be included in this subscription percentage or treated as exhausted when subscription usage reaches 100%. Only group-level totals, percentages and counts SHALL be exposed, never provider account identities, individual balances or credentials. Ungrouped callers and callers with hidden upstream quotas SHALL receive no such aggregate.
+
+
+#### Scenario: Accounts with different capacities
+- **WHEN** a group contains a Plus account at 100% weekly usage and a Pro account at 0%
+- **THEN** weekly usage is weighted by their existing subscription-credit capacities, not the arithmetic average of percentages
+- **AND** accounts outside the group cannot affect the result
+
+#### Scenario: Missing or hidden quota information
+- **WHEN** only some group accounts report a known current window or upstream visibility is disabled
+- **THEN** partial observations identify their coverage, absent observations are unavailable, and hidden aggregates remain absent
+
 ## ADDED Requirements
 
 ### Requirement: Key group reports include remaining purchased credit totals
