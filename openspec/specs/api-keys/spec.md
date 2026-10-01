@@ -1441,3 +1441,75 @@ API key creation and update SHALL accept an optional nullable `groupId`. A non-n
 #### Scenario: Reject group-managed override
 - **WHEN** an administrator submits direct account assignments or limit rules for a key that remains grouped
 - **THEN** the request is rejected without altering its group, consumption, or other settings
+
+### Requirement: GPT-6 Astra Codex cost estimates
+
+For subscription-backed Codex requests, the shared request-log, API-key reservation, settlement, and aggregate cost calculator MUST recognize `gpt-6-astra` and its versioned aliases. The USD-equivalent input, cached-input, and output rates per million tokens SHALL be `10 / 1 / 50` for standard requests, `25 / 2.5 / 125` for Codex `priority` or `fast`, and `5 / 0.5 / 25` for `flex`. The authoritative upstream service tier SHALL retain precedence over the requested tier. This Codex estimate MUST NOT apply a context-length surcharge, including above 272,000 input tokens, or a separate cache-write charge. It MUST NOT override external model-source tariffs or serve as a fallback for an unpriced external source. Other model prices MUST remain unchanged. Batch pricing SHALL NOT be inferred without corresponding request fields.
+
+#### Scenario: Astra standard usage above the API long-context boundary
+- **WHEN** a standard subscription-backed Codex `gpt-6-astra` request reports 300,000 input tokens, including 50,000 cached input tokens, and 100,000 output tokens
+- **THEN** the estimated cost is USD 7.55 without a long-context multiplier
+
+#### Scenario: Astra Fast usage preserves the Codex multiplier
+- **WHEN** the same usage is reported with the `priority` or `fast` service tier
+- **THEN** the estimated cost is USD 18.875
+
+#### Scenario: Astra Flex usage remains independent of context length
+- **WHEN** the same usage is reported with `flex`
+- **THEN** the estimated cost is USD 3.775
+
+#### Scenario: Versioned Astra aliases resolve without a generic GPT-6 fallback
+- **WHEN** the model is `gpt-6-astra-2026-09-01`
+- **THEN** it resolves to the canonical Astra rates
+- **AND** an unrelated unconfigured GPT-6 model does not inherit the Astra price
+
+#### Scenario: External Astra sources do not inherit subscription pricing
+- **WHEN** a request uses an external model source with the `gpt-6-astra` slug, including above 272,000 input tokens
+- **THEN** recorded cost and API-key settlement use that source's configured prices
+- **AND** an unpriced source retains the existing zero-cost behavior instead of inheriting the subscription estimate
+
+### Requirement: Historical Astra costs appear in retained reports
+
+An upgrade introducing Astra pricing SHALL price retained subscription Astra request logs with sufficient recorded usage and reconcile the corresponding persisted report totals. It MUST preserve other models, request metadata, tokens, explicit model-source costs, and already pruned historical contributions. Re-running the correction MUST NOT add costs twice. Requests with incomplete usage SHALL NOT receive invented token values. Correcting the history MUST NOT send upstream requests or retrospectively consume a client's active API-key limit budget. Historical reservation records and settled key counters SHALL retain their admission-time semantics; new requests SHALL use the Astra tariff.
+
+#### Scenario: Previously unpriced Astra request
+- **WHEN** a retained subscription Astra request has sufficient usage but no recorded cost
+- **THEN** its request detail and applicable report totals include the newly calculated Astra cost after upgrade
+
+#### Scenario: Folded history and a live tail
+- **WHEN** retained Astra requests exist both before and after the report fold watermark
+- **THEN** the stored folded contribution is corrected and the live-tail contribution is read from corrected logs
+- **AND** the combined report counts each correction once
+
+#### Scenario: Explicit source pricing and incomplete usage remain unchanged
+- **WHEN** Astra-named model-source requests have explicit provider pricing or a subscription request lacks sufficient usage
+- **THEN** the historical correction does not overwrite those prices or invent a cost for the incomplete request
+
+### Requirement: GPT-6 Sol and Luna Codex cost estimates
+
+The built-in subscription pricing calculator MUST recognize `gpt-6-sol` and `gpt-6-luna` case-insensitively, including their hyphen-suffixed aliases, without a generic GPT-6 fallback. Standard input/cached-input/output prices per million tokens SHALL be USD `2/0.2/10` for Sol and `0.1/0.01/0.5` for Luna. Above 272,000 input tokens, the full request SHALL use 2x input/cached-input and 1.5x output rates. Codex `fast` and `priority` SHALL use 2.5x the applicable Standard rates, including long-context rates; `flex` SHALL use half the applicable Standard rates. Cached tokens MUST be subtracted from ordinary billable input. Authoritative upstream tier precedence, explicit external-source costs, and other built-in models SHALL retain their existing behavior. No separate Codex cache-write charge SHALL be added. Existing persisted historical costs and settled enforcement counters MUST NOT be rewritten by this change.
+
+#### Scenario: Standard prices below the context boundary
+- **WHEN** a Sol or Luna request reports 200,000 input tokens including 50,000 cached tokens and 100,000 output tokens
+- **THEN** its cost is USD 1.31 for Sol or USD 0.0655 for Luna
+
+#### Scenario: Context boundary and tier composition
+- **WHEN** a Sol request reports 272,000 input tokens including 50,000 cached tokens and 100,000 output tokens
+- **THEN** the Standard cost is USD 1.454
+- **WHEN** its input rises to 300,000 tokens with the same cached and output usage
+- **THEN** the Standard, Fast/priority and Flex costs are USD 2.52, USD 6.30 and USD 1.26 respectively
+- **AND** Luna with the 300,000-token usage costs USD 0.126, USD 0.315 and USD 0.063 respectively
+
+#### Scenario: Snapshot aliases and unrelated names
+- **WHEN** the model is `GPT-6-SOL` or `gpt-6-luna-2026-09-22`
+- **THEN** it uses the corresponding canonical model price
+- **AND** `gpt-6`, `gpt-6-solar`, and `gpt-6-lunar` do not inherit these prices
+
+#### Scenario: Actual upstream tier controls persisted cost and settlement
+- **WHEN** a client requests priority but upstream reports default for a Sol or Luna completion
+- **THEN** the request log, key usage summary and settled cost limit reflect Standard rather than Fast pricing
+
+#### Scenario: External sources remain independent
+- **WHEN** Sol or Luna is routed through an external model source
+- **THEN** its configured source price remains authoritative
+- **AND** an unpriced source retains the existing zero-cost behavior instead of inheriting the subscription tariff

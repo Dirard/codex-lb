@@ -1,72 +1,44 @@
-# Project-specific
-refs/
-poc/
-
-# Python
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.hypothesis/
-.mypy_cache/
-.ruff_cache/
-
-# Env/config
+# Private runtime data and local configuration, at any depth.
 .env
 .env.*
-.envrc
 !.env.example
-.python-version
+.envrc
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.key
+.codex-lb/
+.local/
+certs/
+data/
 
-# Build artifacts
-build/
-dist/
-site/
-/target/
-crates/**/target/
-app/static/
-deploy/helm/*/charts/
-
-# Node
+# Go/frontend build output and preserved legacy development environments.
+/bin/
+/dist/
+/internal/adapters/webui/dist/
+/coverage/
+*.test
+coverage.out
+.venv/
+.venv*/
 node_modules/
-frontend/node_modules/
-frontend/dist/
-frontend/coverage/
+target/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
 
-# Editors/OS
-.DS_Store
+# Agent/editor local state is not part of the server distribution.
+.agents/logs/
+.agents/log/
+.agents/hooks/state/
+.agents/worktrees/
+.worktrees/
 .idea/
 .vscode/
+.DS_Store
 *.swp
 *.swo
-*~
-
-# Local
-.local/
-.worktrees/
-certs/
-
-.codex-lb/
-.sisyphus/
-
-.specstory/
-
-.agents/hooks/state/
-.agents/.personality_migration
-.agents/version.json
-.agents/log/
-.venv
-
-# Local Responses traffic captures and generated parity reports
-scripts/traffic_analysis/output/*.jsonl
-scripts/traffic_analysis/output/*.json
-scripts/traffic_analysis/output/*.md
-scripts/traffic_analysis/output/*.txt
-!scripts/traffic_analysis/output/.gitkeep
-
-.omx/
-PROMPT.md
-SUMMARY.md
-DECISIONS.md
-.superpowers/
-.agents/worktrees/

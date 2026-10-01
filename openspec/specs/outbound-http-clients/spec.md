@@ -3,7 +3,9 @@
 ## Purpose
 
 Define outbound HTTP client behavior so upstream OAuth and API calls use stable headers, personas, and proxy handling.
+
 ## Requirements
+
 ### Requirement: OAuth authorize requests use a configurable originator persona
 Browser OAuth authorize requests MUST include an `originator` query parameter. The service MUST default that parameter to `codex_chatgpt_desktop` and MUST let operators override it through configuration when they need a different first-party Codex persona.
 
@@ -674,3 +676,15 @@ fallback.
 - **WHEN** the helper handshake times out, is malformed, selects an unsupported version, or lacks a required capability
 - **THEN** the adapter terminates that process before dispatch
 - **AND** the attempted operation fails without Python replay
+
+### Requirement: Buffered native events allow ready consumers to run
+
+The native event dispatcher MUST yield between queued events so that a runnable
+stream consumer can drain its bounded queue during a buffered event burst.
+Stalled consumers MUST remain bounded and MUST NOT block unrelated streams.
+
+#### Scenario: A healthy consumer receives a buffered HTTP burst
+
+- **GIVEN** a native helper emits a response head and more than 64 body events together
+- **WHEN** the caller immediately consumes the response
+- **THEN** the complete body is delivered without a consumer-backpressure error

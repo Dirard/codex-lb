@@ -404,12 +404,12 @@ The system SHALL support an optional limit warm-up mechanism that is disabled by
 
 ### Requirement: Operators can probe an account to wake the upstream limiter
 
-The dashboard MUST expose an admin-only endpoint that sends a single minimal `responses.create` directly to upstream pinned to one account, bypassing load-balancer scoring, then immediately refreshes that account's `/wham/usage` snapshot. The probe `responses.create` MUST set `max_output_tokens` to `16`, the current Codex token floor; values below that floor MUST NOT be used. The endpoint MUST surface the before/after usage and account status so operators can verify whether the upstream limiter re-evaluated.
+The dashboard MUST expose an admin-only endpoint that sends a single minimal `responses.create` directly to upstream pinned to one account, bypassing load-balancer scoring, then immediately refreshes that account's `/wham/usage` snapshot. The subscription probe wire payload MUST omit the unsupported `max_output_tokens` parameter and MUST NOT claim a hard 16-token output cap. Reported actual usage MUST be accounted for, and unknown usage MUST NOT be fabricated as zero. The endpoint MUST surface the before/after usage and account status so operators can verify whether the upstream limiter re-evaluated.
 
 #### Scenario: Probe wakes the upstream limiter and refreshes usage state
 - **WHEN** an operator POSTs to `/api/accounts/{account_id}/probe`
 - **AND** the account is `active`, `rate_limited`, or `quota_exceeded`
-- **THEN** the service sends one `responses.create` request directly to `{upstream_base_url}/codex/responses` with `max_output_tokens=16`, `stream=true`, `store=false`
+- **THEN** the service sends one `responses.create` request directly to `{upstream_base_url}/codex/responses` without `max_output_tokens`, with `stream=true`, `store=false`
 - **AND** the service triggers an immediate `UsageUpdater.refresh_accounts` for that account
 - **AND** the response body carries `probe_status_code`, `primary_used_percent_before`, `primary_used_percent_after`, `secondary_used_percent_before`, `secondary_used_percent_after`, `account_status_before`, `account_status_after`
 
@@ -1643,4 +1643,3 @@ Auth Guardian MUST preserve stable account identities while its candidate-query 
 - **WHEN** the candidate-query session closes before per-account refresh work begins
 - **THEN** Auth Guardian refreshes the selected account without a detached-instance failure
 - **AND** the refresh worker re-reads the account in its own session before refreshing it
-

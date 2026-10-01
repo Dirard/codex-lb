@@ -1,5 +1,14 @@
 # Project Code Conventions
 
+## Go implementation
+
+The active root implementation is Go. Python/FastAPI/SQLAlchemy-specific examples below apply only to `legacy/`.
+
+- Keep `internal/domain` free of HTTP/SQL and provider SDK dependencies. Application use cases own the narrow interfaces they consume; adapters implement those interfaces and the command wires them.
+- Use typed Go structs for known contracts, `context.Context` for I/O lifetime, explicit errors and short database transactions. Preserve unknown provider payload fields with `json.RawMessage` only at a protocol boundary.
+- Use `gofmt`, `go test`, `go test -race`, and `go vet`; tests belong beside their implementation. Do not weaken validation or security to simplify a port.
+- Do not modify `legacy/` while implementing new behavior. Existing source is a compatibility and migration reference, not a subprocess dependency.
+
 ## 1. Typing & Data Contracts
 
 - Prefer strict typing end-to-end. Avoid `dict`, `Mapping[str, object]`, and `object` in app/service/repository layers when the shape is known.

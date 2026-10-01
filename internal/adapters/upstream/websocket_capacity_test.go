@@ -1,0 +1,99 @@
+package upstream
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"ready"}`)); err != nil {
+			return
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return
+		}
+		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"owned-response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
+		_, _, _ = conn.Read(ctx) // Retain the connection until the adapter closes it.
+	}))
+	defer server.Close()
+	adapter := New(server.Client(), nil)
+	defer adapter.Close()
+	defer unblock()
+	capabilities := ResponsesCapabilities()
+	capabilities.StreamTransport = TransportWebSocket
+	base := testTarget(server.URL, capabilities)
+	body := Request{Body: []byte(`{"model":"m","input":"hello","stream":true}`)}
+	opened, finished := make(chan struct{}, 256), make(chan error, 256)
+	for i := range 256 {
+		go func() {
+			target := base
+			target.KeyID = fmt.Sprintf("key-%d", i)
+			target.SessionID = fmt.Sprintf("session-%d", i)
+			result, err := adapter.OpenStream(ctx, target, body, func(event Event) error {
+				if event.Type == "response.output_text.delta" {
+					opened <- struct{}{}
+				}
+				return nil
+			})
+			if err == nil && (!result.UsageKnown || result.ResponseID != "owned-response") {
+				err = fmt.Errorf("stream lost its terminal response or usage")
+			}
+			finished <- err
+		}()
+	}
+	for i := range 256 {
+		select {
+		case <-opened:
+		case err := <-finished:
+			t.Fatalf("stream returned before all 256 were active (%d opened): %v", i, err)
+		case <-ctx.Done():
+			t.Fatalf("only %d streams active: %v", i, ctx.Err())
+		}
+	}
+	overflow := base
+	overflow.KeyID, overflow.SessionID = "overflow-key", "overflow-session"
+	_, err := adapter.OpenStream(ctx, overflow, body, func(Event) error { return nil })
+	var rejected *Error
+	if !errors.As(err, &rejected) || rejected.Code != "local_capacity_exceeded" {
+		t.Fatalf("overflow was not bounded: %v", err)
+	}
+	unblock()
+	for range 256 {
+		if err := <-finished; err != nil {
+			t.Fatalf("active peer lost its connection: %v", err)
+		}
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	adapter.sessions.mu.Lock()
+	remaining := len(adapter.sessions.entries) + len(adapter.sessions.responses)
+	adapter.sessions.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("Close retained %d session entries", remaining)
+	}
+}

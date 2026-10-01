@@ -1,3 +1,0 @@
-# Machine-local Codex profile: ~/.codex/daybreak-blue.config.toml
-model = "gpt-5.6-sol"
-model_provider = "codex-lb-daybreak-blue"

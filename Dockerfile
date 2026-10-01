@@ -1,88 +1,28 @@
-# syntax=docker/dockerfile:1.7
-FROM ghcr.io/astral-sh/uv:0.12.8 AS uv-bin
-
-FROM rust:1.96.0-slim-bookworm AS native-egress-build
-
+FROM node:26-alpine AS web
 WORKDIR /src
+COPY web/ ./web/
+RUN npm --prefix web run install:deps
+RUN npm --prefix web run build
 
-COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release --locked --package codex-lb-egress-worker --bin codex-lb-native-egress \
-    && cp target/release/codex-lb-native-egress /tmp/codex-lb-native-egress
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY --from=web /src/internal/adapters/webui/dist/ ./internal/adapters/webui/dist/
+ARG VERSION=go-dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /codex-lb ./cmd/codex-lb
 
-FROM oven/bun:1.4.0-alpine AS frontend-build
-
-WORKDIR /app/frontend
-
-COPY frontend/package.json frontend/bun.lock ./
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile
-
-COPY frontend ./
-RUN bun run build
-
-FROM python:3.14-slim AS python-build
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    UV_LINK_MODE=copy
-
-WORKDIR /app
-
-COPY --from=uv-bin /uv /uvx /usr/local/bin/
-
-RUN python -m venv --without-pip /opt/venv
-ENV PATH="/opt/venv/bin:/usr/local/bin:$PATH"
-
-COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --extra metrics --extra tracing
-
-FROM python:3.14-slim AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
-
-WORKDIR /app
-
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --only-upgrade \
-        bsdutils libblkid1 libc-bin libc6 libcap2 libmount1 libsmartcols1 libssl3t64 \
-        libsystemd0 libudev1 libuuid1 openssl sed util-linux \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        openssl-provider-legacy \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python -m pip uninstall -y pip setuptools wheel || true \
-    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13 \
-    && rm -rf /usr/local/lib/python*/site-packages/pip* \
-        /usr/local/lib/python*/site-packages/setuptools* \
-        /usr/local/lib/python*/site-packages/wheel*
-
-RUN adduser --disabled-password --gecos "" app \
-    && mkdir -p /var/lib/codex-lb \
-    && chown -R app:app /var/lib/codex-lb
-
-COPY --from=python-build /opt/venv /opt/venv
-COPY --from=native-egress-build /tmp/codex-lb-native-egress /usr/local/bin/codex-lb-native-egress
-COPY --chown=app:app app app
-COPY --chown=app:app config config
-COPY --chown=app:app scripts scripts
-COPY --chown=app:app --from=frontend-build /app/app/static app/static
-
-# The runtime image copies source files instead of installing the project, so
-# recreate the console-script entry point that pyproject would normally install.
-RUN chmod +x /app/scripts/docker-entrypoint.sh \
-    && chmod +x /usr/local/bin/codex-lb-native-egress \
-    && printf '%s\n' '#!/bin/sh' 'exec python -m app.cli "$@"' > /usr/local/bin/codex-lb \
-    && chmod +x /usr/local/bin/codex-lb
-
-USER app
-RUN test -z "$(find /app/app /app/config /app/scripts -type f ! -readable -print -quit)"
-EXPOSE 2455 1455
-
-CMD ["/app/scripts/docker-entrypoint.sh"]
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 codex-lb && mkdir /data && chown codex-lb:codex-lb /data && chmod 0700 /data
+COPY --from=build /codex-lb /usr/local/bin/codex-lb
+COPY LICENSE /licenses/codex-lb
+COPY internal/adapters/upstream/LICENSE.codex-relay /licenses/codex-relay
+USER codex-lb
+VOLUME /data
+EXPOSE 2455
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD wget -q -O /dev/null http://127.0.0.1:2455/health/ready || exit 1
+ENTRYPOINT ["/usr/local/bin/codex-lb"]
+CMD ["serve", "--data-dir", "/data", "--listen", "0.0.0.0:2455"]

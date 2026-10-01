@@ -1,0 +1,25 @@
+[Unit]
+Description=codex-lb Go proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codex-lb
+Group=codex-lb
+StateDirectory=codex-lb
+StateDirectoryMode=0700
+UMask=0077
+# Optional, e.g. CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN for first remote setup.
+EnvironmentFile=-/etc/codex-lb.env
+ExecStart=/usr/local/bin/codex-lb serve --data-dir /var/lib/codex-lb --listen 127.0.0.1:2455
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=90s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

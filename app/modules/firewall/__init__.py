@@ -1,1 +1,0 @@
-"""Firewall dashboard module."""

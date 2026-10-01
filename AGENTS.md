@@ -1,8 +1,18 @@
 # AGENTS
 
+## Go implementation
+
+- The active implementation is Go at the repository root. The administrator approved retiring `legacy/`; the old implementation is retained in Git history, not required by this checkout.
+- Follow `openspec/specs/go-runtime/` and the administrator's selected feature scope. Historical rewrite decisions are in `openspec/changes/archive/2026-09-27-rewrite-codex-lb-in-go/`.
+- Clean architecture: `internal/domain` contains transport/storage-independent rules; `internal/application` owns use cases and needed ports; `internal/adapters` contains concrete storage, HTTP and upstream implementations; `cmd/codex-lb` wires them.
+- Prefer the Go standard library, explicit typed contracts, request-scoped contexts, bounded I/O and short SQLite transactions. Do not hold locks or transactions across upstream network I/O. Do not create interfaces without an actual architecture or testing boundary.
+- Place Go tests beside the implementation and run `go test ./...`, `go test -race ./...`, and `go vet ./...`. Use local deterministic upstream stubs; real provider traffic, service updates, publication and commits require separate authorization.
+- Keep secrets out of logs, fixtures, assets and commits. Credentials remain encrypted at rest. Preserve legacy API-key/ledger semantics during migration and reject unsafe account/provider continuation.
+- Python, Alembic and Uvicorn references below are historical upstream guidance, not instructions to restore an old runtime. General security, spec, testing and preservation rules remain applicable.
+
 ## Environment
 
-- Python: .venv/bin/python (uv, CPython 3.13.3)
+- Go: installed toolchain (`go version`); the module declares its required version.
 - GitHub auth for git/API is available via env vars: `GITHUB_USER`, `GITHUB_TOKEN` (PAT). Do not hardcode or commit tokens.
 - For authenticated git over HTTPS in automation, use: `https://x-access-token:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git`
 
