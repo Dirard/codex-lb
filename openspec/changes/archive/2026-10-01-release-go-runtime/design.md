@@ -38,10 +38,10 @@ Use tag `go-v1.0.0`, binary version `go-v1.0.0` and UI package version `1.0.0`. 
 
 ## Implementation checklist
 
-1. [ ] Retire legacy recoverably and update source/version guidance; validate specs.
-2. [ ] Review staged contents and secrets, commit the approved transition, and build matching release binaries.
-3. [ ] Verify packages and checksums, push `fork`/tag, publish and inspect the GitHub release.
-4. [ ] Include the requested same-group purchased-credit total and verify scoped sums, unknown/zero/unlimited balances and report rendering.
+1. [x] Retire legacy recoverably and update source/version guidance; validate specs.
+2. [x] Review staged contents and secrets, commit the approved transition, and build matching release binaries.
+3. [x] Verify packages and checksums, push `fork`/tag, publish and inspect the GitHub release.
+4. [x] Include the requested same-group purchased-credit total and verify scoped sums, unknown/zero/unlimited balances and report rendering.
 
 ## Open questions
 
@@ -52,3 +52,7 @@ None blocking. Publication and commit/push are explicitly authorized. Production
 One new Go release line avoids pretending this is a patch of the Python distribution. Retain offline legacy-import code and historical specifications; only the preserved old implementation tree is removed. No dependency, installer, CI framework or remote deployment is introduced merely for packaging.
 
 During release preparation the administrator also requested the remaining Purchased credits in key reports. Extend the existing group account read snapshot with persisted balance/unlimited values and aggregate each account once, before window aggregation. Report the sum of known nonnegative finite balances, a separate unlimited flag, and the count of known balances against group account count. Unknown is not zero; any unlimited account displays Unlimited. Share the existing account-pool privacy gates. The UI shows this total separately from subscription percentages; no credits are bought, redeemed or added to key budgets.
+
+Completed on 2026-10-01. `legacy/` was moved to desktop trash, keeping its uncommitted/private files recoverable outside the repository. Source commits are `29ea3b9` (Go transition) and `714f5db` (final contract wording). Tag `go-v1.0.0` points to `714f5db27b6783104d98c889e54a7ae3fdc9d0a9`; both binaries embed that revision with `vcs.modified=false`. The release is public at https://github.com/Dirard/codex-lb/releases/tag/go-v1.0.0 and contains both architecture archives plus SHA256SUMS. Uploaded files were downloaded and checksummed successfully. Each package includes the executable, both license texts and the systemd template.
+
+Verification after the final feature: full Go tests/race/vet, full frontend tests (1236 passed), typecheck/build, focused ESLint, and ten contract tests against the release amd64 binary all passed. Both ELF files are statically linked with CGO disabled; arm64 was cross-built, not executed natively. The current Go contract and release change validate strictly; unrelated historical legacy specs retain earlier warnings. Staged-source scanning found no private runtime paths or high-confidence secret patterns. Local service PID 733312 stayed active with zero restarts, and no installed data was changed. The final documentation-only archive commit does not change the release tag or binaries.
