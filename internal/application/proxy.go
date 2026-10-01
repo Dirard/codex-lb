@@ -61,23 +61,24 @@ type ResponseOptions struct {
 }
 
 type Proxy struct {
-	store            ProxyStore
-	provider         ResponseProvider
-	cipher           SecretCipher
-	config           ProxyConfig
-	streams          chan struct{}
-	admitted         chan struct{}
-	admissionMu      sync.Mutex
-	draining         chan struct{}
-	nextAccount      atomic.Uint64
-	selectionMu      sync.Mutex
-	lastSelected     map[string]uint64
-	accountAdmission *accountAdmission
-	ResolvePrice     func(context.Context, domain.Account, string) (pricing.Price, error)
-	Diagnostics      DiagnosticRecorder
-	Catalog          ModelCatalogRoutingPolicy
-	Capabilities     *CapabilityRouter
-	compact          *CodexOperations
+	OpenResponsePrelude func() (ResponsePrelude, error)
+	store               ProxyStore
+	provider            ResponseProvider
+	cipher              SecretCipher
+	config              ProxyConfig
+	streams             chan struct{}
+	admitted            chan struct{}
+	admissionMu         sync.Mutex
+	draining            chan struct{}
+	nextAccount         atomic.Uint64
+	selectionMu         sync.Mutex
+	lastSelected        map[string]uint64
+	accountAdmission    *accountAdmission
+	ResolvePrice        func(context.Context, domain.Account, string) (pricing.Price, error)
+	Diagnostics         DiagnosticRecorder
+	Catalog             ModelCatalogRoutingPolicy
+	Capabilities        *CapabilityRouter
+	compact             *CodexOperations
 }
 
 func NewProxy(store ProxyStore, provider ResponseProvider, cipher SecretCipher, config ProxyConfig) *Proxy {
@@ -249,7 +250,10 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 	}
 	excluded := map[string]bool{}
 	hydrated := owner != nil && owner.QuotaRefused
+	var output *responseOutput
+	defer func() { output.close() }()
 	for {
+		output.close() // A quota replay must discard the rejected owner's prelude.
 		if err := ctx.Err(); err != nil {
 			return ResponseResult{}, err
 		}
@@ -280,7 +284,7 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		// enable the new request; no previous owner signal crosses accounts.
 		lite := request.ResponsesLite || hydrated && inputUsesResponsesLite(history.Items) || !hydrated && useWebSocket && request.ResponsesLite
 		lite = lite && account.Kind == domain.AccountChatGPT
-		output := newResponseOutput(responsesLiteOutput(options, request.Model, lite, emit))
+		output = newResponseOutput(responsesLiteOutput(options, request.Model, lite, emit), p.OpenResponsePrelude)
 		target := ResponseTarget{Account: account, KeyID: key.ID, UseWebSocket: useWebSocket, AllowHTTPFallback: allowHTTPFallback, RequiredCapability: route.RequireSecurityWorkAuthorized, ResponsesLite: lite}
 		if !hydrated {
 			target.CompatibilityMetadata = options.CompatibilityMetadata
@@ -294,6 +298,7 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		}
 		var consumer func(ResponseEvent) error
 		var diagnostics DiagnosticEvents
+		var deliveryErr error
 		marked := map[string]bool{}
 		var capabilityErr error
 		markResponse := func(ids ...string) error {
@@ -329,7 +334,8 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 				if p.Diagnostics != nil {
 					diagnostics.Add(event)
 				}
-				return output.send(event)
+				deliveryErr = output.send(event)
+				return deliveryErr
 			}
 		}
 		var result ResponseResult
@@ -345,6 +351,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		affinity = nil // Retries use quota/replay rules, never locality hints.
 		accountLease.release()
 		accountLease = nil
+		if deliveryErr != nil {
+			callErr = deliveryErr // Adapters must not disguise a local delivery/buffer failure as upstream_error.
+		}
 		if capabilityErr == nil && callErr == nil {
 			if err := markResponse(result.ResponseID); err != nil {
 				callErr = err
@@ -366,9 +375,8 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		settled, settleErr := p.settle(ctx, id, options, account, request, price, result, callErr, safeZero, started, attemptAt, queueMS, output.firstEventMS, output.firstTokenMS)
 		if p.Diagnostics != nil && (callErr != nil || result.Failed || settleErr != nil) && !errors.Is(callErr, context.Canceled) {
 			code := result.ErrorCode
-			var failure *ProviderFailure
-			if errors.As(callErr, &failure) {
-				code = failure.Code
+			if callErr != nil {
+				code = operationErrorCode(callErr)
 			}
 			if settleErr != nil {
 				code = "usage_settlement_failed"

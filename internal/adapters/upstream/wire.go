@@ -186,9 +186,13 @@ type Error struct {
 	Message string
 	// WebSocketHTTPFallback is set only by a rejected handshake before create.
 	WebSocketHTTPFallback bool
-	// Set only for a complete HTTP validation rejection with no output/billing.
+	// Set only for a proven local rejection before response.create, or a
+	// complete HTTP validation rejection with no output/billing.
 	RejectedBeforeExecution bool
+	cause                   error
 }
+
+func (e *Error) Unwrap() error { return e.cause }
 
 func (e *Error) Error() string {
 	if e.Status != 0 {

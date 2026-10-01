@@ -14,6 +14,7 @@ import (
 	"codex-lb/internal/adapters/chatgpt"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/adapters/provider"
+	"codex-lb/internal/adapters/streambuffer"
 	"codex-lb/internal/adapters/webui"
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
@@ -95,6 +96,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		return nil, errors.New("cannot load model catalog snapshot")
 	}
 	proxy := application.NewProxy(data.store, adapter, data.vault, application.ProxyConfig{})
+	proxy.OpenResponsePrelude = func() (application.ResponsePrelude, error) { return streambuffer.New(cfg.dataDir, data.vault) }
 	proxy.Catalog = catalog
 	archives := application.NewErrorArchives(data.store, data.vault)
 	proxy.Diagnostics = func(ctx context.Context, diagnostic application.ErrorDiagnostic) {

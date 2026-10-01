@@ -130,3 +130,24 @@ func TestDiagnosticEventAndBodyBounds(t *testing.T) {
 		t.Fatal("oversized event retained")
 	}
 }
+
+func TestOversizedDiagnosticKeepsSafeEventTypeAndSize(t *testing.T) {
+	var events application.DiagnosticEvents
+	data := json.RawMessage(`{"type":"response.created","response":{"instructions":"` + strings.Repeat("synthetic-private-text", 8192) + `"}}`)
+	events.Add(application.ResponseEvent{Type: "response.created", Data: data})
+	if !events.Truncated || len(events.Events) != 1 || len(events.Events[0]) > 256 || strings.Contains(string(events.Events[0]), "synthetic-private-text") {
+		t.Fatal("oversized diagnostic lost its metadata or retained the payload")
+	}
+	var summary struct {
+		Type    string
+		Omitted string
+		Bytes   int
+	}
+	if json.Unmarshal(events.Events[0], &summary) != nil || summary.Type != "response.created" || summary.Omitted != "diagnostic size limit" || summary.Bytes != len(data) {
+		t.Fatal("oversized diagnostic summary incorrect")
+	}
+	events.Add(application.ResponseEvent{Type: "response.failed", Data: json.RawMessage(`{"type":"response.failed"}`)})
+	if len(events.Events) != 2 {
+		t.Fatal("large event prevented recording the later failure")
+	}
+}

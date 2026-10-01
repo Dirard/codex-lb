@@ -78,7 +78,7 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 	overflow.KeyID, overflow.SessionID = "overflow-key", "overflow-session"
 	_, err := adapter.OpenStream(ctx, overflow, body, func(Event) error { return nil })
 	var rejected *Error
-	if !errors.As(err, &rejected) || rejected.Code != "local_capacity_exceeded" {
+	if !errors.As(err, &rejected) || rejected.Code != "local_capacity_exceeded" || !rejected.RejectedBeforeExecution {
 		t.Fatalf("overflow was not bounded: %v", err)
 	}
 	unblock()

@@ -368,6 +368,47 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     }
   });
 
+  it("streams large startup events through the real runtime and settles actual usage", async () => {
+    const events = ["response.created", "response.in_progress"].map((type) => ({ type,
+      response: { id: "resp_large_prelude", status: "in_progress", instructions: "a".repeat(98304) },
+    }));
+    const completed = { type: "response.completed", response: { id: "resp_large_prelude", status: "completed", output: [],
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+    } };
+    let calls = 0;
+    const upstream = createServer((req, res) => {
+      req.resume();
+      calls++;
+      res.setHeader("Content-Type", "text/event-stream");
+      res.end([...events, completed].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = upstream.address();
+      if (!address || typeof address === "string") throw new Error("No offline upstream address");
+      const source = ModelSourceSchema.parse(await request("/api/model-sources", "POST", {
+        name: "Offline large prelude", baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        apiKey: "synthetic-provider-secret", supportsResponses: true, supportsChatCompletions: false,
+        models: [{ model: "synthetic-large-prelude", supportsStreaming: true, inputPer1M: 1, outputPer1M: 2 }],
+      }));
+      const key = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "Large prelude key", assignedSourceIds: [source.id], weeklyTokenLimit: 10000 }));
+      const result = await fetch(`${base}/backend-api/codex/responses`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key.key}` },
+        body: JSON.stringify({ model: "synthetic-large-prelude", input: "synthetic prompt", stream: true }), signal: AbortSignal.timeout(4000) });
+      expect(result.status).toBe(200);
+      const stream = await result.text();
+      for (const event of [...events, completed]) expect(stream).toContain(JSON.stringify(event));
+      expect(calls).toBe(1);
+      const pending = RequestLogsResponseSchema.parse(await request(`/api/request-logs?apiKeyId=${key.id}&status=reconciliation_required`));
+      expect(pending.total).toBe(0);
+      const keys = ApiKeyListSchema.parse(await request("/api/api-keys/"));
+      expect(keys.find((item) => item.id === key.id)?.usageSummary?.totalTokens).toBe(12);
+      await request(`/api/api-keys/${key.id}`, "DELETE");
+      await request(`/api/model-sources/${source.id}`, "DELETE");
+    } finally {
+      await new Promise<void>((resolve, reject) => upstream.close((err) => err ? reject(err) : resolve()));
+    }
+  });
+
   it("returns pending accounting as nullable request logs without fabricating totals", async () => {
     let calls = 0;
     const upstream = createServer((req, res) => {

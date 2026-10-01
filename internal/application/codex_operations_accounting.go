@@ -365,6 +365,10 @@ func operationErrorCode(err error) string {
 	if errors.As(err, &failure) {
 		return failure.Code
 	}
+	var local *ProxyError
+	if errors.As(err, &local) {
+		return local.Code
+	}
 	return "upstream_error"
 }
 

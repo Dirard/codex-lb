@@ -104,7 +104,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 			}
 			if oldest == nil {
 				p.mu.Unlock()
-				return nil, Result{}, &Error{Code: "local_capacity_exceeded", Status: 503, Message: "Upstream WebSocket session capacity reached"}
+				return nil, Result{}, &Error{Code: "local_capacity_exceeded", Status: 503, Message: "Upstream WebSocket session capacity reached", RejectedBeforeExecution: true}
 			}
 			p.discardLocked(oldest)
 		}
@@ -126,10 +126,14 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 	case entry.gate <- struct{}{}:
 	case <-ctx.Done():
 		p.release(entry, false, "", false)
-		return nil, Result{}, ctx.Err()
+		failure := &Error{Code: "request_cancelled", Status: 499, Message: "Request cancelled before upstream response creation", RejectedBeforeExecution: true, cause: ctx.Err()}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			failure.Code, failure.Status = "upstream_timeout", http.StatusGatewayTimeout
+		}
+		return nil, Result{}, failure
 	case <-timer.C:
 		p.release(entry, true, "", false)
-		return nil, Result{}, &Error{Code: "local_capacity_exceeded", Status: 503, Message: "Conversation already has an active upstream response"}
+		return nil, Result{}, &Error{Code: "local_capacity_exceeded", Status: 503, Message: "Conversation already has an active upstream response", RejectedBeforeExecution: true}
 	}
 	p.mu.Lock()
 	dead, connection := entry.dead, entry.connection

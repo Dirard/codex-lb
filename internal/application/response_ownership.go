@@ -125,9 +125,11 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 	now := time.Now()
 	quotaDefinition, quotaMapped := domain.AdditionalQuotaForModel(model)
 	blockedByData, blockedByAdditionalQuota := false, false
+	unpriced := 0
 	for _, account := range accounts {
 		price, err := p.ResolvePrice(ctx, account, model)
 		if errors.Is(err, pricing.ErrUnpriced) {
+			unpriced++
 			continue
 		}
 		if err != nil {
@@ -212,6 +214,9 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 		}
 		if blockedByAdditionalQuota {
 			return nil, &ProxyError{Code: "quota_exhausted", Status: 429, Message: "Additional quota exhausted for the requested model"}
+		}
+		if unpriced > 0 && unpriced == len(accounts) {
+			return nil, pricing.ErrUnpriced
 		}
 		return nil, domain.ErrNoAccounts
 	}

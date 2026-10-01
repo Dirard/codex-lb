@@ -119,10 +119,26 @@ type DiagnosticEvents struct {
 }
 
 func (d *DiagnosticEvents) Add(event ResponseEvent) {
-	if len(d.Events) >= 64 || d.bytes+len(event.Data) > maxDiagnosticEventBytes {
+	if len(d.Events) >= 64 {
 		d.Truncated = true
 		return
 	}
-	d.Events = append(d.Events, append(json.RawMessage(nil), event.Data...))
-	d.bytes += len(event.Data)
+	data := event.Data
+	if d.bytes+len(data) > maxDiagnosticEventBytes {
+		d.Truncated = true
+		kind := event.Type
+		if len(kind) > 128 {
+			kind = "unknown"
+		}
+		data, _ = json.Marshal(struct {
+			Type    string `json:"type"`
+			Omitted string `json:"omitted"`
+			Bytes   int    `json:"bytes"`
+		}{diagnosticTokens.ReplaceAllString(kind, "[redacted]"), "diagnostic size limit", len(event.Data)})
+		if d.bytes+len(data) > maxDiagnosticEventBytes {
+			return
+		}
+	}
+	d.Events = append(d.Events, append(json.RawMessage(nil), data...))
+	d.bytes += len(data)
 }

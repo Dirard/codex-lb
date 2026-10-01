@@ -37,6 +37,17 @@ type ResponseEvent struct {
 	Data json.RawMessage
 }
 
+// ResponsePrelude holds oversized startup events until an attempt is safe to expose.
+// Implementations must bound storage and remove request-owned data on Close.
+type ResponsePrelude interface {
+	Append(ResponseEvent) error
+	Replay(func(ResponseEvent) error) error
+	Close() error
+}
+
+const MaxResponsePreludeEvents = 8
+const MaxResponsePreludeEventBytes = 16 << 20 // Same event boundary as the upstream transports.
+
 type ResponseResult struct {
 	ResponseID           string
 	Response             json.RawMessage

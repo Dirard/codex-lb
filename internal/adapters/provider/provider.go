@@ -374,11 +374,12 @@ func applicationUsage(usage upstream.Usage) (domain.UsageAmount, bool) {
 }
 
 func wrapUpstreamFailure(err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	var upstreamErr *upstream.Error
+	classified := errors.As(err, &upstreamErr)
+	if (!classified || !upstreamErr.RejectedBeforeExecution) && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return err
 	}
-	var upstreamErr *upstream.Error
-	if !errors.As(err, &upstreamErr) {
+	if !classified {
 		return providerFailure("upstream_error", 0, true)
 	}
 	dispatched := upstreamErr.Status != 0 || upstreamErr.Code != upstream.ErrorCodeInvalidRequest &&
@@ -387,6 +388,14 @@ func wrapUpstreamFailure(err error) error {
 	failure := providerFailure(upstreamErr.Code, upstreamErr.Status, dispatched)
 	failure.WebSocketHTTPFallback = upstreamErr.WebSocketHTTPFallback
 	failure.RejectedBeforeExecution = upstreamErr.RejectedBeforeExecution
+	// Keep cancellation identity without discarding the adapter's proof that
+	// this request never reached response.create. Never retain raw error text.
+	if errors.Is(err, context.Canceled) {
+		return errors.Join(failure, context.Canceled)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.Join(failure, context.DeadlineExceeded)
+	}
 	return failure
 }
 

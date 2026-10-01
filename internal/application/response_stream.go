@@ -5,10 +5,15 @@ import (
 	"time"
 )
 
+var ErrResponsePreludeStorage = &ProxyError{Code: "response_prelude_storage_failed", Status: 503, Message: "Could not buffer the upstream response; do not blindly repeat the request"}
+
 type responseOutput struct {
 	emit         func(ResponseEvent) error
 	prelude      []ResponseEvent
 	preludeBytes int
+	preludeCount int
+	openPrelude  func() (ResponsePrelude, error)
+	spilled      ResponsePrelude
 	terminal     *ResponseEvent
 	visible      bool
 	started      time.Time
@@ -16,8 +21,8 @@ type responseOutput struct {
 	firstTokenMS int64
 }
 
-func newResponseOutput(emit func(ResponseEvent) error) *responseOutput {
-	return &responseOutput{emit: emit, started: time.Now()}
+func newResponseOutput(emit func(ResponseEvent) error, openPrelude func() (ResponsePrelude, error)) *responseOutput {
+	return &responseOutput{emit: emit, openPrelude: openPrelude, started: time.Now()}
 }
 
 func (o *responseOutput) send(event ResponseEvent) error {
@@ -39,8 +44,12 @@ func (o *responseOutput) send(event ResponseEvent) error {
 		return nil
 	case "response.created", "response.in_progress":
 		if !o.visible {
-			if len(o.prelude) >= 8 || o.preludeBytes+len(event.Data) > 64<<10 {
-				return errors.New("response prelude exceeds limit")
+			if o.preludeCount >= MaxResponsePreludeEvents || len(event.Data) > MaxResponsePreludeEventBytes {
+				return &ProxyError{Code: "response_prelude_limit_exceeded", Status: 502, Message: "Upstream response startup exceeds the supported event limit"}
+			}
+			o.preludeCount++
+			if o.spilled != nil || o.preludeBytes+len(event.Data) > 64<<10 {
+				return o.spill(event)
 			}
 			o.prelude = append(o.prelude, event)
 			o.preludeBytes += len(event.Data)
@@ -55,6 +64,13 @@ func (o *responseOutput) send(event ResponseEvent) error {
 }
 
 func (o *responseOutput) flush() error {
+	if o.spilled != nil {
+		defer o.close()
+		return o.spilled.Replay(func(event ResponseEvent) error {
+			o.visible = true
+			return o.emit(event)
+		})
+	}
 	for _, event := range o.prelude {
 		o.visible = true
 		if err := o.emit(event); err != nil {
@@ -62,7 +78,43 @@ func (o *responseOutput) flush() error {
 		}
 	}
 	o.prelude = nil
+	o.preludeBytes = 0
 	return nil
+}
+
+// spill preserves the complete prelude without retaining large echoed requests in memory.
+func (o *responseOutput) spill(event ResponseEvent) error {
+	if o.spilled == nil {
+		if o.openPrelude == nil {
+			return ErrResponsePreludeStorage
+		}
+		var err error
+		o.spilled, err = o.openPrelude()
+		if err != nil || o.spilled == nil {
+			return ErrResponsePreludeStorage
+		}
+		for _, buffered := range o.prelude {
+			if err := o.spilled.Append(buffered); err != nil {
+				return ErrResponsePreludeStorage
+			}
+		}
+		o.prelude, o.preludeBytes = nil, 0
+	}
+	if err := o.spilled.Append(event); err != nil {
+		return ErrResponsePreludeStorage
+	}
+	return nil
+}
+
+func (o *responseOutput) close() {
+	if o == nil {
+		return
+	}
+	if o.spilled != nil {
+		_ = o.spilled.Close()
+		o.spilled = nil
+	}
+	o.prelude, o.preludeBytes = nil, 0
 }
 
 func (o *responseOutput) finish() error {
