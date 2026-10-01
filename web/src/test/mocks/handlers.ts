@@ -1708,6 +1708,8 @@ export const handlers = [
     return HttpResponse.json(state.authSession);
   }),
 
+  http.get("/api/key-reports/session", () => HttpResponse.json({ authenticated: false })),
+
   http.post("/api/dashboard-auth/password/setup", () => {
     state.authSession = createDashboardAuthSession({
       authenticated: true,

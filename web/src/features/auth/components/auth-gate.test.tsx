@@ -54,7 +54,7 @@ describe("AuthGate", () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText("Sign in")).toBeInTheDocument();
+    expect(await screen.findByText("Sign in")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Administrator" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "API key reports" })).toBeInTheDocument();
     expect(screen.queryByText("Protected content")).not.toBeInTheDocument();
@@ -82,7 +82,7 @@ describe("AuthGate", () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText("Protected content")).toBeInTheDocument();
+    expect(await screen.findByText("Protected content")).toBeInTheDocument();
     await waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
   });
 
@@ -101,7 +101,7 @@ describe("AuthGate", () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText("Two-factor verification")).toBeInTheDocument();
+    expect(await screen.findByText("Two-factor verification")).toBeInTheDocument();
     expect(screen.queryByText("Dashboard Login")).not.toBeInTheDocument();
     await waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
   });
@@ -122,7 +122,7 @@ describe("AuthGate", () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText("Reverse proxy authentication required")).toBeInTheDocument();
+    expect(await screen.findByText("Reverse proxy authentication required")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "API key reports" })).toBeInTheDocument();
     expect(screen.queryByText("Protected content")).not.toBeInTheDocument();
     await waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
@@ -145,16 +145,16 @@ describe("AuthGate", () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText("Complete Remote Setup")).toBeInTheDocument();
+    expect(await screen.findByText("Complete Remote Setup")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set password" })).toBeInTheDocument();
     expect(screen.queryByText("Protected content")).not.toBeInTheDocument();
     await waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
   });
 
-  it("keeps local first-run access gated without a remote warning", () => {
+  it("keeps local first-run access gated without a remote warning", async () => {
     setAuthState({ passwordRequired: false, bootstrapRequired: true, bootstrapTokenRequired: false });
     render(<AuthGate><div>Protected content</div></AuthGate>);
-    expect(screen.getByText("Set Up Dashboard")).toBeInTheDocument();
+    expect(await screen.findByText("Set Up Dashboard")).toBeInTheDocument();
     expect(screen.queryByText(/Remote setup is blocked/)).not.toBeInTheDocument();
     expect(screen.queryByText("Protected content")).not.toBeInTheDocument();
   });

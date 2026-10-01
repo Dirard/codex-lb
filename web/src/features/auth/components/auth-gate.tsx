@@ -3,13 +3,15 @@ import type { PropsWithChildren } from "react";
 import { useTranslation } from "react-i18next";
 
 import { CodexLogo } from "@/components/brand/codex-logo";
+import { AlertMessage } from "@/components/alert-message";
+import { Button } from "@/components/ui/button";
 import { SpinnerBlock } from "@/components/ui/spinner";
 import { BootstrapSetupScreen } from "@/features/auth/components/bootstrap-setup-screen";
 import { LoginForm } from "@/features/auth/components/login-form";
 import { KeyLoginForm } from "@/features/auth/components/key-login-form";
 import { TotpDialog } from "@/features/auth/components/totp-dialog";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
-import type { KeyReportSession } from "@/features/key-reports/api";
+import { getKeyReportSession } from "@/features/key-reports/api";
 
 const KeyReportsPage = lazy(() =>
   import("@/features/key-reports/key-reports-page").then((m) => ({ default: m.KeyReportsPage })),
@@ -18,7 +20,10 @@ const KeyReportsPage = lazy(() =>
 export function AuthGate({ children }: PropsWithChildren) {
   const { t } = useTranslation();
   const [loginMethod, setLoginMethod] = useState<"admin" | "key">("admin");
-  const [keySession, setKeySession] = useState<KeyReportSession | null>(null);
+  const [keySession, setKeySession] = useState(false);
+  const [keyLoginBusy, setKeyLoginBusy] = useState(false);
+  const [restoration, setRestoration] = useState<"loading" | "ready" | "error">("loading");
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
   const [keyLoginError, setKeyLoginError] = useState<string | null>(null);
   const refreshSessionStable = useAuthStore((state) => state.refreshSession);
   const initialized = useAuthStore((state) => state.initialized);
@@ -30,10 +35,25 @@ export function AuthGate({ children }: PropsWithChildren) {
   const authMode = useAuthStore((state) => state.authMode);
 
   useEffect(() => {
-    void refreshSessionStable().catch(() => undefined);
-  }, [refreshSessionStable]);
+    const controller = new AbortController();
+    void Promise.all([refreshSessionStable(), getKeyReportSession(controller.signal)]).then(([, report]) => {
+      if (controller.signal.aborted) return;
+      setKeySession(report.authenticated && !useAuthStore.getState().authenticated);
+      setRestoration("ready");
+    }).catch(() => {
+      if (!controller.signal.aborted) setRestoration("error");
+    });
+    return () => controller.abort();
+  }, [refreshSessionStable, restoreAttempt]);
 
-  if (!initialized) {
+  if (restoration === "error") {
+    return <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
+      <div role="alert"><AlertMessage variant="error">{t("keyReports.sessionLoadFailed")}</AlertMessage></div>
+      <Button onClick={() => { setRestoration("loading"); setRestoreAttempt((value) => value + 1); }}>{t("keyReports.retry")}</Button>
+    </div>;
+  }
+
+  if (!initialized || restoration === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <SpinnerBlock />
@@ -43,8 +63,10 @@ export function AuthGate({ children }: PropsWithChildren) {
 
   // Key authentication selects only its report surface, never administrator children.
   if (keySession) {
-    return <Suspense fallback={<SpinnerBlock />}><KeyReportsPage session={keySession} onExit={(message) => {
-      setKeySession(null);
+    return <Suspense fallback={<SpinnerBlock />}><KeyReportsPage onExit={(message) => {
+      setKeySession(false);
+      setKeyLoginBusy(false);
+      setLoginMethod("key");
       setKeyLoginError(message ?? null);
     }} /></Suspense>;
   }
@@ -76,7 +98,7 @@ export function AuthGate({ children }: PropsWithChildren) {
               <p className="mt-0.5 text-sm text-muted-foreground">{t("auth.appSubtitle")}</p>
             </div>
           </div>
-          <fieldset className="mb-4 flex flex-wrap justify-center gap-4 text-sm" disabled={loading}>
+          <fieldset className="mb-4 flex flex-wrap justify-center gap-4 text-sm" disabled={loading || keyLoginBusy}>
             <legend className="sr-only">{t("auth.login.method")}</legend>
             <label className="flex cursor-pointer items-center gap-2">
               <input type="radio" name="login-method" value="admin" checked={loginMethod === "admin"}
@@ -89,7 +111,8 @@ export function AuthGate({ children }: PropsWithChildren) {
               {t("keyReports.title")}
             </label>
           </fieldset>
-          {loginMethod === "key" ? <KeyLoginForm initialError={keyLoginError} onLogin={setKeySession} />
+          {loginMethod === "key" ? <KeyLoginForm initialError={keyLoginError} busy={keyLoginBusy}
+            onBusyChange={setKeyLoginBusy} onLogin={() => setKeySession(true)} />
             : authMode === "trusted_header" ? (
               <div className="rounded-2xl border bg-card p-6 shadow-sm">
                 <h2 className="text-lg font-semibold tracking-tight">{t("auth.trustedHeader.title")}</h2>

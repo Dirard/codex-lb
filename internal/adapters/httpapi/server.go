@@ -85,6 +85,7 @@ func (s *Server) ConfigureModelPricing(store application.ModelPricingStore) {
 func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	s.registerAuth(mux)
+	s.registerKeyReportSession(mux)
 	admin := http.NewServeMux()
 	s.registerAdmin(admin)
 	s.registerReportsRoutes(admin, s.store)
@@ -150,7 +151,7 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 			writeError(w, http.StatusBadRequest, "password_management_disabled", "Password and TOTP management are disabled by the installation authentication mode")
 			return
 		}
-		if s.firewall != nil && proxyFacingPath(r.URL.Path) && !s.firewall.Allowed(firewallIdentity(r, s.config.TrustedProxies)) {
+		if s.firewall != nil && (proxyFacingPath(r.URL.Path) || keyReportFirewallPath(r)) && !s.firewall.Allowed(firewallIdentity(r, s.config.TrustedProxies)) {
 			writeError(w, http.StatusForbidden, "ip_forbidden", "Client IP is not in the proxy allowlist")
 			return
 		}

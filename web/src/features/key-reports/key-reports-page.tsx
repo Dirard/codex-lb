@@ -10,15 +10,15 @@ import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api-client";
 import { ReportsSummaryCards } from "@/features/reports/components/reports-summary-cards";
 import { DailyDetailTable } from "@/features/reports/components/daily-detail-table";
-import { isReportDateRangeValid } from "@/features/reports/date";
-import { getKeyReport, type KeyReportSession } from "./api";
+import { daysAgoLocalISO, getBrowserReportsTimeZone, isReportDateRangeValid, localDateISO } from "@/features/reports/date";
+import { deleteKeyReportSession, getKeyReport } from "./api";
 import { KeyReportLimits } from "./key-report-limits";
 
 const CostPerDayChart = lazy(() => import("@/features/reports/components/cost-per-day-chart").then((m) => ({ default: m.CostPerDayChart })));
 const TokensPerDayChart = lazy(() => import("@/features/reports/components/tokens-per-day-chart").then((m) => ({ default: m.TokensPerDayChart })));
 const ModelDistributionDonut = lazy(() => import("@/features/reports/components/model-distribution-donut").then((m) => ({ default: m.ModelDistributionDonut })));
 
-export function KeyReportsPage({ session, onExit }: { session: KeyReportSession; onExit: (message?: string) => void }) {
+export function KeyReportsPage({ onExit }: { onExit: (message?: string) => void }) {
   const { t } = useTranslation();
   return (
     <main className="mx-auto min-h-screen w-full max-w-[1500px] space-y-6 px-4 py-8 sm:px-6">
@@ -26,29 +26,30 @@ export function KeyReportsPage({ session, onExit }: { session: KeyReportSession;
         <h1 className="text-2xl font-semibold">{t("keyReports.title")}</h1>
         <p className="text-muted-foreground text-sm">{t("keyReports.description")}</p>
       </header>
-      <ReportSession session={session} onExit={onExit} />
+      <ReportSession onExit={onExit} />
     </main>
   );
 }
 
 // Each login owns a separate cache; neither credentials nor reports enter admin queries.
-function ReportSession({ session, onExit }: { session: KeyReportSession; onExit: (message?: string) => void }) {
+function ReportSession({ onExit }: { onExit: (message?: string) => void }) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 30_000 } } }));
   useEffect(() => () => {
     void client.cancelQueries();
     client.clear();
   }, [client]);
-  return <QueryClientProvider client={client}><ReportView session={session} onExit={onExit} /></QueryClientProvider>;
+  return <QueryClientProvider client={client}><ReportView onExit={onExit} /></QueryClientProvider>;
 }
 
-function ReportView({ session, onExit }: { session: KeyReportSession; onExit: (message?: string) => void }) {
+function ReportView({ onExit }: { onExit: (message?: string) => void }) {
   const { t } = useTranslation();
-  const [filters, setFilters] = useState(session.filters);
-  const [draft, setDraft] = useState(session.filters);
+  const [filters, setFilters] = useState(() => ({ startDate: daysAgoLocalISO(6), endDate: localDateISO(), timezone: getBrowserReportsTimeZone(), model: "" }));
+  const [draft, setDraft] = useState(filters);
+  const [signingOut, setSigningOut] = useState(false);
+  const [logoutFailed, setLogoutFailed] = useState(false);
   const query = useQuery({
     queryKey: ["key-reports", filters],
-    queryFn: ({ signal }) => getKeyReport(session.apiKey, filters, signal),
-    initialData: filters === session.filters ? session.report : undefined,
+    queryFn: ({ signal }) => getKeyReport(filters, signal),
   });
   const unauthorized = query.error instanceof ApiError && query.error.status === 401;
   useEffect(() => {
@@ -56,6 +57,19 @@ function ReportView({ session, onExit }: { session: KeyReportSession; onExit: (m
   }, [unauthorized, onExit, t]);
   const validDates = isReportDateRangeValid(draft.startDate, draft.endDate);
   const report = query.error ? undefined : query.data;
+
+  const signOut = async () => {
+    setSigningOut(true);
+    setLogoutFailed(false);
+    try {
+      await deleteKeyReportSession();
+      onExit();
+    } catch {
+      setLogoutFailed(true);
+    } finally {
+      setSigningOut(false);
+    }
+  };
 
   const apply = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -72,8 +86,9 @@ function ReportView({ session, onExit }: { session: KeyReportSession; onExit: (m
     <section className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <p className="text-muted-foreground text-sm">{t("keyReports.readOnly")}</p>
-        <Button variant="outline" onClick={() => onExit()}>{t("keyReports.signOut")}</Button>
+        <Button variant="outline" disabled={signingOut} onClick={() => void signOut()}>{t("keyReports.signOut")}</Button>
       </div>
+      {logoutFailed ? <div role="alert"><AlertMessage variant="error">{t("keyReports.signOutFailed")}</AlertMessage></div> : null}
       <form onSubmit={apply} className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-5">
         <div className="space-y-2">
           <Label htmlFor="key-report-start">{t("keyReports.startDate")}</Label>

@@ -55,6 +55,7 @@ const EXPECTED_ENDPOINTS = [
 	"POST /api/oauth/complete",
 	// auth
 	"GET /api/dashboard-auth/session",
+	"GET /api/key-reports/session",
 	"POST /api/dashboard-auth/password/setup",
 	"POST /api/dashboard-auth/password/login",
 	"POST /api/dashboard-auth/password/change",

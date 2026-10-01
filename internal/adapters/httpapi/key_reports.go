@@ -17,6 +17,11 @@ func (h *KeyUsageHandler) serveReports(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	serveKeyReports(w, r, h.reports, key)
+}
+
+// serveKeyReports keeps bearer and browser-cookie reports under the same key scope.
+func serveKeyReports(w http.ResponseWriter, r *http.Request, reports *application.ReportsService, key domain.APIKey) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_report_filters", "Invalid report filters")
@@ -32,7 +37,7 @@ func (h *KeyUsageHandler) serveReports(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_report_filters", "Invalid report filters")
 		return
 	}
-	report, err := h.reports.Reports(r.Context(), application.ReportParams{
+	report, err := reports.Reports(r.Context(), application.ReportParams{
 		StartDate: query.Get("start_date"), EndDate: query.Get("end_date"), Timezone: query.Get("timezone"),
 		Model: query.Get("model"), UserAgentGroup: query.Get("useragent_group"), APIKeyIDs: []string{key.ID},
 	})
@@ -40,13 +45,13 @@ func (h *KeyUsageHandler) serveReports(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, domain.ErrInvalid) {
 			writeError(w, http.StatusBadRequest, "invalid_report_date_range", "Invalid report date range or filters")
 		} else {
-			h.fail(w, err)
+			writeKeyUsageError(w, err)
 		}
 		return
 	}
-	limits, err := h.reports.KeyLimits(r.Context(), key.ID)
+	limits, err := reports.KeyLimits(r.Context(), key.ID)
 	if err != nil {
-		h.fail(w, err)
+		writeKeyUsageError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, domain.KeyReportsResponse{

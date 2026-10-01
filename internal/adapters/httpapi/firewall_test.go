@@ -78,6 +78,21 @@ func TestFirewallRoutesEnforceProxyButNotDashboard(t *testing.T) {
 	if view.Code != 200 || json.Unmarshal(view.Body.Bytes(), &body) != nil || body.Mode != "allowlist_active" {
 		t.Fatal("dashboard locked out")
 	}
+	for _, path := range []string{"/api/key-reports/reports", "/api/key-reports/reports/"} {
+		if got := request("GET", path, "", "198.51.100.1:123", false); got.Code != 403 {
+			t.Fatal("browser reports bypassed allowlist", path, got.Code)
+		}
+	}
+	for _, path := range []string{"/api/key-reports/session", "/api/key-reports/session/"} {
+		if got := request("POST", path, "", "198.51.100.1:123", false); got.Code != 403 {
+			t.Fatal("browser report login bypassed allowlist", path, got.Code)
+		}
+		for _, method := range []string{"GET", "DELETE"} {
+			if got := request(method, path, "", "198.51.100.1:123", false); got.Code != 200 {
+				t.Fatal("allowlist prevented session status or logout", method, path, got.Code)
+			}
+		}
+	}
 	// A fresh process reconstructs the policy from durable storage.
 	reloaded, err := application.NewFirewall(ctx, store)
 	if err != nil || reloaded.Allowed(netip.MustParseAddr("198.51.100.1")) {

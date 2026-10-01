@@ -1,4 +1,4 @@
-import { get } from "@/lib/api-client";
+import { del, get, post } from "@/lib/api-client";
 import { ReportsResponseSchema } from "@/features/reports/schemas";
 import { ApiKeySchema } from "@/features/api-keys/schemas";
 import { z } from "zod";
@@ -29,14 +29,26 @@ export type KeyReportFilters = {
   timezone?: string;
   model: string;
 };
-export type KeyReportSession = { apiKey: string; report: KeyReport; filters: KeyReportFilters };
+const SessionSchema = z.object({ authenticated: z.boolean() });
+const sessionOptions = { credentials: "same-origin", cache: "no-store", suppressUnauthorizedHandler: true } as const;
 
-export function getKeyReport(apiKey: string, filters: KeyReportFilters, signal?: AbortSignal) {
+export function getKeyReportSession(signal?: AbortSignal) {
+  return get("/api/key-reports/session", SessionSchema, { ...sessionOptions, signal });
+}
+
+export function createKeyReportSession(apiKey: string, signal?: AbortSignal) {
+  return post("/api/key-reports/session", SessionSchema.extend({ authenticated: z.literal(true) }), {
+    ...sessionOptions, headers: { Authorization: `Bearer ${apiKey}` }, signal,
+  });
+}
+
+export function deleteKeyReportSession() {
+  return del("/api/key-reports/session", SessionSchema.extend({ authenticated: z.literal(false) }), sessionOptions);
+}
+
+export function getKeyReport(filters: KeyReportFilters, signal?: AbortSignal) {
   const params = new URLSearchParams({ start_date: filters.startDate, end_date: filters.endDate });
   if (filters.timezone) params.set("timezone", filters.timezone);
   if (filters.model.trim()) params.set("model", filters.model.trim());
-  return get(`/v1/usage/reports?${params}`, KeyReportsSchema, {
-    headers: { Authorization: `Bearer ${apiKey}` }, signal,
-    credentials: "omit", cache: "no-store", suppressUnauthorizedHandler: true,
-  });
+  return get(`/api/key-reports/reports?${params}`, KeyReportsSchema, { ...sessionOptions, signal });
 }

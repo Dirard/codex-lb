@@ -5,18 +5,18 @@ import { AlertMessage } from "@/components/alert-message";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getKeyReport, type KeyReportSession } from "@/features/key-reports/api";
-import { daysAgoLocalISO, getBrowserReportsTimeZone, localDateISO } from "@/features/reports/date";
+import { createKeyReportSession } from "@/features/key-reports/api";
 import { ApiError } from "@/lib/api-client";
 
 // Authenticate the selected key without creating an administrator session.
-export function KeyLoginForm({ initialError, onLogin }: {
+export function KeyLoginForm({ initialError, onLogin, busy, onBusyChange }: {
   initialError: string | null;
-  onLogin: (session: KeyReportSession) => void;
+  onLogin: () => void;
+  busy: boolean;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
   const pending = useRef<AbortController | null>(null);
   useEffect(() => () => pending.current?.abort(), []);
@@ -28,16 +28,18 @@ export function KeyLoginForm({ initialError, onLogin }: {
     pending.current?.abort();
     const controller = new AbortController();
     pending.current = controller;
-    setBusy(true);
+    onBusyChange(true);
     setError(null);
-    const filters = { startDate: daysAgoLocalISO(6), endDate: localDateISO(), timezone: getBrowserReportsTimeZone(), model: "" };
     try {
-      const report = await getKeyReport(apiKey, filters, controller.signal);
-      if (!controller.signal.aborted) onLogin({ apiKey, report, filters });
+      await createKeyReportSession(apiKey, controller.signal);
+      if (!controller.signal.aborted) {
+        setKey("");
+        onLogin();
+      }
     } catch (failure) {
       if (!controller.signal.aborted) setError(t(failure instanceof ApiError && failure.status === 401 ? "keyReports.invalidKey" : "keyReports.loadFailed"));
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) onBusyChange(false);
     }
   };
 

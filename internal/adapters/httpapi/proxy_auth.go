@@ -45,7 +45,9 @@ func authenticateProxyKey(r *http.Request, store ProxyRepository) (domain.APIKey
 }
 
 // authenticateBearerKey never substitutes a local or administrator principal.
-func authenticateBearerKey(r *http.Request, store ProxyRepository) (domain.APIKey, error) {
+func authenticateBearerKey(r *http.Request, store interface {
+	FindAPIKeyByHash(context.Context, string) (domain.APIKey, error)
+}) (domain.APIKey, error) {
 	values := r.Header.Values("Authorization")
 	if len(values) != 1 {
 		return domain.APIKey{}, invalidKey()

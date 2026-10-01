@@ -114,13 +114,32 @@ Unlimited. The separate credit-coverage count makes partial totals explicit;
 three of five accounts known. This does not change key budgets or perform credit
 purchases/redemptions. Individual account balances remain private.
 
-The browser keeps that credential and its report cache only for the current
-in-memory session. Sign out clears both and returns to the common login; refreshing
-the page requires signing in again. Revocation or expiry hides loaded reports on
-the next failed read. Switching sign-in methods clears the draft and cancels an
-unfinished key check, so a late response cannot log in under the abandoned key.
-No password or administrator cookie is issued. Serve remote installations over
-HTTPS; this page does not replace deployment TLS or administrator authentication.
+The browser sends the API key once to `POST /api/key-reports/session`. The server
+issues a separate encrypted HttpOnly, host-only, SameSite cookie restricted to
+`/api/key-reports`; neither JavaScript storage nor the cookie retains the original
+generation credential. `GET /api/key-reports/session` restores the login on reload,
+and `GET /api/key-reports/reports` returns the same scoped report as the bearer-only
+`/v1/usage/reports` API. For example, log in by key and press F5: the report returns
+without asking for the key again. The existing dashboard session lifetime applies
+(24 hours by default, with the existing remote cap for longer settings), never
+beyond the key's own expiry. Keep the data directory and encryption key across
+server updates; no process-local session table or database migration is needed.
+
+Sign out waits for `DELETE /api/key-reports/session` to clear the cookie before
+discarding the private query cache and returning to the common login. Revocation,
+deletion, regeneration or expiry of the API key hides reports on the next check.
+Network/server errors remain retryable and do not discard the session; a failed
+logout is not presented as successful. Changing sign-in methods clears abandoned
+drafts, and switching is disabled while session creation is pending. As with admin
+sessions, logout removes the browser cookie rather than maintaining a denylist of
+copied stateless grants; revoke/regenerate the key to invalidate every such grant.
+
+No password or administrator cookie is issued. The report cookie cannot authorize
+generation, bearer APIs or admin endpoints. CSRF protection applies to login and
+logout, and the proxy allowlist still protects login and report data. Status and
+logout remain available when the IP policy changes. Serve remote installations
+over HTTPS; Secure cookies follow the existing trusted-proxy policy. This page
+does not replace deployment TLS or administrator authentication.
 
 ## Routing and accounting
 

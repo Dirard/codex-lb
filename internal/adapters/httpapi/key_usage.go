@@ -46,7 +46,7 @@ func (h *KeyUsageHandler) ServeCodexKeyUsage(w http.ResponseWriter, r *http.Requ
 	}
 	usage, err := h.service.CodexUsage(r.Context(), key.ID)
 	if err != nil {
-		h.fail(w, err)
+		writeKeyUsageError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -60,7 +60,7 @@ func (h *KeyUsageHandler) ServeSelfUsage(w http.ResponseWriter, r *http.Request)
 	}
 	usage, err := h.service.SelfUsage(r.Context(), key.ID)
 	if err != nil {
-		h.fail(w, err)
+		writeKeyUsageError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -79,7 +79,7 @@ func (h *KeyUsageHandler) authenticate(w http.ResponseWriter, r *http.Request) (
 	return key, true
 }
 
-func (h *KeyUsageHandler) fail(w http.ResponseWriter, err error) {
+func writeKeyUsageError(w http.ResponseWriter, err error) {
 	if errors.Is(err, domain.ErrNotFound) {
 		err = invalidKey()
 	}

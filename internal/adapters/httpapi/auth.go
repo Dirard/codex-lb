@@ -78,12 +78,16 @@ func (s *Server) sessionTTL(r *http.Request) (time.Duration, error) {
 }
 
 func (s *Server) cookie(w http.ResponseWriter, r *http.Request, token string, seconds int) {
+	s.sessionCookie(w, r, sessionCookie, "/", token, seconds)
+}
+
+func (s *Server) sessionCookie(w http.ResponseWriter, r *http.Request, name, path, token string, seconds int) {
 	id := ResolveIdentity(r, s.config.TrustedProxies)
 	secure := r.TLS != nil
 	if id.TrustedPeer && id.IP.IsValid() && len(r.Header.Values("X-Forwarded-Proto")) == 1 {
 		secure = secure || r.Header.Get("X-Forwarded-Proto") == "https"
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: seconds})
+	http.SetCookie(w, &http.Cookie{Name: name, Value: token, Path: path, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: seconds})
 }
 
 func (s *Server) passwordSetup(w http.ResponseWriter, r *http.Request) {

@@ -180,6 +180,17 @@ func TestKeyReportsIsolationAuthorizationAndReadOnly(t *testing.T) {
 	if response := request("GET", "/v1/usage/reports", "synthetic-key-exhausted", ""); response.Code != 200 {
 		t.Fatal("exhausted generation limit blocked report read")
 	}
+	for _, id := range []string{"key-a", "key-b", "key-exhausted"} {
+		login := request("POST", "/api/key-reports/session", "synthetic-"+id, "")
+		if login.Code != 200 || len(login.Result().Cookies()) != 1 {
+			t.Fatal("valid/exhausted key could not create report session", id, login.Code)
+		}
+		browser := reportSessionRequest(handler, "GET", "/api/key-reports/reports", "", login.Result().Cookies()[0])
+		bearer := request("GET", "/v1/usage/reports", "synthetic-"+id, "")
+		if browser.Code != 200 || browser.Body.String() != bearer.Body.String() {
+			t.Fatal("browser session did not preserve bearer report isolation/limits", id, browser.Code)
+		}
+	}
 	internal := NewKeyUsageHandler(internalReportKeyStore{store})
 	r := httptest.NewRequest("GET", "/v1/usage/reports", nil)
 	r.Header.Set("Authorization", "Bearer synthetic-internal-token")
