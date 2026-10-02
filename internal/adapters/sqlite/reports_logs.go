@@ -8,16 +8,15 @@ import (
 	"codex-lb/internal/domain"
 )
 
-// Pending rows are a read projection, not usage events: held budget is never
-// presented as actual usage and ordinary live reservations remain invisible.
-const requestLogSource = `WITH log_entries AS (
- SELECT request_id,legacy_request_id,requested_at,account_id,api_key_id,plan_type,
+const requestLogColumns = `request_id,legacy_request_id,requested_at,account_id,api_key_id,plan_type,
  request_kind,model,source,model_source_id,transport,useragent,useragent_group,
  client_ip,conversation_id,service_tier,status,error_code,input_tokens,output_tokens,
  reasoning_tokens,reasoning_tokens_known,cached_input_tokens,reasoning_effort,
- cost_microdollars,total_latency_ms,latency_first_token_ms,queue_latency_ms
- FROM usage_events
- UNION ALL
+ cost_microdollars,total_latency_ms,latency_first_token_ms,queue_latency_ms`
+
+// Pending rows are a read projection, not usage events: held budget is never
+// presented as actual usage and ordinary live reservations remain invisible.
+const pendingRequestLogSource = `WITH pending_log_entries (` + requestLogColumns + `) AS (
  SELECT r.id,NULL,r.created_at,CASE WHEN EXISTS (SELECT 1 FROM account_deletions d
  WHERE d.account_id=r.account_id AND d.generation=r.account_generation) THEN NULL
  ELSE nullif(r.account_id,'') END,nullif(r.api_key_id,'` + domain.WarmupKeyID + `'),'',
@@ -95,6 +94,34 @@ func escapeLike(value string) string {
 	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
+func requestLogSources(filter domain.RequestLogFilter) (events, pending string, args []any) {
+	where, args := requestLogWhere(filter)
+	joins := ""
+	if filter.Search != "" {
+		joins = ` LEFT JOIN accounts a ON a.id=e.account_id LEFT JOIN api_keys k ON k.id=e.api_key_id`
+	}
+	if where != "1=1" {
+		joins += " WHERE " + where
+	}
+	return " FROM usage_events e" + joins, " FROM pending_log_entries e" + joins,
+		append(append([]any{}, args...), args...)
+}
+
+func requestLogPageSource(events, pending string) string {
+	// Merge the indexed identifiers first. Joining the full UNION before LIMIT
+	// makes SQLite scan and sort the entire history for every page.
+	return pendingRequestLogSource + `, log_page AS (
+ SELECT e.request_id,e.requested_at,0 AS pending` + events + `
+ UNION ALL SELECT e.request_id,e.requested_at,1` + pending + `
+ ORDER BY requested_at DESC,request_id DESC LIMIT ? OFFSET ?
+), log_entries AS (
+ SELECT ` + requestLogColumns + ` FROM usage_events
+ WHERE request_id IN (SELECT request_id FROM log_page WHERE pending=0)
+ UNION ALL SELECT * FROM pending_log_entries
+ WHERE request_id IN (SELECT request_id FROM log_page WHERE pending=1)
+) `
+}
+
 func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFilter) (domain.RequestLogsResponse, error) {
 	response := domain.RequestLogsResponse{Requests: []domain.RequestLogEntry{}}
 	if filter.Limit < 1 || filter.Limit > 1000 || filter.Offset < 0 {
@@ -105,11 +132,12 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 		return response, err
 	}
 	defer tx.Rollback()
-	where, args := requestLogWhere(filter)
+	events, pending, args := requestLogSources(filter)
 	joins := ` FROM log_entries e LEFT JOIN accounts a ON a.id=e.account_id
  LEFT JOIN api_keys k ON k.id=e.api_key_id
- LEFT JOIN legacy_model_sources ms ON ms.id=e.model_source_id WHERE ` + where
-	if err := tx.QueryRowContext(ctx, requestLogSource+`SELECT count(*)`+joins, args...).Scan(&response.Total); err != nil {
+ LEFT JOIN legacy_model_sources ms ON ms.id=e.model_source_id`
+	countQuery := pendingRequestLogSource + `SELECT (SELECT count(*)` + events + `)+(SELECT count(*)` + pending + `)`
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&response.Total); err != nil {
 		return response, err
 	}
 	query := `SELECT e.requested_at,e.account_id,nullif(coalesce(e.plan_type,a.plan_type),''),
@@ -118,9 +146,9 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
  e.client_ip,e.conversation_id,nullif(e.service_tier,''),e.status,nullif(e.error_code,''),
  e.input_tokens,e.output_tokens,e.reasoning_tokens,e.reasoning_tokens_known,
  e.cached_input_tokens,e.reasoning_effort,e.cost_microdollars,e.total_latency_ms,
- e.latency_first_token_ms,e.queue_latency_ms` + joins + ` ORDER BY e.requested_at DESC,e.request_id DESC LIMIT ? OFFSET ?`
+ e.latency_first_token_ms,e.queue_latency_ms` + joins + ` ORDER BY e.requested_at DESC,e.request_id DESC`
 	pageArgs := append(append([]any{}, args...), filter.Limit, filter.Offset)
-	rows, err := tx.QueryContext(ctx, requestLogSource+query, pageArgs...)
+	rows, err := tx.QueryContext(ctx, requestLogPageSource(events, pending)+query, pageArgs...)
 	if err != nil {
 		return response, err
 	}
@@ -187,16 +215,16 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	}
 	response.HasMore = int64(filter.Offset+len(response.Requests)) < response.Total
 	if filter.ConversationID != "" {
-		var count int64
 		var costMicro int64
-		if err := tx.QueryRowContext(ctx, requestLogSource+`SELECT count(*),coalesce(sum(e.cost_microdollars),0)`+joins, args...).
-			Scan(&count, &costMicro); err != nil {
+		costQuery := pendingRequestLogSource + `SELECT coalesce(sum(cost_microdollars),0) FROM (
+ SELECT e.cost_microdollars` + events + ` UNION ALL SELECT e.cost_microdollars` + pending + `)`
+		if err := tx.QueryRowContext(ctx, costQuery, args...).Scan(&costMicro); err != nil {
 			return response, err
 		}
 		response.Conversation = &struct {
 			RequestCount      int64   `json:"requestCount"`
 			AggregatedCostUSD float64 `json:"aggregatedCostUsd"`
-		}{count, float64(costMicro) / 1e6}
+		}{response.Total, float64(costMicro) / 1e6}
 	}
 	return response, nil
 }
@@ -217,10 +245,13 @@ func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogF
 	}
 	defer tx.Rollback()
 	filter.Statuses = nil // Status facet must not self-filter.
-	where, args := requestLogWhere(filter)
-	joins := ` FROM log_entries e LEFT JOIN accounts a ON a.id=e.account_id
- LEFT JOIN api_keys k ON k.id=e.api_key_id WHERE ` + where
-	rows, err := tx.QueryContext(ctx, requestLogSource+`SELECT DISTINCT e.account_id`+joins+` AND e.account_id IS NOT NULL ORDER BY e.account_id LIMIT 2000`, args...)
+	events, pending, args := requestLogSources(filter)
+	// UNION deduplicates only the facet columns; no full log rows or unrelated
+	// account/key lookups are needed to populate the filter controls.
+	accountQuery := pendingRequestLogSource + `SELECT account_id FROM (
+ SELECT DISTINCT e.account_id` + events + ` UNION SELECT DISTINCT e.account_id` + pending + `)
+ WHERE account_id IS NOT NULL ORDER BY account_id LIMIT 2000`
+	rows, err := tx.QueryContext(ctx, accountQuery, args...)
 	if err != nil {
 		return options, err
 	}
@@ -237,7 +268,9 @@ func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogF
 	if err != nil {
 		return options, err
 	}
-	rows, err = tx.QueryContext(ctx, requestLogSource+`SELECT DISTINCT e.model,e.reasoning_effort`+joins+` ORDER BY e.model,e.reasoning_effort LIMIT 2000`, args...)
+	modelQuery := pendingRequestLogSource + `SELECT DISTINCT e.model,e.reasoning_effort` + events + `
+ UNION SELECT DISTINCT e.model,e.reasoning_effort` + pending + ` ORDER BY model,reasoning_effort LIMIT 2000`
+	rows, err = tx.QueryContext(ctx, modelQuery, args...)
 	if err != nil {
 		return options, err
 	}
@@ -256,7 +289,10 @@ func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogF
 	if err != nil {
 		return options, err
 	}
-	rows, err = tx.QueryContext(ctx, requestLogSource+`SELECT DISTINCT k.id,k.name,k.key_prefix`+joins+` AND k.id IS NOT NULL ORDER BY k.name,k.id LIMIT 2000`, args...)
+	keyQuery := pendingRequestLogSource + `SELECT k.id,k.name,k.key_prefix FROM (
+ SELECT DISTINCT e.api_key_id` + events + ` UNION SELECT DISTINCT e.api_key_id` + pending + `) e
+ JOIN api_keys k ON k.id=e.api_key_id ORDER BY k.name,k.id LIMIT 2000`
+	rows, err = tx.QueryContext(ctx, keyQuery, args...)
 	if err != nil {
 		return options, err
 	}
@@ -275,7 +311,9 @@ func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogF
 	if err != nil {
 		return options, err
 	}
-	rows, err = tx.QueryContext(ctx, requestLogSource+`SELECT DISTINCT e.status`+joins+` ORDER BY e.status LIMIT 2000`, args...)
+	statusQuery := pendingRequestLogSource + `SELECT DISTINCT e.status` + events + `
+ UNION SELECT DISTINCT e.status` + pending + ` ORDER BY 1 LIMIT 2000`
+	rows, err = tx.QueryContext(ctx, statusQuery, args...)
 	if err != nil {
 		return options, err
 	}

@@ -152,6 +152,22 @@ func TestReportsRoutesAuthenticatedContentFree(t *testing.T) {
 	if strings.Contains(pending.Body.String(), "synthetic-pending-credential") || strings.Contains(pending.Body.String(), "synthetic-test-password") {
 		t.Fatal("pending report leaked credentials")
 	}
+	for _, test := range []struct {
+		path, id string
+		total    int64
+		hasMore  bool
+	}{
+		{"/api/request-logs?limit=1", "req-report", 2, true},
+		{"/api/request-logs/?limit=1&offset=1", "pending-request", 2, false},
+		{"/api/request-logs?limit=1&search=Pending%20key", "pending-request", 1, false},
+	} {
+		response := request(test.path, token)
+		var page domain.RequestLogsResponse
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &page) != nil || page.Total != test.total ||
+			page.HasMore != test.hasMore || len(page.Requests) != 1 || page.Requests[0].RequestID != test.id {
+			t.Fatalf("paginated route %s: %d %s", test.path, response.Code, response.Body.String())
+		}
+	}
 	weeklyMinutes := 10080
 	weeklyReset := now.Add(3 * 24 * time.Hour)
 	for i, used := range []float64{20, 60} {

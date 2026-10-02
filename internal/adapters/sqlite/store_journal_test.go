@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"codex-lb/internal/domain"
 )
 
 func TestStoreUsesDurableWALAcrossReopen(t *testing.T) {
@@ -71,6 +73,42 @@ func TestReadPoolDoesNotWaitForActiveWriterTransaction(t *testing.T) {
 	}
 	if after.Version != before.Version+1 {
 		t.Fatalf("committed version not visible: got %d want %d", after.Version, before.Version+1)
+	}
+}
+
+func TestUsageTotalsReadCommittedDataWithoutWaitingForWriter(t *testing.T) {
+	ctx := context.Background()
+	store, _ := testStore(t)
+	saveTestAccount(t, store, "reader-account")
+	if err := store.SaveAPIKey(ctx, testKey("reader-key", nil), fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "reader-reservation", APIKeyID: "reader-key",
+		AccountID: "reader-account", Model: "test-model", Now: fixedTime}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SettleUsage(ctx, "reader-reservation", domain.UsageSettlement{Status: "finalized", Event: domain.UsageEvent{RequestID: "reader-request", AccountID: "reader-account",
+		APIKeyID: "reader-key", Model: "test-model", RequestKind: "normal", Status: "success", RequestedAt: fixedTime,
+		Usage: domain.UsageAmount{InputTokens: 10, OutputTokens: 2, CostMicrodollars: 17}}}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "UPDATE usage_totals SET request_count=request_count+100"); err != nil {
+		t.Fatal(err)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	for _, scope := range []struct{ key, account string }{
+		{}, {key: "reader-key"}, {account: "reader-account"}, {key: "reader-key", account: "reader-account"},
+	} {
+		totals, err := store.UsageTotals(readCtx, scope.key, scope.account)
+		if err != nil || totals.RequestCount != 1 || totals.Usage.InputTokens != 10 || totals.Usage.CostMicrodollars != 17 {
+			t.Fatalf("scope=%+v totals=%+v error=%v", scope, totals, err)
+		}
 	}
 }
 

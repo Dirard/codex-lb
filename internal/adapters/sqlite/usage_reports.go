@@ -158,7 +158,7 @@ func (s *Store) UsageTotals(ctx context.Context, keyID, accountID string) (domai
 	query = `SELECT request_count,failed_count,input_tokens,output_tokens,cached_input_tokens,
  reasoning_tokens,cost_microdollars FROM usage_totals WHERE scope=? AND scope_id=?`
 	args = []any{scope, id}
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&totals.RequestCount, &totals.FailedCount,
+	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(&totals.RequestCount, &totals.FailedCount,
 		&totals.Usage.InputTokens, &totals.Usage.OutputTokens, &totals.Usage.CachedInputTokens,
 		&totals.Usage.ReasoningTokens, &totals.Usage.CostMicrodollars)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -172,8 +172,13 @@ func (s *Store) UsageTotals(ctx context.Context, keyID, accountID string) (domai
 
 func (s *Store) pairUsageTotals(ctx context.Context, keyID, accountID string) (domain.UsageTotals, error) {
 	var totals domain.UsageTotals
+	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return totals, err
+	}
+	defer tx.Rollback()
 	var watermark sql.NullInt64
-	err := s.db.QueryRowContext(ctx, "SELECT hourly_folded_through FROM legacy_import_state WHERE id=1").Scan(&watermark)
+	err = tx.QueryRowContext(ctx, "SELECT hourly_folded_through FROM legacy_import_state WHERE id=1").Scan(&watermark)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return totals, err
 	}
@@ -187,7 +192,7 @@ func (s *Store) pairUsageTotals(ctx context.Context, keyID, accountID string) (d
 		query += " AND (legacy_request_id IS NULL OR requested_at>=?)"
 		args = append(args, watermark.Int64)
 	}
-	err = s.db.QueryRowContext(ctx, query, args...).Scan(&totals.RequestCount, &totals.FailedCount,
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&totals.RequestCount, &totals.FailedCount,
 		&totals.Usage.InputTokens, &totals.Usage.OutputTokens, &totals.Usage.CachedInputTokens,
 		&totals.Usage.ReasoningTokens, &totals.Usage.CostMicrodollars)
 	if err != nil {
@@ -195,7 +200,7 @@ func (s *Store) pairUsageTotals(ctx context.Context, keyID, accountID string) (d
 	}
 	var folded domain.UsageTotals
 	var costUSD float64
-	err = s.db.QueryRowContext(ctx, `SELECT coalesce(sum(request_count),0),
+	err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(request_count),0),
  coalesce(sum(error_count+cancelled_count),0),coalesce(sum(input_tokens),0),
  coalesce(sum(output_or_reasoning_tokens),0),coalesce(sum(cached_input_tokens),0),
  coalesce(sum(reasoning_tokens),0),coalesce(sum(cost_usd),0)

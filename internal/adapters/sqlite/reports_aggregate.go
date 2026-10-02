@@ -92,9 +92,9 @@ func (s *Store) aggregateReportWindow(ctx context.Context, filter domain.ReportF
 
 func (s *Store) reportHasActivityBefore(ctx context.Context, filter domain.ReportFilter, before time.Time) (bool, error) {
 	facts, args := reportFacts(filter, time.Unix(0, 0), before)
-	var count int
-	err := s.readDB.QueryRowContext(ctx, facts+"SELECT count(*) FROM facts LIMIT 1", args...).Scan(&count)
-	return count > 0, err
+	var exists bool
+	err := s.readDB.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&exists)
+	return exists, err
 }
 
 func (s *Store) dailyReport(ctx context.Context, filter domain.ReportFilter, start, end time.Time, date string) (domain.DailyReportRow, error) {
