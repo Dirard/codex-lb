@@ -88,7 +88,7 @@ func TestKeyReportGroupQuotaWeightsScopeWindowsAndVisibility(t *testing.T) {
 		case "monthly":
 			want = 50
 		}
-		if math.Abs(window.UsedPercent-want) > 1e-9 || window.AccountCount != count {
+		if math.Abs(window.UsedPercent-want) > 1e-9 || window.AccountCount != count || window.NextResetAt == nil || !window.NextResetAt.Equal(reset) {
 			t.Fatalf("wrong capacity-weighted quota or duplicate account: %+v", window)
 		}
 	}
@@ -128,5 +128,65 @@ func TestKeyReportGroupQuotaWeightsScopeWindowsAndVisibility(t *testing.T) {
 	}
 	if read(fixedTime).Group.AccountQuota != nil {
 		t.Fatal("key visibility policy exposed hidden pool usage")
+	}
+}
+
+func TestKeyReportGroupQuotaNextResetIsScopedAndWindowSpecific(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	groupID := "reset-group"
+	for _, id := range []string{"early", "late", "unknown", "expired", "outside"} {
+		saveTestAccount(t, store, id)
+	}
+	if err := store.SaveGroup(ctx, domain.AccountGroup{ID: groupID, Name: "Reset group", AccountIDs: []string{"early", "late", "unknown", "expired"}}, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	key := testKey("reset-caller", &groupID)
+	key.UsageSections = "account_pool_usage"
+	if err := store.SaveAPIKey(ctx, key, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		id, window string
+		minutes    int
+		wait       time.Duration
+	}{
+		{"early", "primary", 300, 30 * time.Minute},
+		{"early", "secondary", 10080, 2 * time.Hour},
+		{"late", "secondary", 10080, 5 * time.Hour},
+		{"unknown", "secondary", 10080, 0},
+		{"expired", "secondary", 10080, -time.Minute},
+		{"outside", "secondary", 10080, time.Minute},
+	} {
+		var reset *time.Time
+		if entry.wait != 0 {
+			value := fixedTime.Add(entry.wait)
+			reset = &value
+		}
+		if err := store.SaveAccountQuota(ctx, domain.AccountQuota{AccountID: entry.id, Window: entry.window,
+			UsedPercent: 50, WindowMinutes: &entry.minutes, ResetAt: reset, ObservedAt: fixedTime}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(at time.Time) []domain.KeyReportGroupQuotaWindow {
+		t.Helper()
+		result, err := store.KeyReportLimits(ctx, key.ID, at)
+		if err != nil || result.Group == nil || result.Group.AccountQuota == nil {
+			t.Fatalf("report missing: %+v %v", result, err)
+		}
+		return result.Group.AccountQuota.Windows
+	}
+	windows := read(fixedTime)
+	if len(windows) != 2 || windows[0].NextResetAt == nil || !windows[0].NextResetAt.Equal(fixedTime.Add(30*time.Minute)) ||
+		windows[1].NextResetAt == nil || !windows[1].NextResetAt.Equal(fixedTime.Add(2*time.Hour)) || windows[1].AccountCount != 3 {
+		t.Fatalf("wrong per-window nearest reset or scope: %+v", windows)
+	}
+	windows = read(fixedTime.Add(3 * time.Hour))
+	if len(windows) != 1 || windows[0].NextResetAt == nil || !windows[0].NextResetAt.Equal(fixedTime.Add(5*time.Hour)) {
+		t.Fatalf("expired earliest reset was retained: %+v", windows)
+	}
+	windows = read(fixedTime.Add(6 * time.Hour))
+	if len(windows) != 1 || windows[0].NextResetAt != nil || windows[0].AccountCount != 1 {
+		t.Fatalf("missing reset time was invented: %+v", windows)
 	}
 }

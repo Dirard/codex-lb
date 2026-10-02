@@ -1,4 +1,9 @@
 import type { LimitRuleCreate } from "@/features/api-keys/schemas";
+import { formatCompactNumber } from "@/utils/formatters";
+
+export function formatKeyLimitValue(value: number, type: LimitRuleCreate["limitType"]) {
+  return type === "cost_usd" ? `$${(value / 1_000_000).toFixed(2)}` : formatCompactNumber(value);
+}
 
 type NormalizedLimitRule = {
   limitType: LimitRuleCreate["limitType"];

@@ -114,9 +114,10 @@ type KeyReportGroupQuota struct {
 }
 
 type KeyReportGroupQuotaWindow struct {
-	Window       string  `json:"window"`
-	UsedPercent  float64 `json:"usedPercent"`
-	AccountCount int     `json:"accountCount"`
+	Window       string     `json:"window"`
+	UsedPercent  float64    `json:"usedPercent"`
+	AccountCount int        `json:"accountCount"`
+	NextResetAt  *time.Time `json:"nextResetAt"`
 }
 
 // KeyReportGroupKey is the safe subset for same-group limit summaries, not an

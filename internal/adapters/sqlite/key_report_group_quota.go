@@ -28,6 +28,7 @@ func keyReportGroupQuotaTx(ctx context.Context, tx *sql.Tx, keyID string, now ti
 	type total struct {
 		used, capacity float64
 		accounts       int
+		nextResetAt    *time.Time
 	}
 	totals := map[string]total{}
 	var lastID, plan string
@@ -44,6 +45,9 @@ func keyReportGroupQuotaTx(ctx context.Context, tx *sql.Tx, keyID string, now ti
 		summary.capacity += *capacity
 		summary.used += *capacity * max(0, min(100, quota.UsedPercent)) / 100
 		summary.accounts++
+		if quota.ResetAt != nil && (summary.nextResetAt == nil || quota.ResetAt.Before(*summary.nextResetAt)) {
+			summary.nextResetAt = quota.ResetAt
+		}
 		totals[window] = summary
 	}
 	flush := func() {
@@ -101,7 +105,7 @@ func keyReportGroupQuotaTx(ctx context.Context, tx *sql.Tx, keyID string, now ti
 		summary := totals[window]
 		if summary.capacity > 0 {
 			result.Windows = append(result.Windows, domain.KeyReportGroupQuotaWindow{
-				Window: window, UsedPercent: summary.used / summary.capacity * 100, AccountCount: summary.accounts})
+				Window: window, UsedPercent: summary.used / summary.capacity * 100, AccountCount: summary.accounts, NextResetAt: summary.nextResetAt})
 		}
 	}
 	return result, nil

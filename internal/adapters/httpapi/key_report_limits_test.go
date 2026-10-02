@@ -100,7 +100,8 @@ func TestKeyReportGroupLimitsAreScopedAndLive(t *testing.T) {
 			t.Fatalf("own/group limits: status=%d report=%+v", rec.Code, report.KeyReportLimitSummary)
 		}
 		if quota := report.Group.AccountQuota; quota == nil || quota.AccountCount != 1 || len(quota.Windows) != 1 || quota.Windows[0].UsedPercent != 40 ||
-			quota.PurchasedCredits == nil || *quota.PurchasedCredits != 15.5 || quota.CreditsKnownAccountCount != 1 {
+			quota.PurchasedCredits == nil || *quota.PurchasedCredits != 15.5 || quota.CreditsKnownAccountCount != 1 ||
+			quota.Windows[0].NextResetAt == nil || quota.Windows[0].NextResetAt.UnixMilli() != reset.UnixMilli() {
 			t.Fatalf("group account aggregate missing in HTTP report: %+v", quota)
 		}
 		for _, key := range report.Group.Keys {

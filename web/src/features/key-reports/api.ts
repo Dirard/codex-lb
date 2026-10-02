@@ -16,6 +16,7 @@ export const KeyReportsSchema = ReportsResponseSchema.omit({ byAccount: true }).
         window: z.enum(["primary", "secondary", "monthly"]),
         usedPercent: z.number().min(0).max(100),
         accountCount: z.number().int().positive(),
+        nextResetAt: z.iso.datetime({ offset: true }).nullable().optional(),
       })),
     }).nullable().default(null),
     keys: z.array(ApiKeySchema.pick({ id: true, name: true, isActive: true, expiresAt: true, limits: true })
