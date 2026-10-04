@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
-	"time"
 
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
@@ -40,21 +39,22 @@ type Config struct {
 }
 
 type Server struct {
-	store        Repository
-	auth         *application.AdminAuth
-	cipher       application.SecretCipher
-	config       Config
-	logger       *slog.Logger
-	accounts     *application.AccountsService
-	usage        *application.AccountUsageService
-	automations  *application.AutomationsService
-	warmups      *application.WarmupService
-	catalog      *application.ModelCatalogService
-	modelPricing *ModelPricingHandler
-	firewall     *application.Firewall
-	archives     *application.ErrorArchives
-	archiveRepo  application.ErrorArchiveRepository
-	accountsOnce sync.Once
+	store          Repository
+	auth           *application.AdminAuth
+	cipher         application.SecretCipher
+	config         Config
+	logger         *slog.Logger
+	accounts       *application.AccountsService
+	usage          *application.AccountUsageService
+	automations    *application.AutomationsService
+	warmups        *application.WarmupService
+	catalog        *application.ModelCatalogService
+	modelPricing   *ModelPricingHandler
+	firewall       *application.Firewall
+	archives       *application.ErrorArchives
+	archiveRepo    application.ErrorArchiveRepository
+	runtimeUpdates application.RuntimeUpdater
+	accountsOnce   sync.Once
 }
 
 func New(store Repository, cipher application.SecretCipher, config Config, logger *slog.Logger) *Server {
@@ -80,6 +80,11 @@ func (s *Server) ConfigureModelPricing(store application.ModelPricingStore) {
 	s.modelPricing = NewModelPricingHandler(store)
 }
 
+// ConfigureRuntimeUpdater supplies the managed runtime controller before Handler is built.
+func (s *Server) ConfigureRuntimeUpdater(updater application.RuntimeUpdater) {
+	s.runtimeUpdates = updater
+}
+
 // Handler composes the admin API with the already-wired proxy and embedded UI.
 // Missing transports are not silently replaced with successful stub responses.
 func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
@@ -102,16 +107,7 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 	if s.firewall != nil {
 		s.registerFirewallRoutes(admin)
 	}
-	admin.HandleFunc("GET /api/runtime/version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, struct {
-			CurrentVersion  string    `json:"currentVersion"`
-			LatestVersion   *string   `json:"latestVersion"`
-			UpdateAvailable bool      `json:"updateAvailable"`
-			CheckedAt       time.Time `json:"checkedAt"`
-			Source          *string   `json:"source"`
-			ReleaseURL      string    `json:"releaseUrl"`
-		}{CurrentVersion: s.config.Version, CheckedAt: time.Now().UTC(), ReleaseURL: "https://github.com/Dirard/codex-lb/releases"})
-	})
+	s.registerRuntimeUpdateRoutes(admin)
 	if s.accounts != nil {
 		s.registerAccountRoutes(admin)
 	}

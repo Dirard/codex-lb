@@ -39,6 +39,7 @@ type runtime struct {
 	backgroundCtx  context.Context
 	stopBackground context.CancelFunc
 	background     sync.WaitGroup
+	onServing      func()
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
@@ -115,6 +116,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		return modelPricing.ResolveCodex(ctx, model)
 	}
 	api := httpapi.New(data.store, data.vault, httpapi.Config{TrustedProxies: cfg.trusted, BootstrapToken: cfg.bootstrapToken, Version: version, ConnectAddress: cfg.connectAddress, DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader, UnauthenticatedClientCIDRs: cfg.unauthenticatedClients}, logger)
+	api.ConfigureRuntimeUpdater(cfg.updater)
 	api.ConfigureAccounts(accounts)
 	api.ConfigureFirewall(firewall)
 	api.ConfigureErrorArchives(data.store)
@@ -196,7 +198,12 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 	go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
 	go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
 	served := make(chan error, 1)
-	go func() { served <- r.server.Serve(listener) }()
+	go func() {
+		if r.onServing != nil {
+			r.onServing()
+		}
+		served <- r.server.Serve(listener)
+	}()
 	r.logger.Info("codex-lb ready", "address", listener.Addr().String(), "version", version)
 	var serveErr error
 	select {

@@ -96,6 +96,8 @@ describe("key report portal", () => {
       ? data : report("only-key-b-model", 0)));
     openPage();
     const user = await signIn("synthetic-key-a");
+    expect(screen.queryByRole("heading", { name: "Runtime updates" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check for updates" })).not.toBeInTheDocument();
     const personal = await screen.findByRole("region", { name: "Personal limits" });
     expect(within(personal).getByText("$2.50 / $10.00")).toBeInTheDocument();
     const group = screen.getByText("Group keys: Team A").closest("details")!;

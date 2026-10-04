@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,8 @@ func TestFetchUsageParsesWindowsAndSendsHeaders(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"plan_type": "team", "workspace_id": "org-1", "seat_type": "Owner-Admin",
 			"rate_limit": map[string]any{
+				"allowed":          true,
+				"limit_reached":    false,
 				"primary_window":   map[string]any{"used_percent": 42.5, "reset_at": 1900000000, "limit_window_seconds": 300},
 				"secondary_window": map[string]any{"used_percent": 250.0},
 			},
@@ -56,8 +59,50 @@ func TestFetchUsageParsesWindowsAndSendsHeaders(t *testing.T) {
 	if snapshot.Credits.Has == nil || !*snapshot.Credits.Has || snapshot.ResetCreditCount == nil || *snapshot.ResetCreditCount != 2 {
 		t.Fatalf("credits = %+v reset %+v", snapshot.Credits, snapshot.ResetCreditCount)
 	}
+	if snapshot.RateLimitAllowed == nil || !*snapshot.RateLimitAllowed || snapshot.RateLimitReached == nil || *snapshot.RateLimitReached {
+		t.Fatalf("rate-limit permission = %+v", snapshot)
+	}
 	if len(snapshot.AdditionalQuotas) != 1 || snapshot.AdditionalQuotas[0].LimitName != "Copilot code" || snapshot.AdditionalQuotas[0].Primary == nil {
 		t.Fatalf("additional = %+v", snapshot.AdditionalQuotas)
+	}
+}
+
+func TestFetchUsagePreservesOptionalRateLimitPermission(t *testing.T) {
+	for _, test := range []struct {
+		name                     string
+		body                     string
+		wantAllowed, wantReached string
+	}{
+		{"denied", `{"rate_limit":{"allowed":false,"limit_reached":true}}`, "false", "true"},
+		{"missing", `{"rate_limit":{}}`, "", ""},
+		{"absent", `{}`, "", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			client := NewUsageClient(UsageConfig{BaseURL: server.URL, HTTPClient: server.Client()})
+			snapshot, err := client.FetchUsage(context.Background(), "token", "account")
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func(name, want string, value *bool) {
+				t.Helper()
+				switch want {
+				case "":
+					if value != nil {
+						t.Fatalf("%s = %v, want absent", name, *value)
+					}
+				default:
+					if value == nil || fmt.Sprint(*value) != want {
+						t.Fatalf("%s = %v, want %s", name, value, want)
+					}
+				}
+			}
+			check("allowed", test.wantAllowed, snapshot.RateLimitAllowed)
+			check("limit reached", test.wantReached, snapshot.RateLimitReached)
+		})
 	}
 }
 

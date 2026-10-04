@@ -184,6 +184,8 @@ type additionalRateLimitPayload struct {
 }
 
 type rateLimitPayload struct {
+	Allowed         *bool               `json:"allowed"`
+	LimitReached    *bool               `json:"limit_reached"`
 	PrimaryWindow   *usageWindowPayload `json:"primary_window"`
 	SecondaryWindow *usageWindowPayload `json:"secondary_window"`
 }
@@ -207,6 +209,7 @@ func (p usagePayload) snapshot() application.UsageSnapshot {
 		WorkspaceLabel: p.WorkspaceLabel, SeatType: p.SeatType,
 	}
 	if p.RateLimit != nil {
+		snapshot.RateLimitAllowed, snapshot.RateLimitReached = p.RateLimit.Allowed, p.RateLimit.LimitReached
 		snapshot.Primary, snapshot.Secondary = usageWindow(p.RateLimit.PrimaryWindow), usageWindow(p.RateLimit.SecondaryWindow)
 		// Upstream can put a lone weekly allowance in primary_window.
 		if snapshot.Primary != nil && snapshot.Secondary == nil && p.RateLimit.PrimaryWindow.LimitWindowSeconds != nil &&

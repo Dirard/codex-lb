@@ -22,6 +22,17 @@ func quotaBlockedStatus(status domain.AccountStatus) bool {
 	return status == domain.AccountRateLimited || status == domain.AccountQuotaExceeded
 }
 
+func rateLimitPermission(snapshot UsageSnapshot) (allowed, denied bool) {
+	if snapshot.RateLimitAllowed != nil && !*snapshot.RateLimitAllowed {
+		denied = true
+	}
+	if snapshot.RateLimitReached != nil && *snapshot.RateLimitReached {
+		denied = true
+	}
+	return !denied && snapshot.RateLimitAllowed != nil && *snapshot.RateLimitAllowed &&
+		snapshot.RateLimitReached != nil && !*snapshot.RateLimitReached, denied
+}
+
 func quotaResetAvailable(before, after []domain.AccountQuota, started, observed time.Time) bool {
 	current := make(map[string]domain.AccountQuota, len(after))
 	for _, quota := range after {

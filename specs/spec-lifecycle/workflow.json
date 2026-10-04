@@ -1,10 +1,10 @@
 {
   "validation": {
     "enabled": true,
-    "python": null,
+    "python": ".local/spec-validator/bin/python",
     "installation": {
-      "decision": "ask",
-      "requirements_sha256": null
+      "decision": "approved",
+      "requirements_sha256": "8f0178d56606da7f08792df3b6caad0f0ffda5242204c541ee9b24bae6369a84"
     }
   }
 }

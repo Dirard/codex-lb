@@ -69,6 +69,7 @@ const EXPECTED_ENDPOINTS = [
 	"GET /api/settings",
 	"PUT /api/settings",
 	"GET /api/settings/runtime/connect-address",
+	"GET /api/runtime/updates",
 	"GET /api/sticky-sessions",
 	"POST /api/sticky-sessions/delete",
 	"POST /api/sticky-sessions/delete-filtered",

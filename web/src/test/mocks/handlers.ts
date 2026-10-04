@@ -760,6 +760,20 @@ export const handlers = [
     });
   }),
 
+  http.get("/api/runtime/updates", () => {
+    return HttpResponse.json({
+      currentVersion: "go-v1.19.0",
+      updateAvailable: false,
+      checkedAt: null,
+      source: "",
+      releaseUrl: "https://github.com/Dirard/codex-lb/releases",
+      supported: false,
+      unavailableReason: "This installation is not managed by the runtime updater",
+      canRollback: false,
+      phase: "idle",
+    });
+  }),
+
   http.get("/api/dashboard/overview", () => {
     return HttpResponse.json(
       createDashboardOverview({

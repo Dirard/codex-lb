@@ -51,6 +51,8 @@ type UsageSnapshot struct {
 	WorkspaceID      string
 	WorkspaceLabel   string
 	SeatType         string
+	RateLimitAllowed *bool
+	RateLimitReached *bool
 	Primary          *UsageWindow
 	Secondary        *UsageWindow
 	Monthly          *UsageWindow
@@ -238,12 +240,17 @@ func (s *AccountUsageService) refreshAccountUsage(ctx context.Context, accountID
 	if !accountPlanTypes[reportedPlan] {
 		reportedPlan = ""
 	}
+	windowsAvailable := quotaWindowsAvailable(before, after, refreshStarted)
+	replaceQuotas := completeQuotas && len(after) > 0
+	if canRecover && !windowsAvailable {
+		replaceQuotas = false
+	}
 	stored := domain.AccountUsageSnapshot{AccountID: account.ID, ObservedAt: observedAt,
 		FetchStartedAt: refreshStarted, ExpectedAccount: &account, ExpectedCredential: &credential,
 		ReportedPlanType:       reportedPlan,
 		ReportedWorkspaceID:    strings.TrimSpace(snapshot.WorkspaceID),
 		ReportedWorkspaceLabel: strings.TrimSpace(snapshot.WorkspaceLabel), ReportedSeatType: strings.TrimSpace(snapshot.SeatType),
-		Quotas: after, ReplaceQuotaWindows: completeQuotas && len(after) > 0,
+		Quotas: after, ReplaceQuotaWindows: replaceQuotas,
 		AdditionalReported: snapshot.AdditionalQuotas != nil}
 	if snapshot.Credits.Has != nil || snapshot.Credits.Unlimited != nil || snapshot.Credits.Balance != nil {
 		credit := &domain.AccountCreditStatus{AccountID: account.ID, Has: snapshot.Credits.Has,
@@ -267,7 +274,9 @@ func (s *AccountUsageService) refreshAccountUsage(ctx context.Context, accountID
 	s.mu.Lock()
 	s.usageSeen[accountGenerationKey{accountID: account.ID, generation: account.Generation}] = snapshot
 	s.mu.Unlock()
-	if canRecover && quotaResetAvailable(before, after, refreshStarted, observedAt) {
+	permission, denied := rateLimitPermission(snapshot)
+	if canRecover && !denied && completeQuotas &&
+		(quotaResetAvailable(before, after, refreshStarted, observedAt) || permission && windowsAvailable) {
 		if _, err := s.quotaRecovery.RecoverAccountQuota(ctx, accountID, outcomeVersion, account.Generation); err != nil {
 			return nil, nil, err
 		}

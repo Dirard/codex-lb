@@ -191,6 +191,18 @@ an owned conversation. Safe quota failover requires sufficient reconstructible
 history and must not transfer account-bound files or upstream continuation IDs.
 An ambiguous already-executed call is not silently retried.
 
+Provider-side quota resets need not change the reset deadline. Ordinary usage
+refresh also recognizes the explicit nested backend pair `rate_limit.allowed=true`
+and `limit_reached=false`, provided every governing window is complete and below
+100% used. This recovers both legacy blocks without refusal timestamps and accounts
+whose restored percentages were already saved by earlier polls. Percentages alone
+are not that proof; absent flags preserve the natural-reset path, while explicit
+denial prevents ordinary recovery. Newer provider outcomes and operator policy
+still win through the existing generation/outcome conditional write. For example,
+a blocked weekly account at zero used with an unchanged future reset deadline
+becomes active on its next accepted available snapshot, without a paid probe or
+another reset-credit redemption. Purchased-credit admission rules are unchanged.
+
 Dashboard account cards show subscription and purchased credits separately.
 Subscription credits are the existing plan-based estimate for the observed
 primary, weekly or monthly window; they are not the purchased balance. Unknown

@@ -1,8 +1,9 @@
-// codex-lb is a single-process proxy with an embedded administration UI.
+// codex-lb is a single-binary proxy with an embedded administration UI.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +20,7 @@ var version = "go-dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr, true); err != nil {
 		// Underlying provider/database errors can contain secrets. Runtime errors
 		// carry safe context; do not print arbitrary wrapped error strings.
 		fmt.Fprintln(os.Stderr, err)
@@ -27,7 +28,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, managed ...bool) error {
 	command := "serve"
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		command, args = args[0], args[1:]
@@ -35,6 +36,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if command == "version" && len(args) == 0 {
 		_, err := fmt.Fprintln(stdout, version)
 		return err
+	}
+	if command == "update-info" && len(args) == 0 {
+		return json.NewEncoder(stdout).Encode(runtimeDescriptor())
 	}
 	if command != "serve" && command != "import-legacy" && command != "reconcile-usage" {
 		return errors.New("expected serve, import-legacy, reconcile-usage, or version")
@@ -53,6 +57,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return reconcileUsage(ctx, cfg, stdout)
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	if os.Getenv(workerSocketEnv) != "" || os.Getenv(controlTokenEnv) != "" {
+		return serveUpdateWorker(ctx, cfg, logger)
+	}
+	if len(managed) > 0 && managed[0] && cfg.selfUpdate {
+		return serveManagedRuntime(ctx, cfg, args, stdout, stderr, logger)
+	}
 	runtime, err := openRuntime(ctx, cfg, logger)
 	if err != nil {
 		return err

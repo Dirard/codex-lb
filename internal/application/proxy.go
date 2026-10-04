@@ -70,6 +70,7 @@ type Proxy struct {
 	admitted            chan struct{}
 	admissionMu         sync.Mutex
 	draining            chan struct{}
+	stopping            bool
 	nextAccount         atomic.Uint64
 	selectionMu         sync.Mutex
 	lastSelected        map[string]uint64
@@ -504,8 +505,11 @@ func (p *Proxy) dispatch(ctx context.Context, target ResponseTarget, body json.R
 }
 
 func (p *Proxy) acquire(ctx context.Context) (func(), error) {
+	p.admissionMu.Lock()
+	draining := p.draining
+	p.admissionMu.Unlock()
 	select {
-	case <-p.draining:
+	case <-draining:
 		return nil, drainingError()
 	default:
 	}
@@ -521,14 +525,14 @@ func (p *Proxy) acquire(ctx context.Context) (func(), error) {
 		p.admissionMu.Lock()
 		defer p.admissionMu.Unlock()
 		select {
-		case <-p.draining:
+		case <-draining:
 			<-p.streams
 			<-p.admitted
 			return nil, drainingError()
 		default:
 		}
 		return func() { <-p.streams; <-p.admitted }, nil
-	case <-p.draining:
+	case <-draining:
 		<-p.admitted
 		return nil, drainingError()
 	case <-ctx.Done():
@@ -545,6 +549,7 @@ func (p *Proxy) acquire(ctx context.Context) (func(), error) {
 func (p *Proxy) BeginDrain() {
 	p.admissionMu.Lock()
 	defer p.admissionMu.Unlock()
+	p.stopping = true
 	select {
 	case <-p.draining:
 	default:
@@ -552,7 +557,48 @@ func (p *Proxy) BeginDrain() {
 	}
 }
 
-func (p *Proxy) DrainStarted() <-chan struct{} { return p.draining }
+// TryBeginIdleDrain closes admission only when no work owns a stream lease.
+// A concurrent acquire either owns its lease first or observes the closed gate.
+func (p *Proxy) TryBeginIdleDrain() bool {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	if p.stopping {
+		return false
+	}
+	select {
+	case <-p.draining:
+		return false
+	default:
+	}
+	if len(p.streams) != 0 {
+		return false
+	}
+	close(p.draining)
+	return true
+}
+
+// ResumeAfterIdleDrain reopens admission only for a cancelled update switch.
+// Callers already waiting on the closed channel still retry on a new request.
+func (p *Proxy) ResumeAfterIdleDrain() bool {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	if p.stopping {
+		return false
+	}
+	select {
+	case <-p.draining:
+		p.draining = make(chan struct{})
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Proxy) DrainStarted() <-chan struct{} {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	return p.draining
+}
 
 func drainingError() error {
 	return &ProxyError{Code: "server_draining", Status: 503, Message: "Server is shutting down; retry on the replacement server"}

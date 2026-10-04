@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/httpapi"
+	"codex-lb/internal/application"
 )
 
 type config struct {
@@ -25,6 +26,8 @@ type config struct {
 	connectAddress                            string
 	reservation, settlement, afterReservation string
 	releaseReservation                        bool
+	selfUpdate                                bool
+	updater                                   application.RuntimeUpdater
 }
 
 func parseConfig(command string, args []string, output io.Writer) (config, error) {
@@ -33,6 +36,7 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 	flags.SetOutput(output)
 	flags.StringVar(&cfg.dataDir, "data-dir", cfg.dataDir, "absolute private data directory (CODEX_LB_DATA_DIR)")
 	if command == "serve" {
+		flags.BoolVar(&cfg.selfUpdate, "self-update", true, "enable the built-in version manager; no external service-manager access")
 		cfg.connectAddress = strings.TrimSpace(os.Getenv("CODEX_LB_CONNECT_ADDRESS"))
 		flags.StringVar(&cfg.authMode, "dashboard-auth-mode", "standard", "standard, trusted_header, or explicitly disabled authentication")
 		flags.StringVar(&cfg.authHeader, "dashboard-auth-header", "X-Auth-Request-Email", "identity header supplied by a configured trusted reverse proxy")
