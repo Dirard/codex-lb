@@ -112,6 +112,46 @@ func advanceReset(reset int64, now time.Time, duration time.Duration) int64 {
 	return reset + ((millis(now)-reset)/step+1)*step
 }
 
+func resetAPIKeyUsageTx(ctx context.Context, tx *sql.Tx, id string, now time.Time) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id,limit_window,reset_at FROM api_key_limits
+ WHERE api_key_id=? AND is_active=1`, id)
+	if err != nil {
+		return err
+	}
+	type limit struct {
+		id, reset int64
+		window    domain.LimitWindow
+	}
+	var limits []limit
+	for rows.Next() {
+		var l limit
+		if err := rows.Scan(&l.id, &l.window, &l.reset); err != nil {
+			rows.Close()
+			return err
+		}
+		limits = append(limits, l)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, l := range limits {
+		duration, err := l.window.Duration()
+		if err != nil {
+			return err
+		}
+		// reset_at also identifies the reservation epoch. Repeated resets within
+		// one clock tick must never reuse an old epoch and charge its late usage.
+		reset := max(millis(now.Add(duration)), l.reset+1)
+		if _, err := tx.ExecContext(ctx, `UPDATE api_key_limits SET current_value=0,reset_at=?,
+ backfill_from=NULL,backfill_until=NULL WHERE id=?`, reset, l.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func backfillLimitTx(ctx context.Context, tx *sql.Tx, keyID string, rule domain.LimitRule, start, end time.Time) (int64, error) {
 	column := "0"
 	switch rule.Type {

@@ -166,6 +166,25 @@ Successful logout SHALL delete the report cookie, cancel outstanding reads, clea
 - **WHEN** a cross-origin browser request attempts session creation or logout
 - **THEN** it is rejected
 
+### Requirement: Administrators can reset a group's key accounting periods
+
+An authenticated administrator SHALL be able to reset group usage through `POST /api/account-groups/{id}/reset-usage` and its trailing-slash equivalent. The reset SHALL atomically clear current usage and restart every active limit window for all current non-deleted, non-internal keys in that group, including disabled keys. It MUST NOT alter historical requests, group membership, limit configuration, provider quotas or purchased credits. Existing reservations SHALL remain settleable against their original window without charging a newly reset window. Repeated resets within one clock tick MUST NOT reuse a prior reservation window identifier. An existing empty group SHALL succeed without side effects; an unknown group SHALL return not found. The administrator UI SHALL require confirmation, prevent duplicate submission while pending, show retryable failures and refresh displayed group/key usage after success. Key-report authentication MUST NOT authorize this mutation.
+
+#### Scenario: Reset a group while prior requests remain unsettled
+- **WHEN** the administrator confirms Reset period for a group with active and disabled member keys
+- **THEN** all those keys' active limit counters are reset together and new reset boundaries are shown
+- **AND** later settlement of a pre-reset request preserves its historical usage without charging the new windows
+- **AND** other groups, deleted/internal keys and upstream balances remain unchanged
+
+### Requirement: Group membership and model-source assignment are independent scopes
+
+For a grouped API key, group membership SHALL restrict ChatGPT accounts while external accounts SHALL follow the key's model-source assignment scope. All model sources SHALL permit otherwise eligible sources independently of ChatGPT group membership; an explicit closed source scope MUST NOT grant access. The same scope rules SHALL apply to catalog visibility, initial selection, established-owner authorization and usage reservation. An empty ChatGPT group MUST NOT grant access to other ChatGPT accounts and MUST NOT suppress a separately permitted external source. Existing model restrictions, credentials, account status, egress restrictions, provider ownership and independent per-key limits SHALL remain enforced.
+
+#### Scenario: Grouped key uses an external model source
+- **WHEN** a key belongs to a ChatGPT-account group and permits an enabled external source and its model
+- **THEN** the source model is available in the server catalog and its request may use that source without adding it to the ChatGPT group
+- **AND** unrelated ChatGPT accounts and explicitly denied sources remain unavailable
+
 ### Requirement: Account cards can assign multiple groups atomically
 
 The administrator SHALL be able to select multiple groups in an account card and save the membership set once. The authenticated write endpoint SHALL require an explicit group ID array with at most 1000 entries, accept an empty array to remove memberships and reject missing/null, duplicate, empty or unknown identifiers. The existing live account and every target group SHALL be validated before committing all membership changes in one transaction. Updates MUST NOT modify other accounts' memberships, group limits, group-to-key bindings, key consumption or reservations. The account card SHALL distinguish loading/error from empty membership, prevent writes while read-only/busy and reset unsaved selections when switching accounts. Failed saves SHALL keep the editable draft without unhandled rejections; successful saves SHALL return to the current server-backed membership state.

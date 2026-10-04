@@ -1,4 +1,4 @@
-import { Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Pencil, Plus, RotateCcw, Trash2, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AlertMessage } from "@/components/alert-message";
@@ -40,17 +40,19 @@ function formatGroupLimits(
 
 export function AccountGroupsSection({ disabled = false }: AccountGroupsSectionProps) {
   const { t } = useTranslation();
-  const { groupsQuery, createMutation, updateMutation, deleteMutation } = useAccountGroups();
+  const { groupsQuery, createMutation, updateMutation, deleteMutation, resetUsageMutation } = useAccountGroups();
   const createDialog = useDialogState();
   const editDialog = useDialogState<AccountGroup>();
   const deleteDialog = useDialogState<AccountGroup>();
+  const resetDialog = useDialogState<AccountGroup>();
   const groups = groupsQuery.data ?? [];
   const busy =
     disabled ||
     groupsQuery.isFetching ||
     createMutation.isPending ||
     updateMutation.isPending ||
-    deleteMutation.isPending;
+    deleteMutation.isPending ||
+    resetUsageMutation.isPending;
   const error =
     getErrorMessageOrNull(groupsQuery.error) ||
     getErrorMessageOrNull(createMutation.error) ||
@@ -117,6 +119,20 @@ export function AccountGroupsSection({ disabled = false }: AccountGroupsSectionP
                 <div className="flex shrink-0 items-center gap-2">
                   <Button
                     type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || group.keyCount === 0 || group.limits.length === 0}
+                    aria-label={t("accountGroups.actions.resetAria", { name: group.name })}
+                    onClick={() => {
+                      resetUsageMutation.reset();
+                      resetDialog.show(group);
+                    }}
+                  >
+                    <RotateCcw className="size-4" aria-hidden="true" />
+                    {t("accountGroups.actions.resetPeriod")}
+                  </Button>
+                  <Button
+                    type="button"
                     size="icon-sm"
                     variant="ghost"
                     disabled={busy}
@@ -167,6 +183,25 @@ export function AccountGroupsSection({ disabled = false }: AccountGroupsSectionP
           editDialog.data ? updateGroup(editDialog.data.id, payload) : Promise.resolve()
         }
       />
+
+      <ConfirmDialog
+        open={resetDialog.open}
+        title={t("accountGroups.resetDialog.title")}
+        description={t("accountGroups.resetDialog.description", { name: resetDialog.data?.name ?? "" })}
+        confirmLabel={t("accountGroups.actions.resetPeriod")}
+        confirmDisabled={resetUsageMutation.isPending}
+        cancelDisabled={resetUsageMutation.isPending}
+        keepOpenOnConfirm
+        onOpenChange={(open) => {
+          if (!resetUsageMutation.isPending) resetDialog.onOpenChange(open);
+        }}
+        onConfirm={() => {
+          if (!resetDialog.data || resetUsageMutation.isPending) return;
+          resetUsageMutation.mutate(resetDialog.data.id, { onSuccess: () => resetDialog.hide() });
+        }}
+      >
+        {resetUsageMutation.error ? <AlertMessage variant="error">{getErrorMessageOrNull(resetUsageMutation.error)}</AlertMessage> : null}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={deleteDialog.open}

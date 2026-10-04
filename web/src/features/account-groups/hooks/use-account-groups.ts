@@ -6,6 +6,7 @@ import {
   createAccountGroup,
   deleteAccountGroup,
   listAccountGroups,
+  resetAccountGroupUsage,
   updateAccountGroups,
   updateAccountGroup,
 } from "@/features/account-groups/api";
@@ -63,11 +64,23 @@ export function useAccountGroups() {
     },
   });
 
+  const resetUsageMutation = useMutation({
+    mutationFn: resetAccountGroupUsage,
+    onSuccess: () => {
+      toast.success(t("accountGroups.toasts.periodReset"));
+      invalidateGroupQueries(queryClient);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t("accountGroups.toasts.periodResetFailed"));
+    },
+  });
+
   return {
     groupsQuery,
     createMutation,
     updateMutation,
     deleteMutation,
+    resetUsageMutation,
   };
 }
 

@@ -35,16 +35,6 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 		if !active || (expires.Valid && expires.Int64 < millis(req.Now)) {
 			return ErrNoAccounts
 		}
-		if group.Valid {
-			var members int
-			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM account_group_accounts
- WHERE group_id=?`, group.String).Scan(&members); err != nil {
-				return err
-			}
-			if members == 0 {
-				return ErrNoAccounts
-			}
-		}
 		if req.AccountID != "" {
 			if err := checkReservedAccountTx(ctx, tx, req, group, accountScoped, sourceScoped); err != nil {
 				return err
@@ -167,9 +157,9 @@ func checkReservedAccountTx(ctx context.Context, tx *sql.Tx, req domain.Reservat
 		}
 		return err
 	}
-	if group.Valid {
+	if group.Valid && kind == domain.AccountChatGPT {
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM account_group_accounts
- WHERE group_id=? AND account_id=?`, group.String, req.AccountID).Scan(&exists); err != nil {
+		 WHERE group_id=? AND account_id=?`, group.String, req.AccountID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNoAccounts
 			}
@@ -245,7 +235,7 @@ func checkAnyReservedAccountTx(ctx context.Context, tx *sql.Tx, keyID string, gr
  WHERE a.status='active' AND a.requires_egress_decision=0`
 	var args []any
 	if group.Valid {
-		query += ` AND EXISTS(SELECT 1 FROM account_group_accounts g WHERE g.group_id=? AND g.account_id=a.id)`
+		query += ` AND (a.kind!='chatgpt' OR EXISTS(SELECT 1 FROM account_group_accounts g WHERE g.group_id=? AND g.account_id=a.id))`
 		args = append(args, group.String)
 	}
 	if accountScoped && !group.Valid {

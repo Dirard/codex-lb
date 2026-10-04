@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { del, get, post, put } from "@/lib/api-client";
 
 import {
@@ -31,6 +33,10 @@ export function updateAccountGroup(groupId: string, payload: unknown) {
 
 export function deleteAccountGroup(groupId: string) {
   return del(`${ACCOUNT_GROUPS_BASE_PATH}/${encodeURIComponent(groupId)}`);
+}
+
+export function resetAccountGroupUsage(groupId: string) {
+  return post(`${ACCOUNT_GROUPS_BASE_PATH}/${encodeURIComponent(groupId)}/reset-usage`, z.void());
 }
 
 export function updateAccountGroups(accountId: string, payload: unknown) {

@@ -16,15 +16,19 @@ import (
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
+	"codex-lb/internal/domain/pricing"
 )
 
 func TestKeyAllAccountsThroughAdminAndResponses(t *testing.T) {
 	ctx := context.Background()
 	var called []string
-	public, store, _ := wireFixtureWithProxy(t, wireProvider(func(_ context.Context, target application.ResponseTarget, _ json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+	public, store, proxy := wireFixtureWithProxy(t, wireProvider(func(_ context.Context, target application.ResponseTarget, _ json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
 		called = append(called, target.Account.ID)
 		return wireComplete(fmt.Sprintf("all-account-response-%d", len(called)), emit)
 	}))
+	proxy.ResolvePrice = func(context.Context, domain.Account, string) (pricing.Price, error) {
+		return pricing.Price{Standard: pricing.Rates{Input: 1_000_000, Output: 1_000_000}}, nil
+	}
 	credential, err := store.GetAccountCredential(ctx, "wire-account")
 	if err != nil {
 		t.Fatal(err)
@@ -157,8 +161,8 @@ func TestKeyAllAccountsThroughAdminAndResponses(t *testing.T) {
 				t.Fatal(err)
 			}
 			patch(map[string]any{"groupId": group.ID, "assignedAccountIds": []string{}})
-			check(0, true, false)
-			generate("/backend-api/codex/responses", "", 503)
+			check(1, true, false) // External sources follow source assignment, not the ChatGPT group.
+			generate("/backend-api/codex/responses", "external-source", http.StatusOK)
 			patch(map[string]any{"groupId": nil, "assignedAccountIds": []string{}})
 			check(3, false, false)
 			generate("/backend-api/codex/responses", "", 200)

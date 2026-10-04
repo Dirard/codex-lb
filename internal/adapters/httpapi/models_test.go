@@ -62,6 +62,7 @@ func (s modelCatalogProxyStore) AdvanceTOTPStep(context.Context, int64) (bool, e
 type modelCatalogStore struct {
 	sources  []domain.ModelSource
 	eligible []domain.Account
+	record   domain.ModelCatalogRecord
 }
 
 func (s modelCatalogStore) ListAccounts(context.Context) ([]domain.Account, error) {
@@ -80,7 +81,7 @@ func (s modelCatalogStore) EligibleAccounts(context.Context, string) ([]domain.A
 	return s.eligible, domain.ErrNoAccounts
 }
 func (s modelCatalogStore) LoadModelCatalogSnapshot(context.Context) (domain.ModelCatalogRecord, error) {
-	return domain.ModelCatalogRecord{}, nil
+	return s.record, nil
 }
 func (s modelCatalogStore) SaveModelCatalogSnapshot(context.Context, domain.ModelCatalogRecord, ...domain.Account) error {
 	return nil
@@ -222,4 +223,70 @@ func TestModelCatalogOpenAIShapeAndDashboard(t *testing.T) {
 		t.Fatalf("dashboard model metadata missing: %d %s", response.Code, body)
 	}
 	_ = body
+}
+
+func TestCodexCatalogKeepsAllowedModelVisibleForGroupedKeys(t *testing.T) {
+	now := time.Now().UTC()
+	model := domain.CatalogModel{
+		Slug: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol", SupportedInAPI: true,
+		MinimalClientVersion: "0.153.0", SourceKind: domain.ModelCatalogSourceSubscription,
+		Raw: map[string]json.RawMessage{"visibility": json.RawMessage(`"list"`)},
+	}
+	store := modelCatalogStore{record: domain.ModelCatalogRecord{
+		SchemaVersion: application.ModelCatalogSchemaVersion, RefreshedAt: now,
+		Snapshot: &domain.CatalogSnapshot{Models: map[string]domain.CatalogModel{model.Slug: model}},
+	}}
+	catalog := application.NewModelCatalogService(store, nil, nil, application.ModelCatalogConfig{})
+	if err := catalog.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	group := "mail-group"
+	for _, tc := range []struct {
+		name    string
+		group   *string
+		allowed []string
+		visible bool
+	}{
+		{"restricted", &group, []string{"gpt-6-luna"}, false},
+		{"grouped", &group, []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "codex-auto-review", "gpt-6.1-sol"}, true},
+		{"ungrouped", nil, []string{"gpt-6.1-sol"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := domain.APIKey{ID: tc.name, IsActive: true, GroupID: tc.group, AllowedModels: tc.allowed, ApplyToCodexModel: true}
+			handler := NewModelCatalogHandler(modelCatalogProxyStore{key: key}, catalog)
+			mux := http.NewServeMux()
+			handler.RegisterPublicRoutes(mux)
+			for _, path := range []string{"/backend-api/codex/models", "/v1/models?client_version=0.156.0"} {
+				request := httptest.NewRequest(http.MethodGet, path, nil)
+				request.Header.Set("Authorization", "Bearer test")
+				response := httptest.NewRecorder()
+				mux.ServeHTTP(response, request)
+				if response.Code != http.StatusOK {
+					t.Fatalf("GET %s = %d", path, response.Code)
+				}
+				var payload struct {
+					Models []struct {
+						Slug                 string `json:"slug"`
+						Visibility           string `json:"visibility"`
+						MinimalClientVersion string `json:"minimal_client_version"`
+					} `json:"models"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+					t.Fatal(err)
+				}
+				visible := false
+				for _, item := range payload.Models {
+					if item.Slug == model.Slug {
+						visible = item.Visibility == "list"
+						if item.MinimalClientVersion != model.MinimalClientVersion {
+							t.Fatal("upstream client compatibility requirement changed")
+						}
+					}
+				}
+				if visible != tc.visible {
+					t.Fatalf("GET %s model visible=%v, want %v", path, visible, tc.visible)
+				}
+			}
+		})
+	}
 }

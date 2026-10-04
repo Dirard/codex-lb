@@ -16,6 +16,7 @@ export type ConfirmDialogProps = {
   description?: string;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  cancelDisabled?: boolean;
   keepOpenOnConfirm?: boolean;
   cancelLabel?: string;
   onConfirm: () => void;
@@ -29,6 +30,7 @@ export function ConfirmDialog({
   description,
   confirmLabel = i18n.t("common.confirm"),
   confirmDisabled = false,
+  cancelDisabled = false,
   keepOpenOnConfirm = false,
   cancelLabel = i18n.t("common.cancel"),
   onConfirm,
@@ -44,7 +46,7 @@ export function ConfirmDialog({
         </AlertDialogHeader>
         {children}
         <AlertDialogFooter>
-          <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>
+          <AlertDialogCancel disabled={cancelDisabled}>{cancelLabel}</AlertDialogCancel>
           <AlertDialogAction
             disabled={confirmDisabled}
             onClick={(event) => {

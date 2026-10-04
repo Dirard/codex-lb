@@ -51,8 +51,9 @@ func TestImportLegacySnapshotPreservesStateAndSource(t *testing.T) {
 	if err != nil || !account.RequiresEgressDecision || account.Status != domain.AccountActive || account.ChatGPTUserID != "chat-user" {
 		t.Fatalf("proxy-bound account became routable or lost identity: %+v, %v", account, err)
 	}
-	if _, err := s.EligibleAccounts(ctx, "key-a"); !errors.Is(err, ErrNoAccounts) {
-		t.Fatalf("proxy-bound account admitted: %v", err)
+	eligible, err := s.EligibleAccounts(ctx, "key-a")
+	if err != nil || len(eligible) != 1 || eligible[0].ID != "source-a" {
+		t.Fatalf("legacy eligibility must retain only the assigned source: %+v, %v", eligible, err)
 	}
 	credential, err := s.GetAccountCredential(ctx, "acct-a")
 	if err != nil {

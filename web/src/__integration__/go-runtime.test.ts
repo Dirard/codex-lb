@@ -136,6 +136,12 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     AccountGroupSchema.parse(await request(`/api/account-groups/${group.id}`, "PUT", { name: group.name, accountIds: [], limits }));
     const keys = ApiKeyListSchema.parse(await request("/api/api-keys/"));
     expect(keys.find((item) => item.id === key.id)?.limits[0].maxValue).toBe(20000);
+    const priorReset = keys.find((item) => item.id === key.id)!.limits[0].resetAt;
+    await request(`/api/account-groups/${group.id}/reset-usage`, "POST");
+    const resetKeys = ApiKeyListSchema.parse(await request("/api/api-keys/"));
+    const resetKey = resetKeys.find((item) => item.id === key.id)!;
+    expect(resetKey.limits[0]).toMatchObject({ currentValue: 0, maxValue: 20000 });
+    expect(Date.parse(resetKey.limits[0].resetAt)).toBeGreaterThan(Date.parse(priorReset));
     const detached = ApiKeySchema.parse(await request(`/api/api-keys/${key.id}`, "PATCH", { groupId: null, usageSections: "" }));
     expect(detached.limits[0].maxValue).toBe(20000);
     expect(detached.usageSections).toBe("");

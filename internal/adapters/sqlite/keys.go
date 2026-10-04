@@ -357,41 +357,7 @@ func (s *Store) ResetAPIKeyUsage(ctx context.Context, id string, now time.Time) 
 			}
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id,limit_window FROM api_key_limits
- WHERE api_key_id=? AND is_active=1`, id)
-		if err != nil {
-			return err
-		}
-		type limit struct {
-			id     int64
-			window domain.LimitWindow
-		}
-		var limits []limit
-		for rows.Next() {
-			var l limit
-			if err := rows.Scan(&l.id, &l.window); err != nil {
-				rows.Close()
-				return err
-			}
-			limits = append(limits, l)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, l := range limits {
-			duration, err := l.window.Duration()
-			if err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, `UPDATE api_key_limits SET current_value=0,reset_at=?,
-	 backfill_from=NULL,backfill_until=NULL WHERE id=?`,
-				millis(now.Add(duration)), l.id); err != nil {
-				return err
-			}
-		}
-		return nil
+		return resetAPIKeyUsageTx(ctx, tx, id, now)
 	})
 }
 
@@ -428,7 +394,7 @@ func (s *Store) eligibleAccounts(ctx context.Context, keyID string, includeQuota
 	query := "SELECT " + accountColumns + " FROM accounts a WHERE " + statusGate + " AND a.requires_egress_decision=0 AND EXISTS(SELECT 1 FROM account_credentials c WHERE c.account_id=a.id)"
 	args := make([]any, 0, 3)
 	if group.Valid {
-		query += " AND EXISTS(SELECT 1 FROM account_group_accounts g WHERE g.group_id=? AND g.account_id=a.id)"
+		query += " AND (a.kind!='chatgpt' OR EXISTS(SELECT 1 FROM account_group_accounts g WHERE g.group_id=? AND g.account_id=a.id))"
 		args = append(args, group.String)
 	}
 	if accountScoped && !group.Valid {
@@ -508,15 +474,15 @@ func (s *Store) ScopedAccountForOwner(ctx context.Context, keyID, accountID stri
 		}
 		return domain.Account{}, err
 	}
-	if group.Valid {
+	if group.Valid && account.Kind == domain.AccountChatGPT {
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM account_group_accounts
- WHERE group_id=? AND account_id=?`, group.String, accountID).Scan(&exists); err != nil {
+		 WHERE group_id=? AND account_id=?`, group.String, accountID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return domain.Account{}, ErrNoAccounts
 			}
 			return domain.Account{}, err
 		}
-	} else if accountScoped {
+	} else if accountScoped && !group.Valid {
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM api_key_accounts
  WHERE api_key_id=? AND account_id=?`, keyID, accountID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {

@@ -145,12 +145,28 @@ does not replace deployment TLS or administrator authentication.
 
 Accounts may belong to multiple groups. A key selects one group and gets its
 limit configuration with independent consumption. Leaving a group keeps the
-last group limits; an empty scoped group does not mean unrestricted access.
+last group limits; an empty scoped group does not mean unrestricted ChatGPT access.
 The group picker therefore displays No accounts selected for an empty membership,
 including its clear-selection menu item. All accounts remains the label for an
 unrestricted direct API-key assignment or an all-account automation, not for an
-empty group. For example, clearing a group's sole member leaves its keys scoped
-to zero accounts; it does not broaden them to the installation's other accounts.
+empty group. For example, clearing a group's sole ChatGPT member leaves its keys
+scoped to zero ChatGPT accounts; it does not broaden them to other ChatGPT accounts.
+
+External Model sources have their own key assignment scope. A grouped key with
+All model sources can use an enabled, permitted Z.AI source without that source
+being a member of the ChatGPT group. Explicit source assignments and model
+restrictions still apply to both catalog reads and actual requests, reservations
+and continuation ownership. This separation also applies to a group with no
+ChatGPT members; it never bypasses credential, account-status or egress checks.
+
+Settings → Account groups → Reset period restarts the group's keys' configured
+limit windows after confirmation. For example, a weekly $800 limit showing $300
+used returns to zero with a new weekly boundary. The operation includes disabled
+member keys, excludes deleted/internal keys and leaves history, provider quotas,
+purchased credits and the configured limits unchanged. Old in-flight reservations
+still settle in their original accounting windows. An error keeps the dialog open
+for retry; no real provider operation is involved. See the reset requirement in
+[the Go runtime contract](spec.md).
 
 An All-account key was checked again on 2026-10-01: a fresh Luna request completed
 with 11 input and 5 output tokens. Admin/proxy regressions cover omitted and empty

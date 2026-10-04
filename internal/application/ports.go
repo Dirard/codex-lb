@@ -30,6 +30,7 @@ type Groups interface {
 	GetGroup(context.Context, string) (domain.AccountGroup, error)
 	ListGroups(context.Context) ([]domain.AccountGroup, error)
 	DeleteGroup(context.Context, string) error
+	ResetGroupUsage(context.Context, string, time.Time) error
 	SetAccountGroups(context.Context, string, []string) error
 }
 

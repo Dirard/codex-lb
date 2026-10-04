@@ -25,6 +25,9 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("PUT /api/account-groups/{id}", s.saveGroup)
 	mux.HandleFunc("DELETE /api/account-groups/{id}", s.deleteGroup)
+	for _, path := range []string{"/api/account-groups/{id}/reset-usage", "/api/account-groups/{id}/reset-usage/{$}"} {
+		mux.HandleFunc("POST "+path, s.resetGroupUsage)
+	}
 	for _, path := range []string{"/api/api-keys", "/api/api-keys/{$}"} {
 		mux.HandleFunc("GET "+path, s.listKeys)
 		mux.HandleFunc("POST "+path, s.saveKey)
@@ -86,6 +89,14 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteGroup(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) resetGroupUsage(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.ResetGroupUsage(r.Context(), r.PathValue("id"), time.Now().UTC()); err != nil {
 		s.fail(w, err)
 		return
 	}

@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
@@ -165,5 +165,71 @@ describe("AccountGroupsSection", () => {
     await waitFor(() => {
       expect(deleted).toEqual(["group_1"]);
     });
+  });
+
+  it("resets only after confirmation and prevents duplicate submissions", async () => {
+    const user = userEvent.setup();
+    const reset = vi.fn();
+    const reads = vi.fn();
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    mockGroups();
+    server.use(
+      http.get("/api/account-groups/", () => { reads(); return HttpResponse.json([group]); }),
+      http.post("/api/account-groups/:groupId/reset-usage", async ({ params }) => {
+        reset(params.groupId);
+        await pending;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderWithProviders(<AccountGroupsSection />);
+    await user.click(await screen.findByRole("button", { name: "Reset accounting period for Team pool" }));
+    expect(reset).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("provider quotas and purchased credits will not change");
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    expect(reset).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Reset accounting period for Team pool" }));
+    const confirm = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Reset period" });
+    try {
+      await user.click(confirm);
+      await waitFor(() => expect(confirm).toBeDisabled());
+      expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })).toBeDisabled();
+      await user.click(confirm);
+      expect(reset).toHaveBeenCalledExactlyOnceWith("group_1");
+    } finally {
+      finish();
+    }
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(reads.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("keeps the reset dialog open on failure and allows retry", async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    mockGroups();
+    server.use(http.post("/api/account-groups/:groupId/reset-usage", () => {
+      attempts++;
+      return attempts === 1
+        ? HttpResponse.json({ error: { code: "reset_failed", message: "Reset failed" } }, { status: 500 })
+        : new HttpResponse(null, { status: 204 });
+    }));
+    renderWithProviders(<AccountGroupsSection />);
+    await user.click(await screen.findByRole("button", { name: "Reset accounting period for Team pool" }));
+    const dialog = screen.getByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Reset period" }));
+    expect(await within(dialog).findByText("Reset failed")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Reset period" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(attempts).toBe(2);
+  });
+
+  it("disables period reset for groups without limits or keys", async () => {
+    server.use(http.get("/api/account-groups/", () => HttpResponse.json([
+      { ...group, id: "empty", name: "Empty", keyCount: 0 },
+      { ...group, id: "unlimited", name: "Unlimited", limits: [] },
+    ])));
+    renderWithProviders(<AccountGroupsSection />);
+    expect(await screen.findByRole("button", { name: "Reset accounting period for Empty" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset accounting period for Unlimited" })).toBeDisabled();
   });
 });

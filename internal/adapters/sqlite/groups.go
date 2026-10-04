@@ -207,6 +207,48 @@ func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 	return ErrConflict
 }
 
+// ResetGroupUsage starts new limit windows for all current, non-deleted member
+// keys in one transaction. Historical usage and provider quotas are untouched.
+func (s *Store) ResetGroupUsage(ctx context.Context, id string, now time.Time) error {
+	if id == "" || now.IsZero() {
+		return ErrInvalid
+	}
+	return transact(ctx, s.db, func(tx *sql.Tx) error {
+		var exists int
+		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM account_groups WHERE id=?", id).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM api_keys WHERE group_id=? AND deleted_at IS NULL
+ AND id NOT IN (?,?) ORDER BY id`, id, domain.LocalProxyKeyID, domain.WarmupKeyID)
+		if err != nil {
+			return err
+		}
+		var keyIDs []string
+		for rows.Next() {
+			var keyID string
+			if err := rows.Scan(&keyID); err != nil {
+				rows.Close()
+				return err
+			}
+			keyIDs = append(keyIDs, keyID)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, keyID := range keyIDs {
+			if err := resetAPIKeyUsageTx(ctx, tx, keyID, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func modelFilter(model *string) string {
 	if model == nil {
 		return ""

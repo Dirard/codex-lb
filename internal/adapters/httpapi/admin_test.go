@@ -115,6 +115,36 @@ func TestDashboardSecurityAndGroupKeyFlow(t *testing.T) {
 	if list.Code != 200 || bytes.Contains(list.Body.Bytes(), []byte(key.Secret)) || bytes.Contains(list.Body.Bytes(), []byte("keyHash")) {
 		t.Fatal("key listing failed or exposed a secret")
 	}
+	if _, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "reset-test", APIKeyID: key.ID, AccountID: account.ID,
+		Model: "gpt-test", Budget: domain.UsageAmount{InputTokens: 25}, Now: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	resetPath := "/api/account-groups/" + group.ID + "/reset-usage"
+	if got := request("POST", resetPath, nil, func(r *http.Request) {
+		r.Header.Del("Cookie")
+		r.Header.Set("Authorization", "Bearer "+key.Secret)
+	}).Code; got != 401 {
+		t.Fatalf("API key authorized group reset: %d", got)
+	}
+	if got := request("POST", resetPath, nil, func(r *http.Request) {
+		r.Header.Set("Origin", "https://attacker.invalid")
+	}).Code; got != 403 {
+		t.Fatalf("cross-origin group reset accepted: %d", got)
+	}
+	if stored, err := store.GetAPIKey(ctx, key.ID); err != nil || stored.Limits[0].CurrentValue != 25 {
+		t.Fatalf("unauthorized reset changed usage: %+v, %v", stored.Limits, err)
+	}
+	for _, path := range []string{resetPath, resetPath + "/"} {
+		if got := request("POST", path, nil, nil).Code; got != 204 {
+			t.Fatalf("reset %s: %d", path, got)
+		}
+	}
+	if stored, err := store.GetAPIKey(ctx, key.ID); err != nil || stored.Limits[0].CurrentValue != 0 {
+		t.Fatalf("group reset did not reach key: %+v, %v", stored.Limits, err)
+	}
+	if got := request("POST", "/api/account-groups/missing/reset-usage", nil, nil).Code; got != 404 {
+		t.Fatalf("missing group reset: %d", got)
+	}
 	groupPayload["accountIds"] = []string{}
 	if got := request("PUT", "/api/account-groups/"+group.ID, groupPayload, nil).Code; got != 200 {
 		t.Fatalf("empty group status %d", got)
