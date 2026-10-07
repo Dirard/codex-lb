@@ -31,19 +31,24 @@ func TestWaitingWebSocketFailurePreservesNonexecutionProof(t *testing.T) {
 					return
 				}
 				defer conn.CloseNow()
-				if _, _, err := conn.Read(ctx); err != nil {
-					return
+				for {
+					if _, _, err := conn.Read(ctx); err != nil {
+						return
+					}
+					if calls.Add(1) == 1 {
+						_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"seed","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`))
+						continue
+					}
+					if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"primary"}}`)); err != nil {
+						return
+					}
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return
+					}
+					_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"primary","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`))
 				}
-				calls.Add(1)
-				if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"primary"}}`)); err != nil {
-					return
-				}
-				select {
-				case <-release:
-				case <-ctx.Done():
-					return
-				}
-				_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"primary","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`))
 			}))
 			defer server.Close()
 			store := &sourceStore{credential: domain.AccountCredential{AccountID: "account"}}
@@ -52,6 +57,12 @@ func TestWaitingWebSocketFailurePreservesNonexecutionProof(t *testing.T) {
 			defer unblock()
 			target := application.ResponseTarget{Account: domain.Account{ID: "account", Kind: domain.AccountChatGPT}, KeyID: "key", SessionID: "busy-session", UseWebSocket: true}
 			body := json.RawMessage(`{"model":"gpt-6-luna","input":"synthetic","stream":true}`)
+			if _, err := adapter.Respond(ctx, target, body, func(application.ResponseEvent) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			// Only a dependency on this exact response should wait; independent
+			// full-context requests sharing SessionID now use sibling sockets.
+			body = json.RawMessage(`{"model":"gpt-6-luna","input":"synthetic","stream":true,"previous_response_id":"seed"}`)
 			ready, finished := make(chan struct{}), make(chan error, 1)
 			go func() {
 				result, err := adapter.Respond(ctx, target, body, func(event application.ResponseEvent) error {
@@ -94,7 +105,7 @@ func TestWaitingWebSocketFailurePreservesNonexecutionProof(t *testing.T) {
 			if mode == "capacity" && failure.Code != "local_capacity_exceeded" {
 				t.Fatalf("wrong refusal: %v", err)
 			}
-			if calls.Load() != 1 {
+			if calls.Load() != 2 {
 				t.Fatal("queued failure dispatched another response.create")
 			}
 			unblock()

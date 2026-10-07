@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,7 +26,11 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 			return
 		}
 		defer conn.CloseNow()
-		if _, _, err := conn.Read(ctx); err != nil {
+		_, body, err := conn.Read(ctx)
+		var request struct {
+			Input string `json:"input"`
+		}
+		if err != nil || json.Unmarshal(body, &request) != nil {
 			return
 		}
 		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"ready"}`)); err != nil {
@@ -36,7 +41,7 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 		case <-ctx.Done():
 			return
 		}
-		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"owned-response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
+		_ = conn.Write(ctx, websocket.MessageText, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, request.Input)))
 		_, _, _ = conn.Read(ctx) // Retain the connection until the adapter closes it.
 	}))
 	defer server.Close()
@@ -46,20 +51,24 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 	capabilities := ResponsesCapabilities()
 	capabilities.StreamTransport = TransportWebSocket
 	base := testTarget(server.URL, capabilities)
+	base.SessionID = "same-logical-session"
 	body := Request{Body: []byte(`{"model":"m","input":"hello","stream":true}`)}
 	opened, finished := make(chan struct{}, 256), make(chan error, 256)
+	var workers sync.WaitGroup
+	workers.Add(256)
+	defer func() { cancel(); unblock(); workers.Wait() }()
 	for i := range 256 {
 		go func() {
-			target := base
-			target.KeyID = fmt.Sprintf("key-%d", i)
-			target.SessionID = fmt.Sprintf("session-%d", i)
-			result, err := adapter.OpenStream(ctx, target, body, func(event Event) error {
+			defer workers.Done()
+			id := fmt.Sprintf("response-%d", i)
+			request := Request{Body: []byte(fmt.Sprintf(`{"model":"m","input":%q,"stream":true}`, id))}
+			result, err := adapter.OpenStream(ctx, base, request, func(event Event) error {
 				if event.Type == "response.output_text.delta" {
 					opened <- struct{}{}
 				}
 				return nil
 			})
-			if err == nil && (!result.UsageKnown || result.ResponseID != "owned-response") {
+			if err == nil && (!result.UsageKnown || result.ResponseID != id) {
 				err = fmt.Errorf("stream lost its terminal response or usage")
 			}
 			finished <- err
@@ -75,7 +84,7 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 		}
 	}
 	overflow := base
-	overflow.KeyID, overflow.SessionID = "overflow-key", "overflow-session"
+	overflow.SessionID = "overflow-session"
 	_, err := adapter.OpenStream(ctx, overflow, body, func(Event) error { return nil })
 	var rejected *Error
 	if !errors.As(err, &rejected) || rejected.Code != "local_capacity_exceeded" || !rejected.RejectedBeforeExecution {
@@ -87,11 +96,17 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 			t.Fatalf("active peer lost its connection: %v", err)
 		}
 	}
+	adapter.sessions.mu.Lock()
+	retained := len(adapter.sessions.responses)
+	adapter.sessions.mu.Unlock()
+	if retained != 256 {
+		t.Fatalf("parallel branches lost their response affinity: %d", retained)
+	}
 	if err := adapter.Close(); err != nil {
 		t.Fatal(err)
 	}
 	adapter.sessions.mu.Lock()
-	remaining := len(adapter.sessions.entries) + len(adapter.sessions.responses)
+	remaining := len(adapter.sessions.entries) + len(adapter.sessions.responses) + adapter.sessions.lanes
 	adapter.sessions.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("Close retained %d session entries", remaining)

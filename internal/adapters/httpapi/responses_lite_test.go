@@ -215,9 +215,12 @@ func TestResponsesLiteWebSocketAcceptedPrewarmAndConnectionIsolation(t *testing.
 	turn(connection, "gpt-6-sol", accepted, `[]`, false, false)
 	ordinary := turn(connection, "gpt-5.6-sol", "", `[]`, false, false)
 	turn(connection, "gpt-5.6-sol", ordinary, `[]`, false, false)
+	older := turn(connection, "gpt-5.6-sol", accepted, `[]`, false, true)
+	// The stale anchor is reconstructed from retained additional_tools, so
+	// this attempt is body-derived Lite, not trust in a stale client marker.
 	latest := turn(connection, "gpt-5.6-sol", accepted, `[]`, false, true)
-	turn(connection, "gpt-5.6-sol", accepted, `[]`, false, false)
-	turn(connection, "gpt-5.6-sol", latest, `[{"role":"user","content":"follow-up"}]`, false, true)
+	turn(connection, "gpt-5.6-sol", older, `[]`, false, false)
+	latest = turn(connection, "gpt-5.6-sol", latest, `[{"role":"user","content":"follow-up"}]`, false, true)
 	other := capabilitySocket(t, server.URL, http.Header{"Authorization": {"Bearer synthetic-key"}})
 	defer other.CloseNow()
 	turn(other, "gpt-5.6-sol", latest, `[]`, false, false)

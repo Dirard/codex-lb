@@ -523,6 +523,27 @@ WebSocket session limit are 256. The request queue remains bounded at 128 with a
 force. The subscription test uses 40 eligible accounts rather than pretending
 that one account's quota/capacity can serve every client.
 
+Independent full-context Responses sharing the same logical session use separate
+exclusive upstream connections when the matching connection is busy. For example,
+four subagents sharing Session_id and Thread-Id can run four generations at once
+without mixing events. Sequential previous-response work still reuses its exact
+connection; a request with previous_response_id does not fall back to an arbitrary
+session sibling. The 256 upstream bound counts physical connections, not logical
+sessions, and only idle connections may be evicted.
+
+An exact continuation still has a bounded wait when its own socket is busy. If
+that socket closes or its retained response changes while waiting, the proxy
+detects the loss before sending response.create. Existing safe same-account
+history reconstruction can recover the request; opaque or incomplete tool history
+cannot be fabricated, and an already dispatched request is never blindly retried.
+Capacity is not quota proof and cannot move an active thread to another account.
+
+Client WebSockets have a separate 256-connection budget and do not hold the 128
+HTTP body-reader slots while idle. This removes an unrelated source of local
+capacity errors without removing stream, account or key admission controls. No
+new configuration or schema migration is needed. Deterministic local concurrency
+tests verify these mechanics; they are not a production throughput guarantee.
+
 The optimized short-request comparison at 32 clients lowers median TTFT from
 434 to 68 ms against the preserved equally durable Go baseline. Larger inputs
 need a separate capacity check: on one pinned CPU, 256 message-array Responses

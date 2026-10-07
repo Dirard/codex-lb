@@ -34,6 +34,10 @@ func wireFixture(t *testing.T, provider wireProvider) (*httptest.Server, *sqlite
 }
 
 func wireFixtureWithProxy(t *testing.T, provider wireProvider) (*httptest.Server, *sqlite.Store, *application.Proxy) {
+	return wireFixtureWithProxyConfig(t, provider, application.ProxyConfig{MaxStreams: 1, MaxQueued: 1, QueueTimeout: time.Second})
+}
+
+func wireFixtureWithProxyConfig(t *testing.T, provider wireProvider, config application.ProxyConfig) (*httptest.Server, *sqlite.Store, *application.Proxy) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := sqlite.Open(filepath.Join(dir, "wire.sqlite"))
@@ -59,7 +63,7 @@ func wireFixtureWithProxy(t *testing.T, provider wireProvider) (*httptest.Server
 	if err := store.SaveAPIKey(ctx, domain.APIKey{ID: "wire-key", Name: "test", KeyHash: fmt.Sprintf("%x", sha256.Sum256([]byte("synthetic-key"))), KeyPrefix: "synthetic", IsActive: true, Limits: []domain.LimitRule{{Type: domain.LimitTotalTokens, Window: domain.WindowWeekly, MaxValue: 100000}}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	proxy := application.NewProxy(store, provider, vault, application.ProxyConfig{MaxStreams: 1, MaxQueued: 1, QueueTimeout: time.Second})
+	proxy := application.NewProxy(store, provider, vault, config)
 	server := httptest.NewServer(httpapi.NewProxyHandler(store, proxy, nil))
 	t.Cleanup(server.Close)
 	return server, store, proxy

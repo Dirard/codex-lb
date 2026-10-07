@@ -29,8 +29,8 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Codex-Turn-State", turnState)
 	select {
-	case p.reading <- struct{}{}:
-		defer func() { <-p.reading }()
+	case p.websockets <- struct{}{}:
+		defer func() { <-p.websockets }()
 	default:
 		writeProxyError(w, &application.ProxyError{Code: "local_capacity_exceeded", Status: 503, Message: "Too many open client WebSockets"})
 		return

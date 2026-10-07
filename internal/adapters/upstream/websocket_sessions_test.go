@@ -75,6 +75,13 @@ func TestWebSocketContinuationReusesOwnedConnection(t *testing.T) {
 	if err != nil || second.ResponseID != "response_1_2" || handshakes.Load() != 1 {
 		t.Fatalf("upstream continuation reconnected: count=%d error=%v", handshakes.Load(), err)
 	}
+	scoped := target
+	scoped.KeyID = "continuation-other-key"
+	_, err = adapter.OpenStream(ctx, scoped, Request{Body: mustJSON(map[string]any{"model": "m", "input": "scoped continuation", "stream": true, "previous_response_id": first.ResponseID})}, func(Event) error { return nil })
+	var continuationErr *Error
+	if !errors.As(err, &continuationErr) || continuationErr.Code != ErrorCodeContinuationNotFound || !continuationErr.RejectedBeforeExecution || handshakes.Load() != 1 {
+		t.Fatalf("continuation crossed scopes: count=%d error=%v", handshakes.Load(), err)
+	}
 	target.KeyID = "other-key"
 	if _, err := adapter.OpenStream(ctx, target, Request{Body: mustJSON(map[string]any{"model": "m", "input": "new", "stream": true})}, func(Event) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -129,23 +136,32 @@ func TestRequiredCapabilityRetiresOrdinaryUpstreamSocket(t *testing.T) {
 	}
 	adapter.sessions.mu.Lock()
 	var ordinary *websocketSession
-	for _, entry := range adapter.sessions.entries {
-		ordinary = entry
+	for _, lanes := range adapter.sessions.entries {
+		for _, entry := range lanes {
+			ordinary = entry
+		}
 	}
 	adapter.sessions.mu.Unlock()
 	if ordinary == nil {
 		t.Fatal("ordinary session was not retained")
 	}
 	target.RequiredCapability = true
-	if _, err := adapter.OpenStream(ctx, target, Request{Body: mustJSON(map[string]any{"model": "m", "input": "next", "stream": true, "previous_response_id": first.ResponseID})}, func(Event) error { return nil }); err != nil {
+	var continuationErr *Error
+	_, err = adapter.OpenStream(ctx, target, Request{Body: mustJSON(map[string]any{"model": "m", "input": "next", "stream": true, "previous_response_id": first.ResponseID})}, func(Event) error { return nil })
+	if !errors.As(err, &continuationErr) || continuationErr.Code != ErrorCodeContinuationNotFound || !continuationErr.RejectedBeforeExecution || handshakes.Load() != 1 {
+		t.Fatalf("required continuation crossed ordinary socket: count=%d error=%v", handshakes.Load(), err)
+	}
+	if _, err := adapter.OpenStream(ctx, target, Request{Body: mustJSON(map[string]any{"model": "m", "input": "next", "stream": true})}, func(Event) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	adapter.sessions.mu.Lock()
 	retired := ordinary.dead
 	var required *websocketSession
-	for _, entry := range adapter.sessions.entries {
-		if entry.key.RequiredCapability {
-			required = entry
+	for _, lanes := range adapter.sessions.entries {
+		for _, entry := range lanes {
+			if entry.key.RequiredCapability {
+				required = entry
+			}
 		}
 	}
 	adapter.sessions.mu.Unlock()
