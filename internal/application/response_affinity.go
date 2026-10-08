@@ -72,6 +72,14 @@ func classifyRequestAffinity(identity conversationIdentity, clientAffinity strin
 		return "", nil, err
 	}
 	if cacheKey != "" {
+		if identity.ThreadID != "" {
+			if len(identity.SessionID) > maxAffinityHintBytes || len(identity.ThreadID) > maxAffinityHintBytes {
+				return "", nil, invalidAffinityHint()
+			}
+			// Shared prompt prefixes do not make independent threads one owner.
+			// Keep the upstream cache key intact; scope only the LB's preference.
+			return domain.AffinityPromptCache, []string{"explicit-thread", identity.SessionID, identity.ThreadID, cacheKey}, nil
+		}
 		return domain.AffinityPromptCache, []string{"explicit", cacheKey}, nil
 	}
 	if !settings.StickyThreadsEnabled {

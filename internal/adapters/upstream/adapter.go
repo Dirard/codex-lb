@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const maxErrorBodyBytes = 1 << 20
@@ -20,9 +21,11 @@ type Adapter interface {
 }
 
 type HTTPAdapter struct {
-	client   *http.Client
-	store    *ContinuationStore
-	sessions websocketSessions
+	client                *http.Client
+	store                 *ContinuationStore
+	sessions              websocketSessions
+	websocketPingInterval time.Duration
+	websocketPingTimeout  time.Duration
 }
 
 func (a *HTTPAdapter) Close() error {
@@ -43,7 +46,7 @@ func New(client *http.Client, continuations *ContinuationStore) *HTTPAdapter {
 	if continuations == nil {
 		continuations = NewContinuationStore()
 	}
-	return &HTTPAdapter{client: client, store: continuations}
+	return &HTTPAdapter{client: client, store: continuations, websocketPingInterval: 30 * time.Second, websocketPingTimeout: 10 * time.Second}
 }
 
 func (a *HTTPAdapter) Execute(ctx context.Context, target Target, request Request) (Result, error) {

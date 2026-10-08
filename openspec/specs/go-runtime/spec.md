@@ -352,6 +352,34 @@ For every Responses WebSocket route and its trailing-slash equivalent, a request
 - **WHEN** the key cannot use the requested model or account
 - **THEN** existing authorization and hard-owner errors remain enforced without dispatch or reservations
 
+### Requirement: Shared prompt-cache hints do not pin independent logical threads together
+New unowned requests with distinct logical Thread-Id identities SHALL NOT inherit each other's account preference solely from a shared explicit prompt-cache key. Soft cache affinity SHALL remain API-key and logical-session/thread scoped when Thread-Id is present. The configured selector SHALL choose among eligible accounts without rewriting the provider-facing cache key or weakening hard ownership.
+
+#### Scenario: New sibling threads share a process and cache key
+- **WHEN** independent unowned threads share Session_id and an explicit prompt-cache key but provide distinct Thread-Id values
+- **THEN** each thread is eligible for its own account selection under the configured strategy
+- **AND** neither a sibling's cache pin nor a pre-upgrade key-wide cache pin forces the new thread onto that account
+- **AND** HTTP, WebSocket and compact account selection use the same scope rule
+
+#### Scenario: A repeated thread retains its scope
+- **WHEN** requests repeat the same API key, logical session/thread and cache hint
+- **THEN** their valid soft binding and TTL remain reusable
+- **AND** a different API key, session or thread cannot inherit that binding
+
+#### Scenario: Existing continuations keep their owner
+- **WHEN** a request has confirmed previous-response, session, turn-state or file ownership
+- **THEN** changing cache hints or admitting a sibling thread does not move that owner
+- **AND** existing zero-quota continuation, key/group/model authorization and quota-only failover rules remain enforced
+
+#### Scenario: Clients without a logical Thread-Id retain compatibility
+- **WHEN** a client supplies an explicit cache key without Thread-Id
+- **THEN** its existing API-key-scoped cache affinity remains available independently of automatic Sticky threads
+- **AND** requests without an explicit cache key keep existing automatic affinity behavior
+
+#### Scenario: Invalid scoped hints are rejected
+- **WHEN** an identity value used to scope an explicit cache hint exceeds the existing byte bound or the cache key is malformed
+- **THEN** the request fails before an affinity lookup, account reservation or provider dispatch
+
 ### Requirement: Soft affinity is optional, scoped and operator-manageable
 
 New unowned requests SHALL apply key-scoped typed locality hints without weakening account/model/group/security scope, atomic capacity selection or hard ownership. The existing dashboard settings SHALL control automatic sticky locality, prompt-cache TTL and split primary/secondary pressure thresholds, survive restart/import and affect selection. The legacy single threshold SHALL remain a primary-threshold alias. A healthy eligible soft preference MAY move for pressure or local capacity; this MUST NOT authorize replay or transfer of an already-owned thread. Dashboard affinity list, filtering, paging, sorting, single/batch/filtered deletion and stale purge SHALL use the existing admin authentication/CSRF and UI contracts. Deleting cache/locality mappings MUST NOT delete response, file, voice or capability-lineage ownership. Unscoped legacy hints MUST NOT be promoted to authenticated key-scoped ownership; the original private snapshot SHALL retain them.
@@ -486,6 +514,33 @@ The runtime SHALL bound downstream WebSocket lifetimes independently from concur
 #### Scenario: Socket admission is released
 - **WHEN** an upgrade fails, a client disconnects or the runtime drains
 - **THEN** its downstream connection slot is released without weakening authentication or per-request admission
+
+### Requirement: Native WebSocket waits preserve client liveness without committing output
+The runtime SHALL send application-text heartbeats every ten seconds during a pending native `/backend-api/codex/responses` WebSocket turn and its trailing-slash equivalent. It SHALL use `codex.keepalive` when the current attempt has no real response ID and `response.in_progress` with the real ID when known. Heartbeats MUST NOT change visible-output classification, token usage, diagnostics, ownership or quota-retry eligibility. Attempt changes MUST clear the previous response ID. Generic `/v1/responses` routes MUST NOT receive synthetic heartbeats. Completion, cancellation and disconnect MUST stop and join request-owned heartbeat/worker activity with bounded downstream writes.
+
+#### Scenario: Slow native reasoning remains connected
+- **WHEN** a native WebSocket upstream is silent before or after response.created
+- **THEN** the client SHALL receive application-text heartbeats without fabricated response IDs or usage
+- **AND** real response events SHALL retain their order and a terminal event SHALL end heartbeats
+
+#### Scenario: Quota refusal follows a heartbeat
+- **WHEN** the current attempt explicitly refuses quota without output or billable usage after a heartbeat
+- **THEN** existing safe failover SHALL remain possible and the previous attempt ID SHALL NOT be reused in subsequent heartbeats
+
+#### Scenario: A generic WebSocket waits
+- **WHEN** a public v1 WebSocket request is pending
+- **THEN** it SHALL receive only real response events or the existing error envelope, not synthetic native heartbeats
+
+### Requirement: Active upstream WebSocket transport has bounded liveness checks
+The runtime SHALL probe an active upstream WebSocket every thirty seconds with at most ten seconds to receive pong, independently of downstream heartbeats. Protocol pong MUST NOT count as model progress or extend the overall response deadline. An unresponsive connection after dispatch MUST be closed without automatic replay, quota refusal or owner migration, and existing unknown-usage reconciliation SHALL apply. Probe tasks MUST stop and be joined on completion and cancellation.
+
+#### Scenario: Responsive upstream performs long reasoning
+- **WHEN** the upstream responds to protocol pings but emits no application events
+- **THEN** the request SHALL remain pending within the existing overall response deadline
+
+#### Scenario: Upstream stops answering pings
+- **WHEN** an active upstream fails a bounded ping after response.create was sent
+- **THEN** the attempt SHALL terminate as a transport failure without another dispatch or fabricated zero usage
 
 ### Requirement: Bound streaming and finalize local accounting once
 

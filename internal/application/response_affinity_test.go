@@ -105,6 +105,65 @@ func TestRequestAffinityThreadSessionClientAndFingerprintClassification(t *testi
 	}
 }
 
+func TestExplicitCacheAffinitySeparatesIndependentThreads(t *testing.T) {
+	request := responseRequest{Object: map[string]json.RawMessage{"prompt_cache_key": json.RawMessage(`"shared-cache"`)}}
+	for _, sticky := range []bool{false, true} {
+		settings := domain.RuntimeSettings{StickyThreadsEnabled: sticky, OpenAICacheAffinityMaxAgeSeconds: 60}
+		store := &affinityRoutingStub{lookupErr: domain.ErrNotFound}
+		seen := map[string]bool{}
+		for _, identity := range []conversationIdentity{
+			{}, {SessionID: "process", ThreadID: "parent"},
+			{SessionID: "process", ThreadID: "child"}, {SessionID: "other-process", ThreadID: "child"},
+		} {
+			for _, key := range []string{"key-one", "key-two"} {
+				a, err := lookupRequestAffinity(context.Background(), store, key, identity, "", request, settings)
+				if err != nil || a == nil || a.kind != domain.AffinityPromptCache || seen[a.key] {
+					t.Fatalf("cache affinity conflated a named thread with a sibling/legacy/key scope: %v", err)
+				}
+				seen[a.key] = true
+				again, err := lookupRequestAffinity(context.Background(), store, key, identity, "", request, settings)
+				if err != nil || again.key != a.key {
+					t.Fatal("same thread produced a different cache binding", err)
+				}
+			}
+		}
+		if string(request.Object["prompt_cache_key"]) != `"shared-cache"` {
+			t.Fatal("provider cache key was changed")
+		}
+		legacy, err := lookupRequestAffinity(context.Background(), store, "key-one", conversationIdentity{SessionID: "legacy-process"}, "", request, settings)
+		if err != nil || legacy.key != affinityKey("key-one", domain.AffinityPromptCache, "explicit", "shared-cache") {
+			t.Fatal("a bare Session_id changed the legacy explicit-cache namespace", err)
+		}
+		identity := conversationIdentity{SessionID: "process", ThreadID: "child"}
+		store.lookupErr = nil
+		store.binding = domain.AffinityBinding{AccountID: "owner", UpdatedAt: time.Now()}
+		a, err := lookupRequestAffinity(context.Background(), store, "key", identity, "", request, settings)
+		if err != nil || a.preferredAccountID() != "owner" {
+			t.Fatal("fresh thread-scoped hint was lost", err)
+		}
+		store.binding.UpdatedAt = time.Now().Add(-time.Hour)
+		a, err = lookupRequestAffinity(context.Background(), store, "key", identity, "", request, settings)
+		if err != nil || a.preferredAccountID() != "" {
+			t.Fatal("expired thread-scoped hint survived TTL", err)
+		}
+	}
+}
+
+func TestExplicitThreadCacheAffinityRejectsOversizedIdentity(t *testing.T) {
+	request := responseRequest{Object: map[string]json.RawMessage{"prompt_cache_key": json.RawMessage(`"shared"`)}}
+	for _, identity := range []conversationIdentity{
+		{SessionID: strings.Repeat("x", maxAffinityHintBytes+1), ThreadID: "child"},
+		{ThreadID: strings.Repeat("x", maxAffinityHintBytes+1)},
+	} {
+		store := &affinityRoutingStub{lookupErr: domain.ErrNotFound}
+		_, err := lookupRequestAffinity(context.Background(), store, "key", identity, "", request, domain.RuntimeSettings{})
+		var failure *ProxyError
+		if !errors.As(err, &failure) || failure.Status != 400 || store.lookupCount != 0 {
+			t.Fatalf("oversized scoped identity reached storage: %v", err)
+		}
+	}
+}
+
 func TestRequestAffinityTTLAndCompareAndSetSave(t *testing.T) {
 	request := responseRequest{Object: map[string]json.RawMessage{"prompt_cache_key": json.RawMessage(`"test"`)}}
 	store := &affinityRoutingStub{binding: domain.AffinityBinding{AccountID: "old", Version: 7, UpdatedAt: time.Now().Add(-time.Hour)}}

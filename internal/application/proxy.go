@@ -58,6 +58,8 @@ type ResponseOptions struct {
 	CapabilityRoute        *CapabilityRoute
 	LiteState              *ResponsesLiteState
 	OnDispatch             func()
+	// OnResponseID observes startup before buffering; an empty ID ends the attempt.
+	OnResponseID func(string)
 }
 
 type Proxy struct {
@@ -328,8 +330,12 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 			consumer = func(event ResponseEvent) error {
 				switch event.Type {
 				case "response.created", "response.in_progress", "response.completed", "response.failed", "response.incomplete":
-					if err := markResponse(responseEventID(event.Data)); err != nil {
+					responseID := responseEventID(event.Data)
+					if err := markResponse(responseID); err != nil {
 						return err
+					}
+					if options.OnResponseID != nil && (event.Type == "response.created" || event.Type == "response.in_progress") {
+						options.OnResponseID(responseID)
 					}
 				}
 				if p.Diagnostics != nil {
@@ -348,6 +354,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 				options.OnDispatch()
 			}
 			result, callErr = p.dispatch(ctx, target, wire, consumer)
+		}
+		if options.OnResponseID != nil {
+			options.OnResponseID("")
 		}
 		affinity = nil // Retries use quota/replay rules, never locality hints.
 		accountLease.release()

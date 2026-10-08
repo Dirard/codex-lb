@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"time"
 
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
@@ -21,17 +22,18 @@ type ProxyRepository interface {
 }
 
 type ProxyHandler struct {
-	store        ProxyRepository
-	proxy        *application.Proxy
-	trusted      []netip.Prefix
-	reading      chan struct{}
-	websockets   chan struct{}
-	mux          *http.ServeMux
-	QuotaHeaders func(context.Context, string) (map[string]string, error)
+	store                      ProxyRepository
+	proxy                      *application.Proxy
+	trusted                    []netip.Prefix
+	reading                    chan struct{}
+	websockets                 chan struct{}
+	mux                        *http.ServeMux
+	QuotaHeaders               func(context.Context, string) (map[string]string, error)
+	websocketKeepaliveInterval time.Duration
 }
 
 func NewProxyHandler(store ProxyRepository, proxy *application.Proxy, trusted []netip.Prefix) *ProxyHandler {
-	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, 128), websockets: make(chan struct{}, 256)}
+	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, 128), websockets: make(chan struct{}, 256), websocketKeepaliveInterval: 10 * time.Second}
 	mux := http.NewServeMux()
 	p.RegisterRoutes(mux)
 	p.mux = mux

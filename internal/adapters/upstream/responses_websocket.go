@@ -30,6 +30,8 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 	if err := connection.Write(ctx, websocket.MessageText, create); err != nil {
 		return Result{}, wrapContext(ctx, &Error{Code: ErrorCodeConnection, Message: err.Error()})
 	}
+	probeErrors, stopProbe := a.probeWebSocket(ctx, connection)
+	defer stopProbe()
 
 	for eventCount := 1; ; eventCount++ {
 		if eventCount > maxSSEEvents {
@@ -44,6 +46,8 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			frame = received
 		case <-ctx.Done():
 			return Result{}, ctx.Err()
+		case err := <-probeErrors:
+			return Result{}, wrapContext(ctx, err)
 		}
 		data, err := frame.data, frame.err
 		if err != nil {

@@ -515,6 +515,65 @@ readiness is about 76–102 ms versus 6.5–9 seconds, excluding real-provider i
 Cancellation reaches the stub in about 40 ms for both runtimes; Go's streaming
 and cancellation descriptor count stays at eleven across each measured batch.
 
+## Independent logical-thread account selection
+
+For requests carrying Thread-Id, explicit prompt-cache affinity includes both
+Session_id and Thread-Id inside its existing API-key-scoped hash. For example,
+six subagents sharing a process session and prompt-cache key can independently
+select their initial accounts rather than inheriting the parent's cache pin.
+HTTP, WebSocket and compact use the same classifier. The cache key sent to the
+provider is unchanged, and repeated requests within the same scope retain TTL
+and cache locality. Clients without Thread-Id keep their previous explicit-cache
+behavior, including when automatic Sticky threads are disabled.
+
+New named threads do not read old key-wide cache pins as a fallback. Those rows
+need not be deleted or migrated; their existing TTL and anonymous-client use
+remain intact. Confirmed response/session/turn/file ownership is resolved before
+cache affinity, so already-running threads are not forcibly moved. New cache
+keys do not authorize migration, and zero-quota owners still wait for a real
+provider quota refusal. An identical session/thread identity is not guessed to
+be a new subagent from a role name or changing turn metadata.
+
+Capacity weighted remains probabilistic, not a promise of equal request counts.
+Manual burn/preserve policy, earlier-reset preference, model/key/group scope and
+account capacity can narrow the eligible pool independently of cache affinity.
+No new setting, database schema or client configuration is required. Independent
+selection can trade some cross-thread cache reuse for distributing new work.
+
+## WebSocket liveness during long reasoning
+
+Native Codex watches application text frames, not merely protocol ping/pong.
+The response prelude intentionally withholds created/in_progress events until
+an attempt can safely become visible, so a live but quiet upstream previously
+left the Go client connection silent. Native turns now send a ten-second
+`codex.keepalive`, or `response.in_progress` with the current real response ID.
+A passive observer learns that ID before buffering and clears it between attempts.
+These transport messages do not flow back through provider emit, metrics,
+diagnostics, billing or retry classification. Generic v1 routes are unchanged.
+
+One writer sequences heartbeats with real response events and never sends a
+heartbeat after the terminal. Cancellation/disconnect cancels and joins the
+worker; writes retain their thirty-second bound. An actual quota refusal can
+still discard its buffered prelude and safely choose another account after a
+heartbeat, without charging the refused attempt or carrying its ID forward.
+
+Active upstream WebSockets separately send protocol pings every thirty seconds,
+with ten seconds to answer pong. The existing reader continues receiving real
+events concurrently. A failed probe closes that connection without replay or
+owner migration. Probe goroutines stop and are joined, including when a terminal
+arrives while pong is pending. Pong is transport liveness, not model progress:
+the existing overall response deadline (two hours by default) is not extended.
+For example, long Astra reasoning may complete after more than twenty minutes;
+an arbitrary five-minute application-silence cutoff would cancel valid work.
+
+The October 8 investigation also found truncated upstream streams after real
+reasoning/tool events. This fix does not claim to eliminate provider/network
+disconnects. Once a generation may have executed, its unknown usage remains
+reserved for reconciliation and automatic replay is unsafe. Local peers verify
+liveness, failure classification and cleanup; no production soak or paid E2E
+traffic is implied by those tests. No schema, deployment or client setting change
+is required.
+
 ## Concurrent streaming and memory sizing
 
 The global active-stream limit, per-host HTTP connection limit and live upstream

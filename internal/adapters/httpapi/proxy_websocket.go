@@ -162,22 +162,13 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			active = cancelCall
 			activeRequired = message.route.RequireSecurityWorkAuthorized
 			activeMu.Unlock()
-			terminal := false
 			options := p.responseOptions(r, key.ID)
 			options.Transport = application.CapabilityTransportWebSocket
 			options.TurnState = turnState
 			options.SynthesizedTurnState = synthesizedTurnState
 			options.CapabilityRoute = &message.route
 			options.LiteState = &liteState
-			_, err = p.proxy.Respond(callCtx, options, message.body, func(event application.ResponseEvent) error {
-				writeCtx, cancelWrite := context.WithTimeout(callCtx, 30*time.Second)
-				defer cancelWrite()
-				err := connection.Write(writeCtx, websocket.MessageText, event.Data)
-				if err == nil {
-					terminal = terminal || terminalEvent(event.Type)
-				}
-				return err
-			})
+			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body)
 			cancelCall()
 			activeMu.Lock()
 			active = nil
