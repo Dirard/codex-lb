@@ -14,7 +14,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
+func Test512ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	release := make(chan struct{})
@@ -53,11 +53,11 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 	base := testTarget(server.URL, capabilities)
 	base.SessionID = "same-logical-session"
 	body := Request{Body: []byte(`{"model":"m","input":"hello","stream":true}`)}
-	opened, finished := make(chan struct{}, 256), make(chan error, 256)
+	opened, finished := make(chan struct{}, 512), make(chan error, 512)
 	var workers sync.WaitGroup
-	workers.Add(256)
+	workers.Add(512)
 	defer func() { cancel(); unblock(); workers.Wait() }()
-	for i := range 256 {
+	for i := range 512 {
 		go func() {
 			defer workers.Done()
 			id := fmt.Sprintf("response-%d", i)
@@ -74,11 +74,11 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 			finished <- err
 		}()
 	}
-	for i := range 256 {
+	for i := range 512 {
 		select {
 		case <-opened:
 		case err := <-finished:
-			t.Fatalf("stream returned before all 256 were active (%d opened): %v", i, err)
+			t.Fatalf("stream returned before all 512 were active (%d opened): %v", i, err)
 		case <-ctx.Done():
 			t.Fatalf("only %d streams active: %v", i, ctx.Err())
 		}
@@ -91,7 +91,7 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 		t.Fatalf("overflow was not bounded: %v", err)
 	}
 	unblock()
-	for range 256 {
+	for range 512 {
 		if err := <-finished; err != nil {
 			t.Fatalf("active peer lost its connection: %v", err)
 		}
@@ -99,7 +99,7 @@ func Test256ActiveWebSocketSessionsKeepTheirOwnedConnections(t *testing.T) {
 	adapter.sessions.mu.Lock()
 	retained := len(adapter.sessions.responses)
 	adapter.sessions.mu.Unlock()
-	if retained != 256 {
+	if retained != 512 {
 		t.Fatalf("parallel branches lost their response affinity: %d", retained)
 	}
 	if err := adapter.Close(); err != nil {

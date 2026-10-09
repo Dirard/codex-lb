@@ -9,7 +9,7 @@ import (
 
 func TestProxyDefaultCapacityAndBoundedCancellation(t *testing.T) {
 	defaultProxy := NewProxy(nil, nil, nil, ProxyConfig{})
-	if cap(defaultProxy.streams) != 256 || cap(defaultProxy.admitted) != 384 || defaultProxy.config.QueueTimeout != 15*time.Second {
+	if cap(defaultProxy.streams) != 512 || cap(defaultProxy.admitted) != 640 || defaultProxy.config.QueueTimeout != 15*time.Second {
 		t.Fatal("default stream capacity or bounded queue changed")
 	}
 

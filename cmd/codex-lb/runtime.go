@@ -69,7 +69,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		DialContext:       (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2: true, TLSHandshakeTimeout: 10 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second, ExpectContinueTimeout: time.Second,
-		MaxIdleConns: 128, MaxIdleConnsPerHost: 64, MaxConnsPerHost: 256,
+		MaxIdleConns: 128, MaxIdleConnsPerHost: 64, MaxConnsPerHost: 512,
 		IdleConnTimeout: 90 * time.Second,
 	}
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {

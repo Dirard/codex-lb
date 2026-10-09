@@ -44,8 +44,9 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	type createFrame struct {
-		body  json.RawMessage
-		route application.CapabilityRoute
+		body    json.RawMessage
+		route   application.CapabilityRoute
+		release func()
 	}
 	messages := make(chan createFrame, 1)
 	readerDone := make(chan struct{})
@@ -56,16 +57,25 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 		defer close(readerDone)
 		defer cancel()
 		for {
-			kind, body, err := connection.Read(ctx)
+			kind, body, releaseBody, err := p.readWebSocketFrame(ctx, connection)
 			if err != nil {
+				releaseBody()
+				var capacity *application.ProxyError
+				if errors.As(err, &capacity) {
+					if sendWebSocketError(ctx, connection, err) == nil {
+						continue
+					}
+				}
 				return
 			}
 			if kind != websocket.MessageText {
+				releaseBody()
 				_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Binary Responses WebSocket frames are not supported"})
 				return
 			}
 			current, err := p.authenticate(r.WithContext(ctx))
 			if err != nil || current.ID != key.ID {
+				releaseBody()
 				if err == nil {
 					err = invalidKey()
 				}
@@ -75,15 +85,18 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			var object map[string]json.RawMessage
 			var eventType string
 			if json.Unmarshal(body, &object) != nil || object == nil || json.Unmarshal(object["type"], &eventType) != nil {
+				releaseBody()
 				_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Invalid Responses WebSocket frame"})
 				continue
 			}
 			_, parseErr := application.ParseCapabilitySignal(application.CapabilitySignalRequest{Transport: application.CapabilityTransportWebSocket, FrameType: eventType, APIKeyID: key.ID, Body: body})
 			if parseErr != nil {
+				releaseBody()
 				_ = sendWebSocketError(ctx, connection, parseErr)
 				continue
 			}
 			if eventType != "response.create" {
+				releaseBody()
 				if eventType != "response.cancel" {
 					_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "unsupported_websocket_event", Status: 400, Message: "Only response.create and response.cancel are supported"})
 					continue
@@ -101,6 +114,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			options.SynthesizedTurnState = synthesizedTurnState
 			signal, route, err := p.proxy.PrepareCapability(ctx, options, body)
 			if err != nil {
+				releaseBody()
 				_ = sendWebSocketError(ctx, connection, err)
 				continue
 			}
@@ -108,10 +122,12 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			conflict := active != nil && route.RequireSecurityWorkAuthorized && !activeRequired
 			activeMu.Unlock()
 			if conflict {
+				releaseBody()
 				_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "capability_routing_unavailable", Status: 503, Message: "Required capability cannot be selected while ordinary work is pending"})
 				continue
 			}
 			if json.Unmarshal(signal.Payload, &object) != nil {
+				releaseBody()
 				_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Invalid Responses WebSocket frame"})
 				continue
 			}
@@ -119,19 +135,35 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			object["stream"] = json.RawMessage("true")
 			body, err = json.Marshal(object)
 			if err != nil {
+				releaseBody()
 				return
 			}
 			select {
-			case messages <- createFrame{body: body, route: route}:
+			case messages <- createFrame{body: body, route: route, release: releaseBody}:
 			case <-ctx.Done():
+				releaseBody()
 				return
 			default:
+				releaseBody()
 				_ = connection.Close(websocket.StatusPolicyViolation, "Too many queued response.create frames")
 				return
 			}
 		}
 	}()
-	defer func() { cancel(); connection.CloseNow(); <-readerDone }()
+	var releaseActiveBody func()
+	defer func() {
+		cancel()
+		connection.CloseNow()
+		<-readerDone
+		if releaseActiveBody != nil {
+			releaseActiveBody()
+		}
+		select {
+		case pending := <-messages:
+			pending.release()
+		default:
+		}
+	}()
 	idle := time.NewTimer(120 * time.Second)
 	defer idle.Stop()
 	var liteState application.ResponsesLiteState
@@ -146,6 +178,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			_ = connection.Close(websocket.StatusNormalClosure, "Idle connection")
 			return
 		case message := <-messages:
+			releaseActiveBody = message.release
 			idle.Stop()
 			// Revocation or key rotation takes effect on the next admission, not
 			// merely on the initial upgrade handshake.
@@ -169,6 +202,8 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			options.CapabilityRoute = &message.route
 			options.LiteState = &liteState
 			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body)
+			releaseActiveBody()
+			releaseActiveBody = nil
 			cancelCall()
 			activeMu.Lock()
 			active = nil

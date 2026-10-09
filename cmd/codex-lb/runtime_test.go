@@ -123,7 +123,7 @@ func TestRuntimeServesEmbeddedUIAndDrains(t *testing.T) {
 	data.close()
 }
 
-func TestRuntimeTransportAllows256ActiveStreamsToOneHost(t *testing.T) {
+func TestRuntimeTransportAllows512ActiveStreamsToOneHost(t *testing.T) {
 	r, err := openRuntime(context.Background(), testConfig(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -144,9 +144,9 @@ func TestRuntimeTransportAllows256ActiveStreamsToOneHost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := &http.Client{Transport: r.transport}
-	opened := make(chan error, 256)
-	finished := make(chan error, 256)
-	for range 256 {
+	opened := make(chan error, 512)
+	finished := make(chan error, 512)
+	for range 512 {
 		go func() {
 			request, _ := http.NewRequestWithContext(ctx, http.MethodGet, upstream.URL, nil)
 			response, err := client.Do(request)
@@ -158,13 +158,13 @@ func TestRuntimeTransportAllows256ActiveStreamsToOneHost(t *testing.T) {
 			finished <- err
 		}()
 	}
-	for count := range 256 {
+	for count := range 512 {
 		if err := <-opened; err != nil {
 			t.Fatalf("only %d streams reached upstream before release: %v", count, err)
 		}
 	}
 	cancel()
-	for range 256 {
+	for range 512 {
 		<-finished
 	}
 }

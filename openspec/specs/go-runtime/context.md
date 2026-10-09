@@ -577,7 +577,7 @@ is required.
 ## Concurrent streaming and memory sizing
 
 The global active-stream limit, per-host HTTP connection limit and live upstream
-WebSocket session limit are 256. The request queue remains bounded at 128 with a
+WebSocket session limit are 512 as of go-v1.0.8. The request queue remains bounded at 128 with a
 15-second timeout; account/source capacity and fair-share controls remain in
 force. The subscription test uses 40 eligible accounts rather than pretending
 that one account's quota/capacity can serve every client.
@@ -587,7 +587,7 @@ exclusive upstream connections when the matching connection is busy. For example
 four subagents sharing Session_id and Thread-Id can run four generations at once
 without mixing events. Sequential previous-response work still reuses its exact
 connection; a request with previous_response_id does not fall back to an arbitrary
-session sibling. The 256 upstream bound counts physical connections, not logical
+session sibling. The 512 upstream bound counts physical connections, not logical
 sessions, and only idle connections may be evicted.
 
 An exact continuation still has a bounded wait when its own socket is busy. If
@@ -597,11 +597,117 @@ history reconstruction can recover the request; opaque or incomplete tool histor
 cannot be fabricated, and an already dispatched request is never blindly retried.
 Capacity is not quota proof and cannot move an active thread to another account.
 
-Client WebSockets have a separate 256-connection budget and do not hold the 128
-HTTP body-reader slots while idle. This removes an unrelated source of local
-capacity errors without removing stream, account or key admission controls. No
-new configuration or schema migration is needed. Deterministic local concurrency
-tests verify these mechanics; they are not a production throughput guarantee.
+Client WebSockets have a separate 4096-connection budget using the existing
+global semaphore, with no new lower per-key socket ceiling. For example, 256
+chats with ten connections each fit within the pool; the exact client/Guardian
+pool size is not assumed. Slots are acquired only after auth and released after
+failed upgrades/disconnect/drain. Existing key/account generation controls and
+120-second idle cleanup remain unchanged.
+
+Idle readers still occupy neither HTTP body-reader slots nor generation admission.
+To keep a larger empty-connection pool from multiplying queued body memory, each
+reader first accepts only a 4 KiB prefix (plus one size-detection byte). Larger
+messages share twice the configured active-plus-queued response budget (1280 by
+default), allowing the current and one staged next message through reading,
+queueing and request handling. There is no new aggregate payload-byte cutoff:
+64 MiB would already reject otherwise permitted 256 KiB contexts at 256 clients.
+The existing 32 MiB per-message validation remains. Short controls can still
+cancel work when body permits are full. Actual count exhaustion discards only
+the excess message under that same size limit and reports local capacity without
+closing the socket or cancelling its active turn. Failed reads and oversized
+messages still close the connection. This pressure is not provider quota proof
+and cannot authorize replay. Input counts are not a hard total-RSS bound: buffer
+growth, parsing, history and outputs have additional workload-dependent costs.
+Active-generation and upstream-socket limits are unchanged. No new setting or
+schema migration is needed. Large contexts still require the sizing checks below.
+
+An October 9 isolated run of the socket-capacity change held 4096 idle native
+WebSockets on one synthetic key beside 256 HTTP/SSE Responses streams,
+each with a 32 KiB message-array input and 1000 paced output chunks. Only the
+server process was pinned to one CPU. Idle RSS was 258.84 MiB; peak RSS was
+419.16 MiB. All 256 upstream streams overlapped for 20.42 seconds, using 22.77%
+of one CPU during that overlap. TTFT p50/p95/p99 was 1156/1336/1343 ms. Errors
+were zero, returned content and key accounting matched, all idle sockets stayed
+usable, and server descriptors returned from a peak of 4621 to the baseline 13
+after closing clients. Idle CPU was 0.67% over the three-second observation;
+short snapshots are not an indefinite idle-CPU guarantee. Go retained about 420 MiB RSS after
+disconnect, so descriptor cleanup is not immediate memory return to the OS.
+This is a loopback SSE load with idle WebSockets, not a measurement of 256 active
+native WebSocket generations, paid provider traffic, TLS, or a VPS latency SLA.
+That early SSE fixture reused a response ID; subsequent native trials use a
+unique response ID per request so independent continuation state is exercised.
+
+The administrator also requested a 512-generation experiment. An ignored local
+Go build overlay raises application admission, per-host HTTP connections and
+upstream WebSocket sessions to 512 for the initial experiment. The administrator
+subsequently approved promoting those same defaults into go-v1.0.8. The existing harness supports native WebSockets on both client and
+stub-provider legs, with 3584 additional idle clients, four metered keys, unique
+response IDs and a single CPU assigned to the server. The input sizes below are
+bytes of text per request, not token counts or a guarantee for other workloads.
+
+At 32 KiB input, 512 native generations overlapped for 20.85 seconds with zero
+errors and verified content/accounting: peak RSS 450.30 MiB, steady CPU 52.56%,
+TTFT p50/p95/p99 2176/2479/2503 ms. At 256 KiB, all 512 also completed correctly
+and overlapped for 20.95 seconds, but peak RSS was 748.86 MiB (about 785 MB),
+exceeding the requested budget; steady CPU was 51.16%, with TTFT
+10325/12026/12105 ms. Idle downstream sockets remained usable. The 512 upstream
+sockets retained after completion are intentional continuation state, not leaked
+client connections; the harness accounts for them separately and verifies their
+closure when the temporary runtime stops. Half of one CPU under this synthetic
+streaming rate is not negligible usage for a 1-vCPU deployment.
+
+The 1 MiB-input burst did not pass: with corrected control-frame handling and
+a 60-second benchmark client connection timeout, only 508 of the requested 512
+streams reached the overlap barrier. Four requests returned connection_error;
+the other 508 then returned the fixture's benchmark_overlap failure after its
+90-second gate, so they are not 508 independent provider failures. Peak server
+RSS was 2898.31 MiB (about 3.04 GB). No success latency/accounting claim is made
+for that failed trial; the exact cause of the four connection failures was not
+localized. Earlier large-input trials were discarded because the stub did not
+answer Ping during streaming, and its first control pump used select(), which
+cannot handle descriptor numbers over 1023. The corrected poll()-based stub
+passed a separate 45-second native streaming test and cancellation checks.
+The worst-case trial does not establish a 500–600 MB deployment guarantee for
+large inputs. Promotion to 512 was subsequently authorized after the mixed trials
+below; the known large-context limitation remains documented.
+
+The follow-up mixed-input experiment addresses that worst-case limitation rather
+than treating 512 simultaneous 1 MiB uploads as ordinary traffic. On October 9,
+two isolated native-WS trials used 410 requests of 32 KiB, 92 of 256 KiB and 10 of
+1 MiB (approximately 80/18/2%), shuffled with seed 0. Starts were spread over
+20 seconds; each response emitted 2250 paced chunks (about 45 seconds). There
+was no overlap barrier: requests started and completed progressively. The same
+experimental 512-capacity binary, one pinned server CPU, four metered keys and
+3584 additional idle WebSockets were used, without GOMEMLIMIT or service changes.
+This profile is an explicit test assumption, not measured production traffic.
+
+Both runs reached 512 genuinely active generations, overlapping for 27.42 and
+27.36 seconds, with zero errors and verified content/key accounting. Peak RSS
+was 472.55 and 462.14 MiB (496 and 485 MB), within the 500–600 MB budget for this
+profile. Steady forwarding used 52.73% and 52.45% of one CPU at approximately
+50 events per second per stream. TTFT p50 was 21.10/21.38 ms, p95 163.67/169.24 ms,
+and p99 262.54/238.40 ms, measured from each actual request start, excluding its
+scheduled ramp delay. The 1 MiB subgroup's p95 was 380.53/324.92 ms. All standby
+sockets survived; active streams returned to zero and retained upstream sockets
+closed on temporary-runtime shutdown. CPU usage is still material on a 1-vCPU
+host. Two short local trials do not establish a production soak-test result,
+real OpenAI account capacity, TLS costs or a universal memory guarantee. The
+go-v1.0.8 generation default is 512 following explicit administrator approval;
+neither the experiment nor release publication deploys a running installation.
+
+Reproduce the mixed profile using `scripts/compare-runtime.py` with the same
+experimental binary, `--runs 2 --requests 512 --concurrency 512
+--require-active 512 --workload stream --protocol responses
+--upstream-protocol responses --client-websocket --input-array
+--prompt-mix 32768:410,262144:92,1048576:10 --ramp-seconds 20 --keys 4
+--idle-websockets 3584 --metered --stream-chunks 2250 --single-cpu`.
+
+The actual static go-v1.0.8 amd64 release binary repeated that mixed workload:
+512 active for 27.49 seconds, zero errors, peak RSS 466.04 MiB (489 MB), steady
+CPU 53.44%, TTFT p50/p95/p99 23.77/160.58/252.34 ms and verified content/usage.
+The harness starts versioned binaries with `--self-update=false` so process
+measurements include the serving worker instead of only its update launcher;
+this affects temporary tests only, not shipped defaults or running services.
 
 The optimized short-request comparison at 32 clients lowers median TTFT from
 434 to 68 ms against the preserved equally durable Go baseline. Larger inputs
@@ -617,7 +723,8 @@ At 1 MiB per request, 256 simultaneously submitted contexts peaked around
 still takes substantial parsing/admission CPU: TTFT was about 16–18 seconds,
 not the small-request result. A 1 GiB VPS is not an appropriate promise for that
 workload; validate a larger machine, starting around 2 GiB, if such bursts are
-required. Do not turn the preferred 128 MiB budget into a hard process limit or
+required. The administrator clarified the current service memory budget as
+500–600 MB on October 9, replacing the earlier preferred 128 MiB target. Do not
 count queued work as active streams. No memory-limit setting was forced into
 the server/service: an undersized Go soft limit can cause GC pressure too.
 

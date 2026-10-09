@@ -51,7 +51,7 @@ type websocketSession struct {
 // A live upstream connection is part of Responses continuation state. The
 // store is bounded and isolated by provider/account/key/endpoint/credential;
 // independent requests never share a response.create lock.
-// ponytail: scans are bounded by 256 sockets; index idle lanes only if that cap grows.
+// ponytail: scans are bounded by 512 sockets; index idle lanes if profiling shows contention.
 type websocketSessions struct {
 	mu        sync.Mutex
 	entries   map[websocketKey][]*websocketSession
@@ -117,7 +117,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 				}
 			}
 			if entry == nil {
-				if p.lanes >= 256 {
+				if p.lanes >= 512 {
 					var oldest *websocketSession
 					for _, lanes := range p.entries {
 						for _, candidate := range lanes {

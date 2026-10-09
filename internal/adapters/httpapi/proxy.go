@@ -27,13 +27,16 @@ type ProxyHandler struct {
 	trusted                    []netip.Prefix
 	reading                    chan struct{}
 	websockets                 chan struct{}
+	websocketBodies            chan struct{}
 	mux                        *http.ServeMux
 	QuotaHeaders               func(context.Context, string) (map[string]string, error)
 	websocketKeepaliveInterval time.Duration
 }
 
 func NewProxyHandler(store ProxyRepository, proxy *application.Proxy, trusted []netip.Prefix) *ProxyHandler {
-	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, 128), websockets: make(chan struct{}, 256), websocketKeepaliveInterval: 10 * time.Second}
+	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, 128),
+		websockets:      make(chan struct{}, 4096),
+		websocketBodies: make(chan struct{}, 2*proxy.AdmissionCapacity()), websocketKeepaliveInterval: 10 * time.Second}
 	mux := http.NewServeMux()
 	p.RegisterRoutes(mux)
 	p.mux = mux

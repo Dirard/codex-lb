@@ -86,7 +86,7 @@ type Proxy struct {
 
 func NewProxy(store ProxyStore, provider ResponseProvider, cipher SecretCipher, config ProxyConfig) *Proxy {
 	if config.MaxStreams <= 0 {
-		config.MaxStreams = 256
+		config.MaxStreams = 512
 	}
 	if config.MaxQueued <= 0 {
 		config.MaxQueued = 128
@@ -512,6 +512,9 @@ func (p *Proxy) dispatch(ctx context.Context, target ResponseTarget, body json.R
 	}()
 	return p.provider.Respond(ctx, target, body, emit)
 }
+
+// AdmissionCapacity includes active and queued Responses, independent of idle sockets.
+func (p *Proxy) AdmissionCapacity() int { return cap(p.admitted) }
 
 func (p *Proxy) acquire(ctx context.Context) (func(), error) {
 	p.admissionMu.Lock()
