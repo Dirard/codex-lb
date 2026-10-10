@@ -48,8 +48,16 @@ export function SubscriptionRemaining({
   const label = hasEnded
     ? t("accounts.subscription.ended")
     : t("accounts.subscription.remaining", { countdown: countdown.label });
+  const offsetDate = new Date(endDate.getTime() + 14 * 86_400_000);
+  const offsetUntil = offsetDate.toISOString();
+  const offsetLabel = offsetDate.getTime() <= nowMs
+    ? t("accounts.subscription.offsetEnded")
+    : t("accounts.subscription.offsetRemaining", {
+        countdown: formatSingleUnitRemaining(offsetUntil, nowMs).label,
+      });
   const title = t("accounts.subscription.tooltip", {
     date: formatDateTimeInline(activeUntil, displayFormat),
+    offsetDate: formatDateTimeInline(offsetUntil, displayFormat),
   });
 
   return (
@@ -58,7 +66,7 @@ export function SubscriptionRemaining({
       className={cn("tabular-nums", className)}
       title={title}
     >
-      {label}
+      {label} / {offsetLabel}
     </span>
   );
 }

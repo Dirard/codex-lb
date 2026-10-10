@@ -94,3 +94,9 @@ If an account reports 0% eight days ago, 50% six days ago, and 75% five days ago
 ### Testing notes
 
 Repository coverage pins boundary inclusion, reset decreases, the upper bound, primary/secondary isolation, and `NULL`-window primary normalization. Dashboard overview coverage proves the corrected aggregate reaches the weekly-pace add-capacity result.
+
+## Subscription reference countdowns
+
+The administrator uses two subscription reference points: the end from saved authorization metadata and that timestamp plus 14 × 24 hours. The shared account display derives the second date with the existing minute clock and date formatters, without changing stored metadata or account eligibility. Both exact dates appear in the tooltip; missing metadata remains unknown and may lag a renewal.
+
+For example, a recorded end three days away displays `Subscription: 3d / +14d: 17d`. If the recorded period ended yesterday, the first label says so while the second still shows 13 days. The extra two weeks are only a display reference, not a promise of extended subscription access. The subscription line can wrap in narrow dashboard list columns.

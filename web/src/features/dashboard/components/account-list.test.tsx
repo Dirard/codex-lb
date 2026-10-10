@@ -77,8 +77,8 @@ describe("AccountList", () => {
     );
 
     expect(screen.getAllByTestId("subscription-remaining").map((node) => node.textContent)).toEqual([
-      "Subscription: 3d",
-      "Recorded period ended",
+      "Subscription: 3d / +14d: 17d",
+      "Recorded period ended / +14d: 13d",
       "Subscription: unknown",
     ]);
     vi.useRealTimers();

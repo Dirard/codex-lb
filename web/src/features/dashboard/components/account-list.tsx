@@ -406,7 +406,7 @@ export function AccountList({
                   <SubscriptionRemaining
                     activeUntil={account.subscriptionActiveUntil}
                     displayFormat={dateDisplayFormat}
-                    className="mt-0.5 block whitespace-nowrap"
+                    className="mt-0.5 block whitespace-normal"
                   />
                 </p>
               </div>
