@@ -53,6 +53,8 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	var activeMu sync.Mutex
 	var active context.CancelFunc
 	var activeRequired bool
+	var activeResponseID string
+	var activeInterrupts chan<- string
 	go func() {
 		defer close(readerDone)
 		defer cancel()
@@ -95,10 +97,32 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				_ = sendWebSocketError(ctx, connection, parseErr)
 				continue
 			}
+			if eventType == "response.interrupt" {
+				responseID, err := parseWebSocketInterrupt(object)
+				releaseBody()
+				if err != nil {
+					_ = sendWebSocketError(ctx, connection, err)
+					continue
+				}
+				sent := false
+				activeMu.Lock()
+				if activeInterrupts != nil && responseID == activeResponseID {
+					select {
+					case activeInterrupts <- responseID:
+						sent = true
+					default:
+					}
+				}
+				activeMu.Unlock()
+				if !sent {
+					_ = sendWebSocketInterruptFailure(ctx, connection, responseID)
+				}
+				continue
+			}
 			if eventType != "response.create" {
 				releaseBody()
 				if eventType != "response.cancel" {
-					_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "unsupported_websocket_event", Status: 400, Message: "Only response.create and response.cancel are supported"})
+					_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "unsupported_websocket_event", Status: 400, Message: "Only response.create, response.cancel and response.interrupt are supported"})
 					continue
 				}
 				activeMu.Lock()
@@ -201,6 +225,16 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			options.SynthesizedTurnState = synthesizedTurnState
 			options.CapabilityRoute = &message.route
 			options.LiteState = &liteState
+			options.OnResponseID = func(id string) {
+				activeMu.Lock()
+				activeResponseID = id
+				activeMu.Unlock()
+			}
+			options.OnInterruptReady = func(queue chan<- string) {
+				activeMu.Lock()
+				activeInterrupts = queue
+				activeMu.Unlock()
+			}
 			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body)
 			releaseActiveBody()
 			releaseActiveBody = nil
@@ -208,6 +242,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			activeMu.Lock()
 			active = nil
 			activeRequired = false
+			activeResponseID, activeInterrupts = "", nil
 			activeMu.Unlock()
 			if err != nil && !terminal {
 				if sendWebSocketError(ctx, connection, err) != nil {

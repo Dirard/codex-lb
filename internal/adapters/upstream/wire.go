@@ -123,8 +123,10 @@ type Target struct {
 	SessionID          string
 	RequiredCapability bool
 	AllowHTTPFallback  bool
-	BaseURL            string
-	Credential         string
+	// OnInterruptReady is set only for the private Codex control protocol.
+	OnInterruptReady func(chan<- string)
+	BaseURL          string
+	Credential       string
 	// Headers is an explicit allowlist. Only ChatGPT-Account-ID and Codex
 	// headers are copied; arbitrary inbound client headers never enter it.
 	Headers http.Header

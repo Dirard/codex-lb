@@ -18,17 +18,23 @@ func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websock
 	done := make(chan proxyOutcome, 1)
 	workerDone := make(chan struct{})
 	defer func() { cancel(); <-workerDone }()
-	var ticks <-chan time.Time
-	if options.Codex {
-		ticker := time.NewTicker(p.websocketKeepaliveInterval)
-		defer ticker.Stop()
-		ticks = ticker.C
-		options.OnResponseID = func(id string) {
+	onResponseID := options.OnResponseID
+	options.OnResponseID = func(id string) {
+		if onResponseID != nil {
+			onResponseID(id)
+		}
+		if options.Codex {
 			select {
 			case responseIDs <- id:
 			case <-ctx.Done():
 			}
 		}
+	}
+	var ticks <-chan time.Time
+	if options.Codex {
+		ticker := time.NewTicker(p.websocketKeepaliveInterval)
+		defer ticker.Stop()
+		ticks = ticker.C
 	}
 	go func() {
 		defer close(workerDone)

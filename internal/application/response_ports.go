@@ -30,6 +30,7 @@ type ResponseTarget struct {
 	SessionID             string
 	TurnState             string
 	OnFirstUpstreamEvent  func()
+	OnInterruptReady      func(chan<- string)
 }
 
 type ResponseEvent struct {

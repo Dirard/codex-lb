@@ -60,6 +60,8 @@ type ResponseOptions struct {
 	OnDispatch             func()
 	// OnResponseID observes startup before buffering; an empty ID ends the attempt.
 	OnResponseID func(string)
+	// OnInterruptReady exposes a request-owned control queue; nil revokes it.
+	OnInterruptReady func(chan<- string)
 }
 
 type Proxy struct {
@@ -289,6 +291,7 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		lite = lite && account.Kind == domain.AccountChatGPT
 		output = newResponseOutput(responsesLiteOutput(options, request.Model, lite, emit), p.OpenResponsePrelude)
 		target := ResponseTarget{Account: account, KeyID: key.ID, UseWebSocket: useWebSocket, AllowHTTPFallback: allowHTTPFallback, RequiredCapability: route.RequireSecurityWorkAuthorized, ResponsesLite: lite}
+		target.OnInterruptReady = options.OnInterruptReady
 		if !hydrated {
 			target.CompatibilityMetadata = options.CompatibilityMetadata
 		}

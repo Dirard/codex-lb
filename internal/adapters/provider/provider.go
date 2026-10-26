@@ -219,6 +219,7 @@ func (a *Adapter) respondChatGPT(
 		ProviderID: "chatgpt", AccountID: target.Account.ID, AccountGeneration: target.Account.Generation, RouteRevision: target.Account.RouteRevision, KeyID: target.KeyID,
 		SessionID: target.SessionID, RequiredCapability: target.RequiredCapability, AllowHTTPFallback: target.AllowHTTPFallback,
 		BaseURL: a.config.ChatGPTBaseURL, Credential: token, Headers: headers, Capabilities: capabilities,
+		OnInterruptReady: target.OnInterruptReady,
 	}
 	result, callErr := a.callChatGPT(ctx, &upstreamTarget, body, stream, target.ResponsesLite, emit, target.OnFirstUpstreamEvent)
 	var failure *application.ProviderFailure

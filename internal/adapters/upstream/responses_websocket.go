@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -32,46 +33,137 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 	}
 	probeErrors, stopProbe := a.probeWebSocket(ctx, connection)
 	defer stopProbe()
+	var interrupts chan string
+	if target.OnInterruptReady != nil {
+		interrupts = make(chan string, 1)
+		target.OnInterruptReady(interrupts)
+		defer target.OnInterruptReady(nil)
+	}
+	stopInterrupts := func() error {
+		if interrupts == nil {
+			return nil
+		}
+		// Unregister under the ingress lock before draining, so no sender can race release.
+		target.OnInterruptReady(nil)
+		queue := interrupts
+		interrupts = nil
+		select {
+		case id := <-queue:
+			return emit(interruptFailureEvent(id, "response_already_ended", "The response ended before interruption was sent"))
+		default:
+			return nil
+		}
+	}
+	currentID, sentInterrupt, pendingInterrupt := "", "", ""
+	var terminal *Event
+	var result Result
+	var ackTimer *time.Timer
+	var ackTimeout <-chan time.Time
+	defer func() {
+		if ackTimer != nil {
+			ackTimer.Stop()
+		}
+	}()
+	finish := func(reuse bool) (Result, error) {
+		if err := emit(*terminal); err != nil {
+			return result, err
+		}
+		keep, responseID = reuse, result.ResponseID
+		return result, nil
+	}
+	missingAck := func() (Result, error) {
+		if err := emit(interruptFailureEvent(pendingInterrupt, "interrupt_acknowledgement_missing", "The response ended without an interruption acknowledgement")); err != nil {
+			return result, err
+		}
+		return finish(false)
+	}
 
 	for eventCount := 1; ; eventCount++ {
 		if eventCount > maxSSEEvents {
-			return Result{}, &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream event count exceeds bounded limit"}
+			return result, &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream event count exceeds bounded limit"}
 		}
 		var frame websocketFrame
 		select {
+		case id := <-interrupts:
+			if currentID == "" || id != currentID || sentInterrupt != "" {
+				if err := emit(interruptFailureEvent(id, "response_interrupt_unavailable", "The response cannot accept this interruption")); err != nil {
+					return result, err
+				}
+				continue
+			}
+			writeCtx, stopWrite := context.WithTimeout(ctx, 30*time.Second)
+			err := connection.Write(writeCtx, websocket.MessageText, mustJSON(struct {
+				Type       string `json:"type"`
+				ResponseID string `json:"response_id"`
+				Mode       string `json:"mode"`
+			}{"response.interrupt", id, "discard_partial_items"}))
+			stopWrite()
+			if err != nil {
+				return result, wrapContext(ctx, &Error{Code: ErrorCodeConnection, Message: "Could not send response interruption"})
+			}
+			sentInterrupt, pendingInterrupt = id, id
+			continue
 		case received, open := <-session.frames:
 			if !open {
-				return Result{}, &Error{Code: ErrorCodeStreamIncomplete, Message: "Upstream WebSocket closed before a terminal event"}
+				if terminal != nil {
+					return missingAck()
+				}
+				return result, &Error{Code: ErrorCodeStreamIncomplete, Message: "Upstream WebSocket closed before a terminal event"}
 			}
 			frame = received
 		case <-ctx.Done():
-			return Result{}, ctx.Err()
+			return result, ctx.Err()
+		case <-ackTimeout:
+			return missingAck()
 		case err := <-probeErrors:
-			return Result{}, wrapContext(ctx, err)
+			if terminal != nil {
+				return missingAck()
+			}
+			return result, wrapContext(ctx, err)
 		}
 		data, err := frame.data, frame.err
 		if err != nil {
+			if terminal != nil {
+				return missingAck()
+			}
 			if websocket.CloseStatus(err) != -1 {
 				err = &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream WebSocket closed before a terminal event"}
 			}
-			return Result{}, wrapContext(ctx, err)
+			return result, wrapContext(ctx, err)
 		}
 		if frame.kind != websocket.MessageText {
-			return Result{}, &Error{Code: ErrorCodeInvalidStream, Message: "Expected a text WebSocket event"}
+			return result, &Error{Code: ErrorCodeInvalidStream, Message: "Expected a text WebSocket event"}
 		}
 		if len(data) > maxSSEEventBytes {
-			return Result{}, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event exceeds bounded size"}
+			return result, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event exceeds bounded size"}
 		}
 		var object map[string]json.RawMessage
 		if err := decodeExactJSON(data, &object); err != nil {
-			return Result{}, err
+			return result, err
 		}
 		eventType := ""
 		_ = json.Unmarshal(object["type"], &eventType)
 		if eventType == "" {
-			return Result{}, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event omitted its type"}
+			return result, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event omitted its type"}
+		}
+		if eventType == "response.interrupt.accepted" || eventType == "response.interrupt.failed" {
+			var id string
+			if json.Unmarshal(object["response_id"], &id) != nil || pendingInterrupt == "" || id != pendingInterrupt {
+				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Unexpected response interruption acknowledgement"}
+			}
+			pendingInterrupt = ""
+			if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
+				return result, err
+			}
+			if terminal != nil {
+				return finish(true)
+			}
+			continue
 		}
 		if eventType == "error" || object["error"] != nil {
+			if terminal != nil {
+				return missingAck()
+			}
 			var envelope struct {
 				Status int `json:"status"`
 			}
@@ -80,21 +172,46 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			return result, responseEventError(data)
 		}
 		switch eventType {
+		case "response.created":
+			var response struct {
+				ID string `json:"id"`
+			}
+			_ = json.Unmarshal(object["response"], &response)
+			currentID = response.ID
 		case "response.completed", "response.failed", "response.incomplete":
-			result, err := terminalFromResponsesEvent(eventType, data, target.Capabilities.AllowMissingUsage)
+			if terminal != nil {
+				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Upstream sent a second terminal response while awaiting interruption acknowledgement"}
+			}
+			result, err = terminalFromResponsesEvent(eventType, data, target.Capabilities.AllowMissingUsage)
 			if err != nil {
 				return result, err
 			}
-			if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
+			if sentInterrupt != "" && result.ResponseID != sentInterrupt {
+				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Interruption terminal belongs to another response"}
+			}
+			if err := stopInterrupts(); err != nil {
 				return result, err
 			}
-			keep, responseID = true, result.ResponseID
-			return result, nil
+			terminal = &Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}
+			if pendingInterrupt != "" {
+				ackTimer = time.NewTimer(5 * time.Second)
+				ackTimeout = ackTimer.C
+				continue
+			}
+			return finish(true)
 		}
 		if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
-			return Result{}, err
+			return result, err
 		}
 	}
+}
+
+func interruptFailureEvent(responseID, code, message string) Event {
+	return Event{Type: "response.interrupt.failed", Data: mustJSON(struct {
+		Type       string            `json:"type"`
+		ResponseID string            `json:"response_id"`
+		Error      map[string]string `json:"error"`
+	}{"response.interrupt.failed", responseID, map[string]string{"code": code, "message": message}})}
 }
 
 func websocketResponseCreate(body json.RawMessage) (json.RawMessage, error) {
