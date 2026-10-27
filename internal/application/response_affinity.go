@@ -33,16 +33,24 @@ func (a *requestAffinity) preferredAccountID() string {
 	return a.accountID
 }
 
-// save is called only after the selected account has a reservation and before
+// cas is written in the selected account's reservation transaction before
 // dispatch. Lost compare-and-set races leave the request on its chosen account.
-func (a *requestAffinity) save(ctx context.Context, store AffinityRoutingStore, accountID, reservationID string) error {
+func (a *requestAffinity) cas(accountID string, now time.Time) *domain.AffinityCAS {
 	if a == nil {
 		return nil
 	}
-	_, err := store.SaveAffinity(ctx, domain.AffinityBinding{
+	return &domain.AffinityCAS{Binding: domain.AffinityBinding{
 		Key: a.key, Kind: a.kind, APIKeyID: a.keyID,
-		AccountID: accountID, UpdatedAt: time.Now(),
-	}, a.version, reservationID)
+		AccountID: accountID, UpdatedAt: now,
+	}, ExpectedVersion: a.version}
+}
+
+// reservationError keeps a failed soft-affinity write distinguishable from a
+// reservation refusal; neither leaves a reservation behind.
+func reservationError(err error) error {
+	if errors.Is(err, domain.ErrAffinityPersistence) {
+		return &ProxyError{Code: "affinity_persistence_failed", Status: 503, Message: "Routing affinity could not be persisted; retry the request"}
+	}
 	return err
 }
 

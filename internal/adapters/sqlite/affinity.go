@@ -29,58 +29,40 @@ func (s *Store) LookupAffinity(ctx context.Context, keyID string, kind domain.Af
 	return binding, err
 }
 
-// SaveAffinity compares the observed binding before dispatch. A reserved
-// key/account-owned attempt supplies a monotonic generation across delete/recreate.
-func (s *Store) SaveAffinity(ctx context.Context, binding domain.AffinityBinding, expectedVersion int64, reservationID string) (bool, error) {
-	if !validAffinityIdentity(binding.Key, binding.Kind) || binding.APIKeyID == "" || binding.AccountID == "" ||
-		binding.UpdatedAt.IsZero() || expectedVersion < 0 || reservationID == "" {
-		return false, ErrInvalid
+// validAffinityCAS checks a reservation's soft-binding request before its job.
+func validAffinityCAS(req domain.ReservationRequest) bool {
+	cas := req.Affinity
+	return cas == nil || validAffinityIdentity(cas.Binding.Key, cas.Binding.Kind) &&
+		cas.Binding.APIKeyID == req.APIKeyID && cas.Binding.AccountID == req.AccountID && req.AccountID != "" &&
+		!cas.Binding.UpdatedAt.IsZero() && cas.ExpectedVersion >= 0
+}
+
+// saveAffinityTx compares the binding observed before dispatch inside the
+// reservation transaction that already proved the key/account scope. The
+// reservation's ledger sequence is a monotonic version across delete/recreate,
+// so a lost race or a stale observation leaves the winner untouched.
+func saveAffinityTx(ctx context.Context, tx *sql.Tx, cas domain.AffinityCAS, sequence int64) (bool, error) {
+	binding := cas.Binding
+	if sequence <= cas.ExpectedVersion {
+		return false, nil
 	}
-	changed := false
-	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var sequence, generation, revision int64
-		var model string
-		var group sql.NullString
-		var accountScoped, sourceScoped bool
-		err := tx.QueryRowContext(ctx, `SELECT r.rowid,r.account_generation,r.route_revision,r.model,k.group_id,k.account_assignment_scope_enabled,k.source_assignment_scope_enabled
-	FROM usage_reservations r JOIN api_keys k ON k.id=r.api_key_id
-	JOIN accounts a ON a.id=r.account_id AND a.generation=r.account_generation AND a.route_revision=r.route_revision
- WHERE r.id=? AND r.api_key_id=? AND r.account_id=? AND r.status='reserved' AND r.needs_reconciliation=0
-	AND NOT(a.status='deactivated' AND a.deactivation_reason='deleted')
- AND k.is_active=1 AND k.deleted_at IS NULL
- AND (k.expires_at IS NULL OR k.expires_at>?)`, reservationID, binding.APIKeyID, binding.AccountID, millis(binding.UpdatedAt)).Scan(&sequence, &generation, &revision, &model, &group, &accountScoped, &sourceScoped)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNoAccounts
-		}
-		if err != nil {
-			return err
-		}
-		if err := checkReservedAccountTx(ctx, tx, domain.ReservationRequest{APIKeyID: binding.APIKeyID,
-			AccountID: binding.AccountID, AccountGeneration: generation, RouteRevision: revision, Model: model, Now: binding.UpdatedAt}, group, accountScoped, sourceScoped); err != nil {
-			return err
-		}
-		if sequence <= expectedVersion {
-			return nil
-		}
-		var result sql.Result
-		if expectedVersion == 0 {
-			result, err = tx.ExecContext(ctx, `INSERT INTO affinity_bindings
+	var result sql.Result
+	var err error
+	if cas.ExpectedVersion == 0 {
+		result, err = tx.ExecContext(ctx, `INSERT INTO affinity_bindings
  (key,kind,api_key_id,account_id,created_at,updated_at,version) VALUES(?,?,?,?,?,?,?)
  ON CONFLICT(kind,key) DO NOTHING`, binding.Key, binding.Kind, binding.APIKeyID, binding.AccountID,
-				millis(binding.UpdatedAt), millis(binding.UpdatedAt), sequence)
-		} else {
-			result, err = tx.ExecContext(ctx, `UPDATE affinity_bindings SET account_id=?,updated_at=?,version=?
+			millis(binding.UpdatedAt), millis(binding.UpdatedAt), sequence)
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE affinity_bindings SET account_id=?,updated_at=?,version=?
  WHERE key=? AND kind=? AND api_key_id=? AND version=?`, binding.AccountID, millis(binding.UpdatedAt), sequence,
-				binding.Key, binding.Kind, binding.APIKeyID, expectedVersion)
-		}
-		if err != nil {
-			return err
-		}
-		count, err := result.RowsAffected()
-		changed = count != 0
-		return err
-	})
-	return changed, err
+			binding.Key, binding.Kind, binding.APIKeyID, cas.ExpectedVersion)
+	}
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count != 0, err
 }
 
 func (s *Store) DeleteAffinities(ctx context.Context, targets []domain.AffinityIdentifier) (domain.AffinityDeleteResult, error) {

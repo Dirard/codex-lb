@@ -281,9 +281,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		}
 		_, err = p.store.ReserveUsage(ctx, domain.ReservationRequest{ID: id, APIKeyID: key.ID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision,
 			Continuation: fileOwnerID != "" || owner != nil && account.ID == owner.AccountID,
-			Model:        request.Model, Budget: budget, Now: attemptAt})
+			Model:        request.Model, Budget: budget, Now: attemptAt, Affinity: affinity.cas(account.ID, attemptAt)})
 		if err != nil {
-			return ResponseResult{}, err
+			return ResponseResult{}, reservationError(err)
 		}
 		// Fresh replay severs inherited trust. Only its retained Lite prefix can
 		// enable the new request; no previous owner signal crosses accounts.
@@ -348,16 +348,10 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 				return deliveryErr
 			}
 		}
-		var result ResponseResult
-		var callErr error
-		if err := affinity.save(ctx, p.store, account.ID, id); err != nil {
-			callErr = &ProviderFailure{Code: "affinity_persistence_failed", Status: 503}
-		} else {
-			if options.OnDispatch != nil {
-				options.OnDispatch()
-			}
-			result, callErr = p.dispatch(ctx, target, wire, consumer)
+		if options.OnDispatch != nil {
+			options.OnDispatch()
 		}
+		result, callErr := p.dispatch(ctx, target, wire, consumer)
 		if options.OnResponseID != nil {
 			options.OnResponseID("")
 		}

@@ -13,7 +13,7 @@ import (
 func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest) (domain.Reservation, error) {
 	r := domain.Reservation{ID: req.ID, APIKeyID: req.APIKeyID, AccountID: req.AccountID, Model: req.Model,
 		AccountGeneration: req.AccountGeneration, RouteRevision: req.RouteRevision, Status: "reserved", CreatedAt: req.Now.UTC(), UpdatedAt: req.Now.UTC()}
-	if req.ID == "" || req.APIKeyID == "" || req.APIKeyID == domain.WarmupKeyID || req.Model == "" || req.Now.IsZero() || req.AccountGeneration < 0 || req.RouteRevision < 0 || (req.Continuation && req.AccountID == "") {
+	if req.ID == "" || req.APIKeyID == "" || req.APIKeyID == domain.WarmupKeyID || req.Model == "" || req.Now.IsZero() || req.AccountGeneration < 0 || req.RouteRevision < 0 || (req.Continuation && req.AccountID == "") || !validAffinityCAS(req) {
 		return r, fmt.Errorf("reservation identity: %w", ErrInvalid)
 	}
 	if err := req.Budget.Validate(); err != nil {
@@ -69,9 +69,14 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_reservations
+		inserted, err := tx.ExecContext(ctx, `INSERT INTO usage_reservations
 	 (id,api_key_id,account_id,account_generation,route_revision,model,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'reserved',?,?)`,
-			req.ID, req.APIKeyID, req.AccountID, req.AccountGeneration, req.RouteRevision, req.Model, millis(req.Now), millis(req.Now)); err != nil {
+			req.ID, req.APIKeyID, req.AccountID, req.AccountGeneration, req.RouteRevision, req.Model, millis(req.Now), millis(req.Now))
+		if err != nil {
+			return err
+		}
+		sequence, err := inserted.LastInsertId()
+		if err != nil {
 			return err
 		}
 		for _, l := range limits {
@@ -113,8 +118,20 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 				return err
 			}
 		}
+		if req.Affinity == nil {
+			return nil
+		}
+		// The soft hint shares this commit: it exists only with a valid
+		// reservation, and its failure leaves no reservation behind.
+		r.AffinityChanged, err = saveAffinityTx(ctx, tx, *req.Affinity, sequence)
+		if err != nil {
+			return fmt.Errorf("%w: %w", domain.ErrAffinityPersistence, err)
+		}
 		return nil
 	})
+	if err != nil {
+		r.AffinityChanged = false
+	}
 	return r, err
 }
 

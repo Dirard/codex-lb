@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +19,6 @@ type affinityRoutingStub struct {
 	lookupKey       string
 	lookupKind      domain.AffinityKind
 	lookupKeyID     string
-	saved           domain.AffinityBinding
-	expectedVersion int64
-	reservationID   string
-	saveChanged     bool
-	saveErr         error
 }
 
 func (stub *affinityRoutingStub) LookupAffinity(_ context.Context, keyID string, kind domain.AffinityKind, key string) (domain.AffinityBinding, error) {
@@ -34,10 +30,6 @@ func (stub *affinityRoutingStub) LookupAffinity(_ context.Context, keyID string,
 	return stub.binding, nil
 }
 
-func (stub *affinityRoutingStub) SaveAffinity(_ context.Context, binding domain.AffinityBinding, expectedVersion int64, reservationID string) (bool, error) {
-	stub.saved, stub.expectedVersion, stub.reservationID = binding, expectedVersion, reservationID
-	return stub.saveChanged, stub.saveErr
-}
 
 func TestRequestAffinityExplicitCacheKeyIsScopedAndIndependentOfStickySetting(t *testing.T) {
 	request := responseRequest{Object: map[string]json.RawMessage{
@@ -171,11 +163,11 @@ func TestRequestAffinityTTLAndCompareAndSetSave(t *testing.T) {
 	if err != nil || affinity.preferredAccountID() != "" {
 		t.Fatalf("expired prompt-cache pin was used: %v", err)
 	}
-	if err := affinity.save(context.Background(), store, "new", "reservation"); err != nil {
-		t.Fatal(err)
-	}
-	if store.expectedVersion != 7 || store.reservationID != "reservation" || store.saved.AccountID != "new" || store.saved.APIKeyID != "key" || store.saved.Kind != domain.AffinityPromptCache || store.saved.Key == "" {
-		t.Fatalf("save did not retain observed CAS version and reservation: %+v", store)
+	now := time.Now()
+	cas := affinity.cas("new", now)
+	if cas == nil || cas.ExpectedVersion != 7 || cas.Binding.AccountID != "new" || cas.Binding.APIKeyID != "key" ||
+		cas.Binding.Kind != domain.AffinityPromptCache || cas.Binding.Key == "" || !cas.Binding.UpdatedAt.Equal(now) {
+		t.Fatalf("reservation CAS did not retain the observed version: %+v", cas)
 	}
 	store.binding.UpdatedAt = time.Now()
 	affinity, err = lookupRequestAffinity(context.Background(), store, "key", conversationIdentity{}, "", request, domain.RuntimeSettings{OpenAICacheAffinityMaxAgeSeconds: 60})
@@ -188,12 +180,17 @@ func TestRequestAffinityTTLAndCompareAndSetSave(t *testing.T) {
 	if err != nil || affinity.preferredAccountID() != "old" {
 		t.Fatalf("durable session pin incorrectly expired: %v", err)
 	}
-	store.saveErr = errors.New("write failed")
-	if err := affinity.save(context.Background(), store, "new", "reservation"); !errors.Is(err, store.saveErr) {
-		t.Fatalf("save failure was hidden: %v", err)
+	write := errors.New("write failed")
+	var failure *ProxyError
+	if err := reservationError(fmt.Errorf("%w: %w", domain.ErrAffinityPersistence, write)); !errors.As(err, &failure) ||
+		failure.Code != "affinity_persistence_failed" || failure.Status != 503 {
+		t.Fatalf("affinity write failure was hidden: %v", err)
 	}
-	if err := (*requestAffinity)(nil).save(context.Background(), store, "new", "reservation"); err != nil {
-		t.Fatal(err)
+	if err := reservationError(domain.ErrLimitReached); !errors.Is(err, domain.ErrLimitReached) {
+		t.Fatalf("reservation refusal was rewritten: %v", err)
+	}
+	if (*requestAffinity)(nil).cas("new", now) != nil {
+		t.Fatal("absent affinity produced a write")
 	}
 }
 

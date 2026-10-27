@@ -14,6 +14,14 @@ func (kind AffinityKind) Valid() bool {
 	return kind == AffinityPromptCache || kind == AffinityStickyThread || kind == AffinityCodexSession
 }
 
+// AffinityCAS asks a reservation to compare-and-set a soft binding in the same
+// transaction. ExpectedVersion is the version observed at lookup (0: absent);
+// the reservation's ledger sequence becomes the new version.
+type AffinityCAS struct {
+	Binding         AffinityBinding
+	ExpectedVersion int64
+}
+
 // AffinityBinding is a key-scoped locality preference, never proof of ownership.
 type AffinityBinding struct {
 	Key       string

@@ -7,10 +7,10 @@ import (
 	"codex-lb/internal/domain"
 )
 
-// AffinityRoutingStore is the narrow persistence boundary for soft routing hints.
+// AffinityRoutingStore is the narrow read boundary for soft routing hints.
+// Writes ride on the attempt's reservation (domain.ReservationRequest.Affinity).
 type AffinityRoutingStore interface {
 	LookupAffinity(context.Context, string, domain.AffinityKind, string) (domain.AffinityBinding, error)
-	SaveAffinity(context.Context, domain.AffinityBinding, int64, string) (bool, error)
 }
 
 // AffinityRepository separates optional locality from correctness ownership.
