@@ -198,7 +198,7 @@ func (s *Store) SaveSettings(ctx context.Context, v domain.RuntimeSettings) erro
 		*v.UsageHistoryRetentionDays > 0 && *v.UsageHistoryRetentionDays < 45) {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if v.TOTPRequiredOnLogin {
 			var present int
 			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM admin_secret
@@ -284,7 +284,7 @@ func (s *Store) LoadAdminSecret(ctx context.Context) (domain.AdminSecret, error)
 
 func (s *Store) SaveAdminSecret(ctx context.Context, v domain.AdminSecret) error {
 	if v.PasswordHash == "" && len(v.TOTPSecretEncrypted) == 0 && v.TOTPLastVerifiedStep == nil {
-		return transact(ctx, s.db, func(tx *sql.Tx) error {
+		return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM admin_secret WHERE id=1"); err != nil {
 				return err
 			}
@@ -296,7 +296,7 @@ func (s *Store) SaveAdminSecret(ctx context.Context, v domain.AdminSecret) error
 	if err := validateAdminSecret(v); err != nil {
 		return err
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO admin_secret
  (id,password_hash,totp_secret_encrypted,totp_last_verified_step) VALUES(1,?,?,?)
  ON CONFLICT(id) DO UPDATE SET password_hash=excluded.password_hash,
@@ -326,7 +326,7 @@ func (s *Store) InitializeAdminSecret(ctx context.Context, v domain.AdminSecret)
 		return false, err
 	}
 	initialized := false
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `INSERT INTO admin_secret
  (id,password_hash,totp_secret_encrypted,totp_last_verified_step) VALUES(1,?,?,?)
  ON CONFLICT(id) DO NOTHING`, v.PasswordHash, v.TOTPSecretEncrypted, nullableStep(v.TOTPLastVerifiedStep))
@@ -351,7 +351,7 @@ func (s *Store) AdvanceTOTPStep(ctx context.Context, step int64) (bool, error) {
 	if step < 0 {
 		return false, ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE admin_secret SET totp_last_verified_step=?
+	res, err := s.exec(ctx, `UPDATE admin_secret SET totp_last_verified_step=?
  WHERE id=1 AND totp_secret_encrypted IS NOT NULL AND
  (totp_last_verified_step IS NULL OR totp_last_verified_step<?)`, step, step)
 	if err != nil {

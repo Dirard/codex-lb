@@ -19,7 +19,7 @@ func (s *Store) RotateAccountCredential(ctx context.Context, expected, next doma
 		}
 	}
 	changed := false
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE account_credentials
  SET access_token_encrypted=?,refresh_token_encrypted=?,id_token_encrypted=?
  WHERE account_id=? AND access_token_encrypted=? AND refresh_token_encrypted=? AND id_token_encrypted=?
@@ -42,7 +42,7 @@ func (s *Store) MarkAccountReauthRequired(ctx context.Context, expected domain.A
 	if expected.AccountID == "" || expected.Generation < 0 || code == "" || len(code) > 128 || !fernetCiphertext(expected.RefreshTokenEncrypted) {
 		return ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE accounts SET status='reauth_required',deactivation_reason=?
+	_, err := s.exec(ctx, `UPDATE accounts SET status='reauth_required',deactivation_reason=?
  WHERE id=? AND generation=? AND status IN ('active','rate_limited','quota_exceeded')
  AND EXISTS(SELECT 1 FROM account_credentials c WHERE c.account_id=accounts.id AND c.refresh_token_encrypted=?)`, code, expected.AccountID, expected.Generation, expected.RefreshTokenEncrypted)
 	return err

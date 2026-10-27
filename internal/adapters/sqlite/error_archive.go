@@ -24,7 +24,7 @@ func (s *Store) SaveErrorArchive(ctx context.Context, e domain.ErrorArchive, max
 	if e.RequestID == "" || len(e.RequestID) > 256 || len(e.ContentEncrypted) == 0 || len(e.ContentEncrypted) > 1<<20 || !fernetCiphertext(e.ContentEncrypted) || maxBytes < int64(len(e.ContentEncrypted)) || e.OccurredAt.IsZero() || !e.ExpiresAt.After(e.OccurredAt) {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if e.AccountID != "" {
 			current, err := accountIncarnationCurrentTx(ctx, tx, e.AccountID, e.AccountGeneration)
 			if err != nil || !current {
@@ -94,7 +94,7 @@ func (s *Store) PruneErrorArchives(ctx context.Context, now time.Time) error {
 	if now.IsZero() {
 		return fmt.Errorf("archive retention time: %w", ErrInvalid)
 	}
-	_, err := s.db.ExecContext(ctx, "DELETE FROM error_archives WHERE expires_at<=?", millis(now))
+	_, err := s.exec(ctx, "DELETE FROM error_archives WHERE expires_at<=?", millis(now))
 	return err
 }
 

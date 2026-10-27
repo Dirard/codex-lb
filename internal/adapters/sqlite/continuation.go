@@ -60,7 +60,7 @@ func (s *Store) saveContinuation(ctx context.Context, c domain.Continuation, res
 		int64(len(c.ContextEncrypted)) > bounds.MaxContextBytes || !fernetCiphertext(c.ContextEncrypted) {
 		return fmt.Errorf("continuation or bounds: %w", ErrInvalid)
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		current, err := accountRouteCurrentTx(ctx, tx, c.AccountID, c.AccountGeneration, c.RouteRevision)
 		if err != nil {
 			return err
@@ -141,7 +141,7 @@ func (s *Store) MarkContinuationQuotaRefused(ctx context.Context, keyID, respons
 	if keyID == "" || responseID == "" || accountID == "" || reservationID == "" {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var ownerAccountID string
 		var currentSequence int64
 		err := tx.QueryRowContext(ctx, `SELECT account_id,reservation_rowid FROM continuations

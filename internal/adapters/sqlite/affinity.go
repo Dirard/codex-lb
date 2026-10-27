@@ -95,7 +95,7 @@ func (s *Store) DeleteAffinities(ctx context.Context, targets []domain.AffinityI
 		}
 		seen[target] = true
 	}
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, target := range targets {
 			row, err := tx.ExecContext(ctx, "DELETE FROM affinity_bindings WHERE key=? AND kind=?", target.Key, target.Kind)
 			if err != nil {
@@ -124,7 +124,7 @@ func (s *Store) PruneAffinities(ctx context.Context, now time.Time, ttl time.Dur
 	if now.IsZero() || ttl <= 0 || limit < 1 || limit > 1000 {
 		return 0, ErrInvalid
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM affinity_bindings WHERE (kind,key) IN
+	result, err := s.exec(ctx, `DELETE FROM affinity_bindings WHERE (kind,key) IN
  (SELECT kind,key FROM affinity_bindings WHERE kind='prompt_cache' AND updated_at<=?
  ORDER BY updated_at,key LIMIT ?)`, millis(now.Add(-ttl)), limit)
 	if err != nil {

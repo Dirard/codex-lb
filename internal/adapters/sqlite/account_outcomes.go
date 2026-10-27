@@ -78,7 +78,7 @@ func (s *Store) RecoverAccountQuota(ctx context.Context, accountID string, versi
 	if accountID == "" || version < 0 || generation < 0 {
 		return false, ErrInvalid
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE accounts SET status='active'
+	result, err := s.exec(ctx, `UPDATE accounts SET status='active'
 	 WHERE id=? AND generation=? AND kind='chatgpt' AND requires_egress_decision=0
  AND status IN ('rate_limited','quota_exceeded')
 	 AND coalesce((SELECT reservation_rowid FROM account_outcomes WHERE account_id=accounts.id),0)=?`, accountID, generation, version)

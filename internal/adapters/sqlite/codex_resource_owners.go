@@ -20,7 +20,7 @@ func (s *Store) SaveCodexResourceOwner(ctx context.Context, owner application.Co
 		owner.ExpiresAt.After(now.Add(30*24*time.Hour)) {
 		return fmt.Errorf("Codex resource owner: %w", ErrInvalid)
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		current, err := accountRouteCurrentTx(ctx, tx, owner.AccountID, owner.AccountGeneration, owner.RouteRevision)
 		if err != nil {
 			return err

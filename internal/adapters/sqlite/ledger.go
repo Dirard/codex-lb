@@ -311,7 +311,7 @@ func (s *Store) TouchReservation(ctx context.Context, id string, now time.Time) 
 	if now.IsZero() {
 		return false, ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE usage_reservations
+	res, err := s.exec(ctx, `UPDATE usage_reservations
  SET updated_at=max(updated_at,?) WHERE id=? AND status='reserved'`, millis(now), id)
 	if err != nil {
 		return false, err
@@ -454,7 +454,7 @@ func (s *Store) ReleaseStaleReservations(ctx context.Context, cutoff time.Time) 
 	if cutoff.IsZero() {
 		return 0, ErrInvalid
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM usage_reservations
+	rows, err := s.readDB.QueryContext(ctx, `SELECT id FROM usage_reservations
 	 WHERE status='reserved' AND needs_reconciliation=0 AND updated_at<?
 	 ORDER BY updated_at,id LIMIT 100`, millis(cutoff))
 	if err != nil {

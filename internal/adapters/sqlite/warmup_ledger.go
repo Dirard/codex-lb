@@ -17,7 +17,7 @@ func (s *Store) ReserveWarmupUsage(ctx context.Context, id, accountID, model str
 	if err := s.ensureInternalKey(ctx, domain.WarmupKeyID, "Admin warmup"); err != nil {
 		return err
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var allowed int
 		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE id=? AND generation=? AND kind='chatgpt'
  AND requires_egress_decision=0 AND status IN ('active','rate_limited','quota_exceeded','paused')

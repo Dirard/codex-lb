@@ -48,7 +48,7 @@ func (s *Store) SaveGroup(ctx context.Context, g domain.AccountGroup, now time.T
 	if g.CreatedAt.IsZero() {
 		g.CreatedAt = now
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, id := range g.AccountIDs {
 			var exists int
 			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM accounts WHERE id=? AND NOT(status='deactivated' AND deactivation_reason='deleted')", id).Scan(&exists); err != nil {
@@ -186,7 +186,7 @@ func (s *Store) ListGroups(ctx context.Context) ([]domain.AccountGroup, error) {
 }
 
 func (s *Store) DeleteGroup(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM account_groups WHERE id=?
+	res, err := s.exec(ctx, `DELETE FROM account_groups WHERE id=?
  AND NOT EXISTS(SELECT 1 FROM api_keys WHERE group_id=?)`, id, id)
 	if err != nil {
 		return err
@@ -199,7 +199,7 @@ func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 		return nil
 	}
 	var exists int
-	if err := s.db.QueryRowContext(ctx, "SELECT 1 FROM account_groups WHERE id=?", id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+	if err := s.readDB.QueryRowContext(ctx, "SELECT 1 FROM account_groups WHERE id=?", id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (s *Store) ResetGroupUsage(ctx context.Context, id string, now time.Time) e
 	if id == "" || now.IsZero() {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var exists int
 		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM account_groups WHERE id=?", id).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {

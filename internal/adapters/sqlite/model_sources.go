@@ -29,7 +29,7 @@ func (s *Store) SaveModelSource(ctx context.Context, source domain.ModelSource, 
 	if source.UpdatedAt.IsZero() {
 		source.UpdatedAt = time.Now().UTC()
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var oldKind, oldURL string
 		var oldEnabled, oldChat, oldResponses bool
 		err := tx.QueryRowContext(ctx, `SELECT kind,base_url,is_enabled,supports_chat_completions,supports_responses
@@ -262,7 +262,7 @@ func (s *Store) ListModelSources(ctx context.Context) ([]domain.ModelSource, err
 }
 
 func (s *Store) DeleteModelSource(ctx context.Context, id string) error {
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE legacy_model_sources SET is_enabled=0,deleted_at=?,updated_at=?
  WHERE id=? AND deleted_at IS NULL`, time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli(), id)
 		if err != nil {

@@ -51,7 +51,7 @@ func (s *Store) SaveModelCatalogSnapshot(ctx context.Context, record domain.Mode
 	if err != nil {
 		return err
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, account := range expected {
 			if account.ID == "" || account.Generation < 0 {
 				return ErrInvalid
