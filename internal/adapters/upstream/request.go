@@ -3,6 +3,7 @@ package upstream
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -31,11 +32,14 @@ func decodeResponsesRequest(body []byte, maxBytes int64) (responsesWireRequest, 
 	if int64(len(body)) > maxBytes {
 		return responsesWireRequest{}, &Error{Code: ErrorCodeInvalidRequest, Message: "request body exceeds configured limit"}
 	}
-	if !json.Valid(body) {
-		return responsesWireRequest{}, &Error{Code: ErrorCodeInvalidRequest, Message: "request body is not valid JSON"}
-	}
+	// json.Unmarshal validates the whole body (including trailing data) before
+	// decoding, so a separate json.Valid scan is redundant.
 	var req responsesWireRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		var syntax *json.SyntaxError
+		if errors.As(err, &syntax) {
+			return responsesWireRequest{}, &Error{Code: ErrorCodeInvalidRequest, Message: "request body is not valid JSON"}
+		}
 		return responsesWireRequest{}, &Error{Code: ErrorCodeInvalidRequest, Message: "invalid Responses request: " + err.Error()}
 	}
 	req.Raw = body
