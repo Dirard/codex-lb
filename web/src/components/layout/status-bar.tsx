@@ -4,15 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
-import { getDashboardOverview } from "@/features/dashboard/api";
-import { DEFAULT_OVERVIEW_TIMEFRAME } from "@/features/dashboard/schemas";
+import { getDashboardStatus } from "@/features/dashboard/api";
 import { getServiceReadiness } from "@/features/health/api";
 import { getRuntimeVersion } from "@/features/runtime/api";
 import { getSettings } from "@/features/settings/api";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
 import { formatTimeLong } from "@/utils/formatters";
 
-const GITHUB_REPOSITORY_URL = "https://github.com/soju06/codex-lb";
+// The repository that publishes the releases this runtime updates from.
+const GITHUB_REPOSITORY_URL = "https://github.com/Dirard/codex-lb";
 const STATUS_REFRESH_INTERVAL_MS = 60_000;
 const USAGE_FRESHNESS_THRESHOLD_MS = 60_000;
 export const STATUS_BAR_DEFAULT_HEIGHT_PX = 40;
@@ -99,9 +99,11 @@ export function StatusBar({ onHeightChange }: StatusBarProps = {}) {
     refetchIntervalInBackground: false,
     retry: false,
   });
+  // A dedicated lightweight read: the full overview aggregates traffic and
+  // per-account usage, which the status bar does not display.
   const { data: lastSyncAt = null } = useQuery({
-    queryKey: ["dashboard", "overview", DEFAULT_OVERVIEW_TIMEFRAME],
-    queryFn: () => getDashboardOverview({ timeframe: DEFAULT_OVERVIEW_TIMEFRAME }),
+    queryKey: ["dashboard", "status"],
+    queryFn: getDashboardStatus,
     refetchInterval: STATUS_REFRESH_INTERVAL_MS,
     refetchIntervalInBackground: false,
     select: (data) => data.lastSyncAt,

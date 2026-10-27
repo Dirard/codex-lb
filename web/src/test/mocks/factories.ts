@@ -34,6 +34,7 @@ import { AuthSessionSchema } from "@/features/auth/schemas";
 import type {
 	DashboardOverview,
 	DashboardProjections,
+	DashboardStatus,
 	RequestLog,
 	RequestLogFilterOptions,
 	RequestLogsResponse,
@@ -47,6 +48,7 @@ import {
 	DEFAULT_OVERVIEW_TIMEFRAME,
 	DashboardOverviewSchema,
 	DashboardProjectionsSchema,
+	DashboardStatusSchema,
 	RequestLogFilterOptionsSchema,
 	RequestLogSchema,
 	RequestLogsResponseSchema,
@@ -233,6 +235,12 @@ function createOverviewTimeframe(
 				bucketCount: 28,
 			};
 	}
+}
+
+export function createDashboardStatus(
+	overrides: Partial<DashboardStatus> = {},
+): DashboardStatus {
+	return DashboardStatusSchema.parse({ lastSyncAt: offsetIso(-5), ...overrides });
 }
 
 export function createDashboardOverview(

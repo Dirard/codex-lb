@@ -24,6 +24,7 @@ import {
   createDashboardAuthSession,
   createDashboardOverview,
   createDashboardProjections,
+  createDashboardStatus,
   createDashboardSettings,
   createDefaultAccounts,
   createDefaultAccountGroups,
@@ -780,6 +781,10 @@ export const handlers = [
         accounts: state.accounts,
       }),
     );
+  }),
+
+  http.get("/api/dashboard/status", () => {
+    return HttpResponse.json(createDashboardStatus());
   }),
 
   http.get("/api/dashboard/projections", () => {

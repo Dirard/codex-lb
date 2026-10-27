@@ -114,7 +114,10 @@ export function DashboardPage() {
     useState<RetainedDashboardLoadError | null>(null);
   const [overviewRetryTimeframe, setOverviewRetryTimeframe] =
     useState<OverviewTimeframe | null>(null);
-  const projectionsQuery = useDashboardProjections(Boolean(dashboardQuery.data));
+  const projectionsQuery = useDashboardProjections(
+    dashboardQuery.data?.lastSyncAt,
+    Boolean(dashboardQuery.data),
+  );
   const conversationsState = useConversations({
     enabled: isAdmin && dashboardView === "conversations",
   });

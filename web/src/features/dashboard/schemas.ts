@@ -163,6 +163,11 @@ const WeeklyCreditPaceSchema = z.object({
   confidence: z.enum(["high", "medium", "low"]),
 });
 
+/** `GET /api/dashboard/status`: the overview's `lastSyncAt` without the report. */
+export const DashboardStatusSchema = z.object({
+  lastSyncAt: z.iso.datetime({ offset: true }).nullable(),
+});
+
 export const DashboardOverviewSchema = z.object({
   lastSyncAt: z.iso.datetime({ offset: true }).nullable(),
   timeframe: DashboardOverviewTimeframeSchema,
@@ -294,6 +299,7 @@ export const FilterStateSchema = z.object({
 
 export type DashboardMetrics = z.infer<typeof DashboardMetricsSchema>;
 export type DashboardMetricsComparison = z.infer<typeof DashboardMetricsComparisonSchema>;
+export type DashboardStatus = z.infer<typeof DashboardStatusSchema>;
 export type DashboardOverview = z.infer<typeof DashboardOverviewSchema>;
 export type DashboardProjections = z.infer<typeof DashboardProjectionsSchema>;
 export type DashboardOverviewTimeframe = z.infer<typeof DashboardOverviewTimeframeSchema>;

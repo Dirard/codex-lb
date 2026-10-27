@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { getDashboardOverview, getDashboardProjections } from "@/features/dashboard/api";
 import {
@@ -18,13 +18,23 @@ export function useDashboard(timeframe: OverviewTimeframe = DEFAULT_OVERVIEW_TIM
   });
 }
 
-export function useDashboardProjections(enabled = true) {
-  const refreshSeconds = useDashboardPreferencesStore((state) => state.refreshSeconds);
+/** Upper bound for projection freshness between quota synchronizations. */
+export const PROJECTIONS_MAX_AGE_MS = 5 * 60_000;
+
+/**
+ * Projections are computed from 30 days of persisted quota observations, so
+ * they only change when the overview reports a newer `lastSyncAt`. Keying the
+ * query on it refetches exactly once per new observation; the 5-minute bound
+ * keeps time-relative depletion estimates current between synchronizations.
+ */
+export function useDashboardProjections(lastSyncAt: string | null | undefined, enabled = true) {
   return useQuery({
-    queryKey: ["dashboard", "projections"],
+    queryKey: ["dashboard", "projections", lastSyncAt ?? null],
     queryFn: getDashboardProjections,
     enabled,
-    refetchInterval: refreshSeconds * 1_000,
+    placeholderData: keepPreviousData,
+    staleTime: PROJECTIONS_MAX_AGE_MS,
+    refetchInterval: PROJECTIONS_MAX_AGE_MS,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });
