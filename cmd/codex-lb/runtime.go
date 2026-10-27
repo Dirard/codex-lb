@@ -183,10 +183,10 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 }
 
 func (r *runtime) serve(ctx context.Context) error {
-	listener, err := net.Listen("tcp", r.config.listen)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", r.config.listen)
 	if err != nil {
 		r.close()
-		return errors.New("cannot bind HTTP listen address")
+		return listenError("HTTP listen address", r.config.listen, err)
 	}
 	return r.serveListener(ctx, listener)
 }

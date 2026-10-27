@@ -67,7 +67,7 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	}
 	token := hex.EncodeToString(secret)
 	parentSocket := filepath.Join(privateDir, "parent.sock")
-	listener, err := net.Listen("unix", parentSocket)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", parentSocket)
 	if err != nil {
 		return errors.New("cannot open private runtime control")
 	}

@@ -90,7 +90,9 @@ func (h *updateHost) PrepareStart(ctx context.Context, item domain.RuntimeInstal
 			return err
 		}
 	}
-	command := exec.Command(item.Path, append([]string{"serve"}, h.args...)...)
+	// The worker outlives request contexts; the host stops it through its own
+	// drain protocol instead of a context kill.
+	command := exec.Command(item.Path, append([]string{"serve"}, h.args...)...) //nolint:noctx
 	command.Env = workerEnvironment(socket, h.parentSocket, h.token)
 	command.Stdout, command.Stderr = h.stdout, h.stderr
 	command.SysProcAttr = updateProcessAttributes()

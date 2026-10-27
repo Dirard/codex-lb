@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -107,4 +108,15 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		return cfg, errors.New("import-legacy requires absolute --source and --source-key paths")
 	}
 	return cfg, nil
+}
+
+// listenError names the address and the operating-system reason (for example
+// "address already in use" or "permission denied"); neither contains secrets.
+func listenError(purpose, address string, err error) error {
+	reason := "unknown error"
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Err != nil {
+		reason = opErr.Err.Error()
+	}
+	return fmt.Errorf("cannot bind %s %s: %s", purpose, address, reason)
 }
