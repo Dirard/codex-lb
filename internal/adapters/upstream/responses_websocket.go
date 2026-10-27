@@ -20,18 +20,26 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 		return Result{}, err
 	}
 
-	session, rejected, err := a.sessions.acquire(ctx, target, req.PreviousResponseID, a.client)
+	session, rejected, err := a.sessions.acquire(ctx, target, req.PreviousResponseID, a.client, websocketReuseFence{a.websocketReuseProbeAfter, a.websocketReuseProbeTimeout})
 	if err != nil {
 		return rejected, err
 	}
 	keep, responseID := false, ""
 	defer func() { a.sessions.release(session, keep, responseID, true) }()
+	a.sessions.mu.Lock()
+	priorID := session.latest
+	a.sessions.mu.Unlock()
 	connection := session.connection
+	lease := session.arm()
+	defer session.disarm(lease)
 
-	if err := connection.Write(ctx, websocket.MessageText, create); err != nil {
+	writeCtx, stopWrite := context.WithTimeout(ctx, websocketWriteTimeout)
+	err = connection.Write(writeCtx, websocket.MessageText, create)
+	stopWrite()
+	if err != nil {
 		return Result{}, wrapContext(ctx, &Error{Code: ErrorCodeConnection, Message: err.Error()})
 	}
-	probeErrors, stopProbe := a.probeWebSocket(ctx, connection)
+	probeErrors, stopProbe := a.probeWebSocket(ctx, session)
 	defer stopProbe()
 	var interrupts chan string
 	if target.OnInterruptReady != nil {
@@ -91,7 +99,7 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 				}
 				continue
 			}
-			writeCtx, stopWrite := context.WithTimeout(ctx, 30*time.Second)
+			writeCtx, stopWrite := context.WithTimeout(ctx, websocketWriteTimeout)
 			err := connection.Write(writeCtx, websocket.MessageText, mustJSON(struct {
 				Type       string `json:"type"`
 				ResponseID string `json:"response_id"`
@@ -103,14 +111,13 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			}
 			sentInterrupt, pendingInterrupt = id, id
 			continue
-		case received, open := <-session.frames:
-			if !open {
-				if terminal != nil {
-					return missingAck()
-				}
-				return result, &Error{Code: ErrorCodeStreamIncomplete, Message: "Upstream WebSocket closed before a terminal event"}
+		case frame = <-lease.frames:
+		case <-session.readerDone:
+			// The unbuffered hand-off delivered every frame the reader read.
+			if terminal != nil {
+				return missingAck()
 			}
-			frame = received
+			return result, &Error{Code: ErrorCodeStreamIncomplete, Message: "Upstream WebSocket closed before a terminal event"}
 		case <-ctx.Done():
 			return result, ctx.Err()
 		case <-ackTimeout:
@@ -172,20 +179,30 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			return result, responseEventError(data)
 		}
 		switch eventType {
-		case "response.created":
+		case "response.created", "response.in_progress":
 			var response struct {
 				ID string `json:"id"`
 			}
 			_ = json.Unmarshal(object["response"], &response)
-			currentID = response.ID
+			if response.ID != "" && (response.ID == priorID || currentID != "" && response.ID != currentID) {
+				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Upstream event belongs to another response"}
+			}
+			if eventType == "response.created" {
+				currentID = response.ID
+			}
 		case "response.completed", "response.failed", "response.incomplete":
 			if terminal != nil {
 				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Upstream sent a second terminal response while awaiting interruption acknowledgement"}
 			}
-			result, err = terminalFromResponsesEvent(eventType, data, target.Capabilities.AllowMissingUsage)
+			terminalResult, err := terminalFromResponsesEvent(eventType, data, target.Capabilities.AllowMissingUsage)
 			if err != nil {
-				return result, err
+				return terminalResult, err
 			}
+			// A terminal for another response must not settle this request.
+			if terminalResult.ResponseID == priorID || currentID != "" && terminalResult.ResponseID != currentID {
+				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Upstream terminal belongs to another response"}
+			}
+			result = terminalResult
 			if sentInterrupt != "" && result.ResponseID != sentInterrupt {
 				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Interruption terminal belongs to another response"}
 			}
@@ -205,6 +222,10 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 		}
 	}
 }
+
+// websocketWriteTimeout bounds one upstream WebSocket write, matching the
+// downstream write bound so neither side can hold a lease indefinitely.
+const websocketWriteTimeout = 30 * time.Second
 
 func interruptFailureEvent(responseID, code, message string) Event {
 	return Event{Type: "response.interrupt.failed", Data: mustJSON(struct {

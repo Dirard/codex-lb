@@ -26,6 +26,10 @@ type HTTPAdapter struct {
 	sessions              websocketSessions
 	websocketPingInterval time.Duration
 	websocketPingTimeout  time.Duration
+	// A pooled socket idle at least this long proves liveness under its lease
+	// before response.create; failure there is safely redialled.
+	websocketReuseProbeAfter   time.Duration
+	websocketReuseProbeTimeout time.Duration
 }
 
 func (a *HTTPAdapter) Close() error {
@@ -46,7 +50,8 @@ func New(client *http.Client, continuations *ContinuationStore) *HTTPAdapter {
 	if continuations == nil {
 		continuations = NewContinuationStore()
 	}
-	return &HTTPAdapter{client: client, store: continuations, websocketPingInterval: 30 * time.Second, websocketPingTimeout: 10 * time.Second}
+	return &HTTPAdapter{client: client, store: continuations, websocketPingInterval: 30 * time.Second, websocketPingTimeout: 10 * time.Second,
+		websocketReuseProbeAfter: 20 * time.Second, websocketReuseProbeTimeout: 3 * time.Second}
 }
 
 func (a *HTTPAdapter) Execute(ctx context.Context, target Target, request Request) (Result, error) {
