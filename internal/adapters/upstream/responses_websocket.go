@@ -144,22 +144,24 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 		if len(data) > maxSSEEventBytes {
 			return result, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event exceeds bounded size"}
 		}
-		var object map[string]json.RawMessage
-		if err := decodeExactJSON(data, &object); err != nil {
+		// conn.Read returns a fresh buffer per frame; events forward it without copying.
+		header, err := decodeEventHeader(data)
+		if err != nil {
 			return result, err
 		}
-		eventType := ""
-		_ = json.Unmarshal(object["type"], &eventType)
+		eventType := header.Type
 		if eventType == "" {
 			return result, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event omitted its type"}
 		}
 		if eventType == "response.interrupt.accepted" || eventType == "response.interrupt.failed" {
-			var id string
-			if json.Unmarshal(object["response_id"], &id) != nil || pendingInterrupt == "" || id != pendingInterrupt {
+			var ack struct {
+				ResponseID *string `json:"response_id"`
+			}
+			if json.Unmarshal(data, &ack) != nil || ack.ResponseID == nil || pendingInterrupt == "" || *ack.ResponseID != pendingInterrupt {
 				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Unexpected response interruption acknowledgement"}
 			}
 			pendingInterrupt = ""
-			if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
+			if err := emit(Event{Type: eventType, Data: data}); err != nil {
 				return result, err
 			}
 			if terminal != nil {
@@ -167,7 +169,7 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			}
 			continue
 		}
-		if eventType == "error" || object["error"] != nil {
+		if eventType == "error" || header.Error != nil {
 			if terminal != nil {
 				return missingAck()
 			}
@@ -180,10 +182,13 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 		}
 		switch eventType {
 		case "response.created", "response.in_progress":
-			var response struct {
-				ID string `json:"id"`
+			var announced struct {
+				Response struct {
+					ID string `json:"id"`
+				} `json:"response"`
 			}
-			_ = json.Unmarshal(object["response"], &response)
+			_ = json.Unmarshal(data, &announced)
+			response := announced.Response
 			if response.ID != "" && (response.ID == priorID || currentID != "" && response.ID != currentID) {
 				return result, &Error{Code: ErrorCodeInvalidStream, Message: "Upstream event belongs to another response"}
 			}
@@ -209,7 +214,7 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			if err := stopInterrupts(); err != nil {
 				return result, err
 			}
-			terminal = &Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}
+			terminal = &Event{Type: eventType, Data: data}
 			if pendingInterrupt != "" {
 				ackTimer = time.NewTimer(5 * time.Second)
 				ackTimeout = ackTimer.C
@@ -217,7 +222,7 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 			}
 			return finish(true)
 		}
-		if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
+		if err := emit(Event{Type: eventType, Data: data}); err != nil {
 			return result, err
 		}
 	}

@@ -34,16 +34,13 @@ func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req re
 		if len(bytes.TrimSpace(data)) == 0 {
 			return nil
 		}
-		var object map[string]json.RawMessage
-		if err := decodeExactJSON(data, &object); err != nil {
+		header, err := decodeEventHeader(data)
+		if err != nil {
 			return err
 		}
-		eventType := strings.TrimSpace(eventName)
-		if raw, ok := object["type"]; ok {
-			var typeName string
-			if json.Unmarshal(raw, &typeName) == nil {
-				eventType = typeName
-			}
+		eventType := header.Type
+		if eventType == "" {
+			eventType = strings.TrimSpace(eventName)
 		}
 		if eventType == "" {
 			return &Error{Code: ErrorCodeInvalidStream, Message: "upstream SSE event omitted its type"}
@@ -66,12 +63,13 @@ func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req re
 			if err != nil {
 				return err
 			}
-			if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
+			if err := emit(Event{Type: eventType, Data: data}); err != nil {
 				return err
 			}
 			return errResponsesTerminalReached
 		}
-		return emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)})
+		// readSSE hands each event its own buffer; no further copy is needed.
+		return emit(Event{Type: eventType, Data: data})
 	})
 	if err != nil && !errors.Is(err, errResponsesTerminalReached) {
 		return terminal, wrapContext(ctx, err)
