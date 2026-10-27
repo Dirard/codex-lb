@@ -24,7 +24,6 @@ export type AccountDetailProps = {
   account: AccountSummary | null;
   showAccountId?: boolean;
   busy: boolean;
-  readOnly?: boolean;
   onPause: (accountId: string) => void;
   onResume: (accountId: string) => void;
   onProbe: (accountId: string) => void;
@@ -50,7 +49,6 @@ export function AccountDetail({
   account,
   showAccountId = false,
   busy,
-  readOnly = false,
   onPause,
   onResume,
   onProbe,
@@ -102,7 +100,7 @@ export function AccountDetail({
   const operatorRecoveryAction =
     account.status === "reauth_required" || account.status === "deactivated";
   const usageResetDisabled =
-    busy || readOnly || account.status === "paused" || operatorRecoveryAction || (resetCredits?.availableCount ?? 0) <= 0;
+    busy || account.status === "paused" || operatorRecoveryAction || (resetCredits?.availableCount ?? 0) <= 0;
 
   return (
     <div
@@ -120,7 +118,6 @@ export function AccountDetail({
           idSuffix={emailSubtitle ? "" : idSuffix}
           blurred={blurred}
           busy={busy}
-          readOnly={readOnly}
           onSetAlias={onSetAlias}
         />
         {emailSubtitle ? (
@@ -145,7 +142,6 @@ export function AccountDetail({
         key={account.accountId}
         accountId={account.accountId}
         busy={busy}
-        readOnly={readOnly}
       />
 
       <AccountUsagePanel
@@ -161,7 +157,6 @@ export function AccountDetail({
       <AccountActions
         account={account}
         busy={busy}
-        readOnly={readOnly}
         onPause={onPause}
         onResume={onResume}
         onProbe={onProbe}
@@ -186,7 +181,6 @@ type AccountNameFieldProps = {
   idSuffix: string;
   blurred: boolean;
   busy: boolean;
-  readOnly: boolean;
   onSetAlias: (accountId: string, alias: string | null) => Promise<unknown>;
 };
 
@@ -198,7 +192,6 @@ function AccountNameField({
   idSuffix,
   blurred,
   busy,
-  readOnly,
   onSetAlias,
 }: AccountNameFieldProps) {
   const { t } = useTranslation();
@@ -228,7 +221,7 @@ function AccountNameField({
             placeholder={t("accounts.detail.aliasPlaceholder")}
             value={aliasDraft}
             autoFocus
-            disabled={busy || readOnly}
+            disabled={busy}
             onChange={(event) => setAliasDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -245,7 +238,7 @@ function AccountNameField({
             variant="ghost"
             size="icon-sm"
             aria-label={t("accounts.detail.saveAlias")}
-            disabled={busy || readOnly}
+            disabled={busy}
             onClick={() => void handleSave()}
           >
             <Check className="size-4" />
@@ -288,7 +281,7 @@ function AccountNameField({
         size="icon-xs"
         aria-label={t("accounts.detail.editAlias")}
         title={t("accounts.detail.aliasHelp")}
-        disabled={busy || readOnly}
+        disabled={busy}
         onClick={() => {
           setAliasDraft(alias ?? "");
           setIsEditing(true);

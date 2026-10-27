@@ -1264,8 +1264,6 @@ export const handlers = [
 		state.authSession = createDashboardAuthSession({
 			...state.authSession,
 			authenticated: !state.authSession.totpRequiredOnLogin,
-			role: "admin",
-			permissions: ["read", "write"],
 		});
 		return HttpResponse.json(state.authSession);
 	}),
@@ -1583,31 +1581,6 @@ export const handlers = [
       totalAccounts: run.accountId ? 1 : 0,
       completedAccounts: run.accountId ? 1 : 0,
       pendingAccounts: 0,
-    });
-  }),
-
-  http.get("/api/automations/:automationId/runs", ({ params, request }) => {
-    const automationId = String(params.automationId);
-    const automation = findAutomation(automationId);
-    if (!automation) {
-      return HttpResponse.json(
-        { error: { code: "automation_not_found", message: "Automation not found" } },
-        { status: 404 },
-      );
-    }
-    const url = new URL(request.url);
-    const limit = Math.max(1, toFiniteNonNegative(url.searchParams.get("limit"), 20));
-    const all = state.automationRuns[automationId] ?? [];
-    const items = all.slice(0, limit).map((run) => ({
-      ...run,
-      jobName: automation.name,
-      model: automation.model,
-      reasoningEffort: run.reasoningEffort ?? automation.reasoningEffort ?? null,
-    }));
-    return HttpResponse.json({
-      items,
-      total: all.length,
-      hasMore: all.length > limit,
     });
   }),
 

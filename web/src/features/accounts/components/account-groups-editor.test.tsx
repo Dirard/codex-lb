@@ -67,30 +67,25 @@ describe("AccountGroupsEditor", () => {
     expect(within(emptyView.container).queryByText("No account groups yet")).not.toBeInTheDocument();
   });
 
-  it("prevents busy and read-only writes and resets the draft on account switch", async () => {
+  it("prevents busy writes and resets the draft on account switch", async () => {
     const user = userEvent.setup();
     mockGroups([[accountID], []]);
     const view = renderWithProviders(
-      <AccountGroupsEditor key={accountID} accountId={accountID} busy={false} readOnly />,
+      <AccountGroupsEditor key={accountID} accountId={accountID} busy />,
     );
 
     expect(await screen.findByText("Team pool")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Team pool" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save groups" })).toBeDisabled();
-
-    view.rerender(
-      <AccountGroupsEditor key={accountID} accountId={accountID} busy readOnly={false} />,
-    );
     expect(screen.getByRole("checkbox", { name: "Team pool" })).toBeDisabled();
 
     view.rerender(
-      <AccountGroupsEditor key={accountID} accountId={accountID} busy={false} readOnly={false} />,
+      <AccountGroupsEditor key={accountID} accountId={accountID} busy={false} />,
     );
     await user.click(screen.getByRole("checkbox", { name: "Beta pool" }));
     expect(screen.getByText("2 groups selected")).toBeInTheDocument();
 
     view.rerender(
-      <AccountGroupsEditor key="acc_secondary" accountId="acc_secondary" busy={false} readOnly={false} />,
+      <AccountGroupsEditor key="acc_secondary" accountId="acc_secondary" busy={false} />,
     );
 
     expect(screen.getByRole("checkbox", { name: "Team pool" })).not.toBeChecked();

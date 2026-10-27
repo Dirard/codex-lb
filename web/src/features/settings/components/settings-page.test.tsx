@@ -119,7 +119,6 @@ describe("SettingsPage", () => {
       authMode: "standard",
       passwordManagementEnabled: true,
       passwordSessionActive: false,
-      canWrite: true,
     });
 
     mockSettingsQuery({
@@ -200,25 +199,6 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Firewall Section")).toBeInTheDocument();
     expect(screen.getByText("Sticky Sessions Section")).toBeInTheDocument();
     expect(screen.getByText("Data Retention Settings")).toBeInTheDocument();
-  });
-
-  it("disables write-capable sections for read-only sessions", async () => {
-    useAuthStore.setState({ canWrite: false });
-
-    renderSettings();
-
-    expect(screen.getByText("You are viewing the dashboard in read-only mode. Admin controls are disabled.")).toBeInTheDocument();
-    expect(screen.queryByText("Password Settings")).not.toBeInTheDocument();
-    expect(screen.queryByText("Session Settings")).not.toBeInTheDocument();
-    expect(importSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ busy: true }));
-    expect(apiKeysSectionMock).toHaveBeenCalledWith(expect.objectContaining({ disabled: true }));
-
-    await expandAdvancedSettings();
-
-    expect(routingSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ busy: true }));
-    expect(firewallSectionMock).toHaveBeenCalledWith(expect.objectContaining({ disabled: true }));
-    expect(stickySessionsSectionMock).toHaveBeenCalledWith(expect.objectContaining({ disabled: true }));
-    expect(dataRetentionSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ busy: true }));
   });
 
   it("keeps password settings available for writable sessions", async () => {

@@ -10,10 +10,9 @@ import { getErrorMessageOrNull } from "@/utils/errors";
 export type AccountGroupsEditorProps = {
   accountId: string;
   busy: boolean;
-  readOnly?: boolean;
 };
 
-export function AccountGroupsEditor({ accountId, busy, readOnly = false }: AccountGroupsEditorProps) {
+export function AccountGroupsEditor({ accountId, busy }: AccountGroupsEditorProps) {
   const { t } = useTranslation();
   const { groupsQuery } = useAccountGroups();
   const { accountGroupsMutation } = useUpdateAccountGroups();
@@ -23,7 +22,7 @@ export function AccountGroupsEditor({ accountId, busy, readOnly = false }: Accou
   const selectedGroupIds = draftGroupIds ?? currentGroupIds;
   const loadError = getErrorMessageOrNull(groupsQuery.error);
   const loading = groupsQuery.isPending;
-  const writeDisabled = busy || readOnly || loading || accountGroupsMutation.isPending;
+  const writeDisabled = busy || loading || accountGroupsMutation.isPending;
   const unchanged =
     selectedGroupIds.length === currentGroupIds.length &&
     selectedGroupIds.every((groupId) => currentGroupIds.includes(groupId));

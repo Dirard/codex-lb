@@ -35,7 +35,6 @@ export type AccountListProps = {
   sortMode?: AccountSortMode;
   onSortModeChange?: (sortMode: AccountSortMode) => void;
   showResetCreditBadges?: boolean;
-  readOnly?: boolean;
 };
 
 export function AccountList({
@@ -47,7 +46,6 @@ export function AccountList({
   sortMode,
   onSortModeChange,
   showResetCreditBadges = true,
-  readOnly = false,
 }: AccountListProps) {
   const { t } = useTranslation();
   const [search, setSearch] = useState("");
@@ -140,7 +138,6 @@ export function AccountList({
           type="button"
           size="sm"
           className="gap-1.5"
-          disabled={readOnly}
           onClick={() => setChooserOpen(true)}
         >
           <Plus className="h-3.5 w-3.5" />

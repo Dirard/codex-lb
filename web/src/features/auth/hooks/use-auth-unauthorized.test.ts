@@ -45,8 +45,6 @@ describe("useAuthStore unauthorized handler", () => {
       authMode: "standard",
       passwordManagementEnabled: true,
       passwordSessionActive: false,
-      role: "admin",
-      permissions: ["read"],
     });
 
     useAuthStore.setState({
@@ -70,24 +68,4 @@ describe("useAuthStore unauthorized handler", () => {
     expect(next.bootstrapTokenConfigured).toBe(true);
   });
 
-  it("clears write permissions on 401 handling", async () => {
-    const { useAuthStore } = await import("@/features/auth/hooks/use-auth");
-
-    useAuthStore.setState({
-      authenticated: true,
-      initialized: true,
-      role: "admin",
-      permissions: ["read", "write"],
-      canWrite: true,
-    });
-
-    expect(registeredUnauthorizedHandler).not.toBeNull();
-    registeredUnauthorizedHandler?.();
-
-    const next = useAuthStore.getState();
-    expect(next.authenticated).toBe(false);
-    expect(next.role).toBe("admin");
-    expect(next.permissions).toEqual(["read"]);
-    expect(next.canWrite).toBe(false);
-  });
 });

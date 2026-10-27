@@ -62,7 +62,8 @@ describe("dashboard overview error integration", () => {
     const { container } = renderWithProviders(<App />);
 
     expect(await screen.findByText(OUTAGE)).toBeInTheDocument();
-    await waitFor(() => expect(overviewCalls).toBeGreaterThan(1));
+    // Only the dashboard reads the overview; the status bar uses /api/dashboard/status.
+    expect(overviewCalls).toBe(1);
 
     const alert = screen.getByRole("alert");
     const terminalState = alert.parentElement ?? alert;
@@ -82,9 +83,9 @@ describe("dashboard overview error integration", () => {
     expect(container.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(0);
 
     releaseRecovery();
-    expect(await screen.findByText(RECOVERED)).toBeInTheDocument();
+    expect((await screen.findAllByText(RECOVERED)).length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(overviewCalls).toBeGreaterThan(2);
+    expect(overviewCalls).toBeGreaterThan(1);
   });
 
   it("does not carry an unresolved Retry into a new timeframe", async () => {

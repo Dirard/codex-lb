@@ -43,36 +43,6 @@ describe("AccountDetail", () => {
     expect(onRoutingPolicyChange).toHaveBeenCalledWith(account.accountId, "preserve");
   });
 
-  it("disables alias controls for read-only sessions", () => {
-    const onSetAlias = vi.fn().mockResolvedValue(undefined);
-    const account = createAccountSummary({ accountId: "acc_primary", alias: "Personal" });
-
-    renderWithClient(
-      <AccountDetail
-        account={account}
-        busy={false}
-        readOnly
-        onPause={vi.fn()}
-        onResume={vi.fn()}
-        onProbe={vi.fn()}
-        onResetUsage={vi.fn()}
-        onSetAlias={onSetAlias}
-        onDelete={vi.fn()}
-        onReauth={vi.fn()}
-        onExportAuth={vi.fn()}
-        onResetCredit={vi.fn()}
-        onLimitWarmupChange={vi.fn()}
-        onRoutingPolicyChange={vi.fn()}
-        onSecurityWorkAuthorizedChange={vi.fn()}
-        resetCredits={{ availableCount: 1 }}
-      />,
-    );
-
-    expect(screen.getByRole("button", { name: "Edit alias" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Reset usage" })).toBeDisabled();
-    expect(screen.getByRole("heading", { name: "Groups" })).toBeInTheDocument();
-  });
-
   it("disables usage reset for paused accounts", () => {
     const account = createAccountSummary({ status: "paused" });
 

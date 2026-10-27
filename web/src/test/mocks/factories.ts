@@ -466,8 +466,6 @@ export function createDashboardAuthSession(
 		authMode: "standard",
 		passwordManagementEnabled: true,
 		passwordSessionActive: false,
-		role: "admin",
-		permissions: ["read", "write"],
 		...overrides,
 	});
 }

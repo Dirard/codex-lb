@@ -7,12 +7,7 @@ import {
   logout as logoutRequest,
   verifyTotp as verifyTotpRequest,
 } from "@/features/auth/api";
-import type {
-  AuthSession,
-  DashboardAuthMode,
-  DashboardPermission,
-  DashboardRole,
-} from "@/features/auth/schemas";
+import type { AuthSession, DashboardAuthMode } from "@/features/auth/schemas";
 
 type AuthState = {
   passwordRequired: boolean;
@@ -25,9 +20,6 @@ type AuthState = {
   authMode: DashboardAuthMode;
   passwordManagementEnabled: boolean;
   passwordSessionActive: boolean;
-  role: DashboardRole;
-  permissions: DashboardPermission[];
-  canWrite: boolean;
   loading: boolean;
   initialized: boolean;
   error: string | null;
@@ -50,9 +42,6 @@ function applySession(set: (next: Partial<AuthState>) => void, session: AuthSess
     authMode: session.authMode,
     passwordManagementEnabled: session.passwordManagementEnabled,
     passwordSessionActive: session.passwordSessionActive,
-    role: session.role,
-    permissions: session.permissions,
-    canWrite: session.permissions.includes("write"),
     initialized: true,
     error: null,
   });
@@ -70,9 +59,6 @@ export const useAuthStore = create<AuthState>((set) => ({
   authMode: "standard",
   passwordManagementEnabled: true,
   passwordSessionActive: false,
-  role: "admin",
-  permissions: ["read", "write"],
-  canWrite: true,
   loading: false,
   initialized: false,
   error: null,
@@ -116,9 +102,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         bootstrapTokenConfigured: false,
         authMode: "standard",
         passwordManagementEnabled: true,
-        role: "admin",
-        permissions: ["read", "write"],
-        canWrite: true,
       });
       await useAuthStore.getState().refreshSession();
     } finally {
@@ -148,9 +131,6 @@ setUnauthorizedHandler(() => {
   useAuthStore.setState((state) => ({
     ...state,
     authenticated: false,
-    role: "admin",
-    permissions: ["read"],
-    canWrite: false,
     initialized: true,
     error: null,
   }));

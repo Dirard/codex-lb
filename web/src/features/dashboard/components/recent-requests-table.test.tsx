@@ -115,9 +115,6 @@ describe("RecentRequestsTable", () => {
     toastSuccess.mockReset();
     toastError.mockReset();
     useAuthStore.setState({
-      role: "admin",
-      permissions: ["read", "write"],
-      canWrite: true,
     });
   });
 
@@ -604,9 +601,6 @@ describe("RecentRequestsTable", () => {
 
   it("shows identifying metadata and archive controls to admins", () => {
     useAuthStore.setState({
-      role: "admin",
-      permissions: ["read", "write"],
-      canWrite: true,
     });
 
     render(
