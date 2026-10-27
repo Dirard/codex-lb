@@ -1,38 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DonutChart } from "@/components/donut-chart";
 import i18n from "@/i18n";
-
-vi.mock("@/components/lazy-recharts", () => ({
-  Cell: () => null,
-  PieChart: ({ children }: { children: ReactNode }) => <svg>{children}</svg>,
-  Pie: ({
-    children,
-    data,
-    onMouseEnter,
-    onMouseLeave,
-  }: {
-    children: ReactNode;
-    data: Array<{ id: string }>;
-    onMouseEnter?: (entry: { payload: { id: string } }, index: number) => void;
-    onMouseLeave?: () => void;
-  }) => (
-    <>
-      {data.map((entry, index) => (
-        <g
-          key={entry.id}
-          className="recharts-pie-sector"
-          onMouseEnter={() => onMouseEnter?.({ payload: entry }, index)}
-          onMouseLeave={() => onMouseLeave?.()}
-        />
-      ))}
-      {children}
-    </>
-  ),
-  Sector: () => <path />,
-}));
 
 const BASE_ITEMS = [
   { label: "Account A", value: 120, color: "#7bb661" },
@@ -96,7 +66,7 @@ describe("DonutChart", () => {
     );
 
     // When total = sum(items), there should be exactly 2 cells (no gray consumed cell)
-    const cells = container.querySelectorAll(".recharts-pie-sector");
+    const cells = container.querySelectorAll("[data-testid=\"donut-segment\"]");
     expect(cells).toHaveLength(2);
   });
 
@@ -110,7 +80,7 @@ describe("DonutChart", () => {
     );
 
     // When total > sum(items), there should be 3 cells (2 items + 1 consumed gray)
-    const cells = container.querySelectorAll(".recharts-pie-sector");
+    const cells = container.querySelectorAll("[data-testid=\"donut-segment\"]");
     expect(cells).toHaveLength(3);
     expect(screen.getByTestId("donut-caption")).toHaveTextContent("Total 500 · 60% used");
     expect(screen.getByTestId("donut-used-value")).toHaveTextContent("300");
@@ -192,7 +162,7 @@ describe("DonutChart", () => {
       />,
     );
 
-    const sectors = container.querySelectorAll(".recharts-pie-sector");
+    const sectors = container.querySelectorAll("[data-testid=\"donut-segment\"]");
     const legendRow = screen.getByTestId("donut-legend-0");
 
     fireEvent.mouseEnter(sectors[0]!);
@@ -226,7 +196,7 @@ describe("DonutChart", () => {
       <DonutChart title="Scrollable Legends" total={1000} items={items} />,
     );
 
-    const sectors = container.querySelectorAll(".recharts-pie-sector");
+    const sectors = container.querySelectorAll("[data-testid=\"donut-segment\"]");
     const lastLegendRow = screen.getByTestId("donut-legend-4");
 
     fireEvent.mouseEnter(sectors[4]!);
@@ -312,5 +282,28 @@ describe("DonutChart", () => {
     );
 
     expect(screen.getByTestId("safe-line-tick")).toBeInTheDocument();
+  });
+
+  it("draws a single account as one full ring with an empty hole", () => {
+    const { container } = render(
+      <DonutChart title="Full" total={100} items={[{ label: "Only", value: 100, color: "#123456" }]} />,
+    );
+
+    const segments = container.querySelectorAll('[data-testid="donut-segment"]');
+    expect(segments).toHaveLength(1);
+    expect(segments[0]).toHaveAttribute("fill-rule", "evenodd");
+    // Outer and inner rings are both closed sub-paths.
+    expect(segments[0]!.getAttribute("d")?.match(/Z/g)).toHaveLength(2);
+  });
+
+  it("enlarges the hovered account's segment from the legend", () => {
+    const { container } = render(<DonutChart title="Grow" total={500} items={BASE_ITEMS} />);
+    const segment = () => container.querySelector('[data-segment-id="Account A"]')!;
+    const before = segment().getAttribute("d");
+
+    fireEvent.mouseEnter(screen.getByTestId("donut-legend-0"));
+
+    expect(segment().getAttribute("d")).not.toBe(before);
+    expect(segment()).toHaveAttribute("stroke-width", "2");
   });
 });
