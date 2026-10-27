@@ -53,7 +53,7 @@ func (s *Store) SaveCodexResourceOwner(ctx context.Context, owner application.Co
 			return ErrConflict
 		}
 		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM codex_resource_owners").Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT owner_count FROM codex_resource_owner_stats WHERE id=1").Scan(&count); err != nil {
 			return err
 		}
 		if count > maxCodexResourceOwners {

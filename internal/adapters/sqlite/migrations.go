@@ -258,3 +258,31 @@ const schemaV37 = `
 CREATE INDEX idx_usage_events_time_id ON usage_events(requested_at,request_id);
 DROP INDEX idx_usage_events_time;
 `
+
+// schemaV38 keeps error-archive and resource-owner bounds in counters that
+// triggers maintain in the same transaction as every insert or delete, so
+// enforcing them no longer scans every row on each insert (DB-19).
+const schemaV38 = `
+CREATE TABLE error_archive_stats (
+ id INTEGER PRIMARY KEY CHECK(id=1), archive_count INTEGER NOT NULL, archive_bytes INTEGER NOT NULL
+);
+INSERT INTO error_archive_stats(id,archive_count,archive_bytes)
+ SELECT 1,count(*),coalesce(sum(length(content_encrypted)),0) FROM error_archives;
+CREATE TRIGGER error_archives_count_insert AFTER INSERT ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_count=archive_count+1,archive_bytes=archive_bytes+length(NEW.content_encrypted) WHERE id=1;
+END;
+CREATE TRIGGER error_archives_count_delete AFTER DELETE ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_count=archive_count-1,archive_bytes=archive_bytes-length(OLD.content_encrypted) WHERE id=1;
+END;
+CREATE TRIGGER error_archives_count_update AFTER UPDATE OF content_encrypted ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_bytes=archive_bytes-length(OLD.content_encrypted)+length(NEW.content_encrypted) WHERE id=1;
+END;
+CREATE TABLE codex_resource_owner_stats (id INTEGER PRIMARY KEY CHECK(id=1), owner_count INTEGER NOT NULL);
+INSERT INTO codex_resource_owner_stats(id,owner_count) SELECT 1,count(*) FROM codex_resource_owners;
+CREATE TRIGGER codex_resource_owners_count_insert AFTER INSERT ON codex_resource_owners BEGIN
+ UPDATE codex_resource_owner_stats SET owner_count=owner_count+1 WHERE id=1;
+END;
+CREATE TRIGGER codex_resource_owners_count_delete AFTER DELETE ON codex_resource_owners BEGIN
+ UPDATE codex_resource_owner_stats SET owner_count=owner_count-1 WHERE id=1;
+END;
+`
