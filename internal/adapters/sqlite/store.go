@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -27,10 +28,11 @@ const readPoolSize = 8
 
 var memoryDBSequence atomic.Int64
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34, schemaV35}
 
 type Store struct {
 	db                  *sql.DB
+	filePath            string // absolute database file; empty for in-memory stores
 	readDB              *sql.DB
 	writer              *batchWriter
 	accountAdmissionEnv accountAdmissionEnvironment
@@ -55,8 +57,15 @@ func Open(path string) (*Store, error) {
 		path = fmt.Sprintf("file:codex-lb-memory-%d?mode=memory&cache=shared", memoryDBSequence.Add(1))
 	}
 	if !strings.HasPrefix(path, "file:") {
-		path = (&url.URL{Scheme: "file", Path: path}).String()
+		// A relative path would become a URI authority ("file://rel"), which
+		// SQLite rejects; resolve it against the working directory instead.
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite path: %w", ErrInvalid)
+		}
+		path = (&url.URL{Scheme: "file", Path: absolute}).String()
 	}
+	filePath := databaseFilePath(path)
 	writerDSN, err := sqliteDSN(path, false)
 	if err != nil {
 		return nil, err
@@ -69,7 +78,7 @@ func Open(path string) (*Store, error) {
 	// WAL readers use a separate pool; every durable mutation still uses one writer.
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	store := &Store{db: db, accountAdmissionEnv: accountEnv, affinityStartupTTL: affinityTTL}
+	store := &Store{db: db, filePath: filePath, accountAdmissionEnv: accountEnv, affinityStartupTTL: affinityTTL}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -113,6 +122,19 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error {
 	s.writer.close()
 	return errors.Join(s.readDB.Close(), s.db.Close())
+}
+
+// databaseFilePath returns the filesystem path of a file URI, or "" for an
+// in-memory database.
+func databaseFilePath(uri string) string {
+	parsed, err := url.Parse(uri)
+	if err != nil || parsed.Scheme != "file" || parsed.Query().Get("mode") == "memory" || strings.HasPrefix(parsed.Opaque, ":memory:") {
+		return ""
+	}
+	if parsed.Path != "" {
+		return parsed.Path
+	}
+	return parsed.Opaque
 }
 
 func sqliteDSN(path string, readonly bool) (string, error) {

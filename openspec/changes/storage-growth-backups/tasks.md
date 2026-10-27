@@ -15,7 +15,7 @@
 ## 3. Retention and growth
 
 - [ ] 3.1 Budgeted batch retention loop through the batch writer.
-- [ ] 3.2 Quota-history default of 45 days and thinning after nine days.
+- [ ] 3.2 Quota-history default of 45 days and hourly thinning after one day.
 - [ ] 3.3 Settled reservation pruning that preserves fences; automation-cycle and warm-up attempt pruning.
 
 ## 4. WAL and planner

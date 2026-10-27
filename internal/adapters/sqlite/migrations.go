@@ -229,3 +229,14 @@ DROP INDEX idx_account_quota_history_identity_time;
 CREATE INDEX idx_account_quota_history_identity_time ON account_quota_history
  (account_id,window,observed_at DESC,id DESC,used_percent,reset_at,window_minutes);
 `
+
+// schemaV35 persists the online backup schedule (OPS-6). Interval 0 disables
+// scheduled backups; the defaults keep three daily snapshots.
+const schemaV35 = `
+CREATE TABLE backup_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ interval_hours INTEGER NOT NULL DEFAULT 24 CHECK(interval_hours BETWEEN 0 AND 168),
+ keep_count INTEGER NOT NULL DEFAULT 3 CHECK(keep_count BETWEEN 1 AND 30)
+);
+INSERT INTO backup_settings(id) VALUES(1);
+`

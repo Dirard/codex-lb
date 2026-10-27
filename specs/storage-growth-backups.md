@@ -57,7 +57,7 @@ Requirements:
 A new history row SHALL be inserted only when the series has no row, the observation falls into a later five-minute UTC bucket than the latest row, the observation is older than the latest row, or `reset_at`/`window_minutes` differ from the latest row; otherwise the latest row SHALL be updated in place to the newer observation. `account_quotas` semantics are unchanged.
 
   R2:
-`RecentAccountQuotaHistory` SHALL return, for every current `(account, window)` in `account_quotas`, every retained observation inside the six-hour horizon plus the 64 newest observations in the requested lookback, ordered by account, window, observation time and id, without a global row limit or failure.
+`RecentAccountQuotaHistory` SHALL return, for every current `(account, window)` in `account_quotas`, every retained observation inside the six-hour horizon plus the 64 newest observations in the requested lookback, ordered by account, window, observation time and id, without a global row limit or failure; `PositiveQuotaDeltas` SHALL read only current windows that can be the weekly pace window. Both SHALL walk each series in index order through a covering series index.
 
   R3:
 The dashboard overview and projections SHALL complete for 200 or more accounts with a day of legacy one-minute history, and the history read for 500 accounts SHALL stay bounded by the number of current series.
@@ -102,7 +102,7 @@ A published snapshot SHALL pass `PRAGMA quick_check`, carry this application's i
 The encryption key SHALL NOT be written into the backups directory or any downloadable snapshot; every backup listing SHALL state that the key is excluded and must be stored separately.
 
   R7:
-Only one backup SHALL run at a time per process; a concurrent request SHALL be rejected as busy. A backup SHALL be refused when the estimated snapshot would leave less than max(256 MiB, 5 % of the filesystem) free.
+Only one backup SHALL run at a time per process; a concurrent request SHALL be rejected as busy. A backup SHALL be refused when the estimated snapshot would leave less than 5 % of the filesystem free, bounded to at least 256 MiB and at most 2 GiB.
 
 Files And Functions:
  - planned: internal/adapters/sqlite/backup.go#WriteSnapshot - read-only VACUUM INTO, fsync, verify
@@ -200,7 +200,7 @@ Tests:
    requirements: R13
 
 ### 3. Retention that keeps up with growth
-hourly retention cycle --repeat bounded batches through the batch writer until a batch is short or 20 s elapse--> [request events (opt-in), quota history (default 45 days, thinned after 9 days), settled reservations, automation runs, warm-up attempts, affinities] --log a short summary--> next cycle
+hourly retention cycle --repeat bounded batches through the batch writer until a batch is short or 20 s elapse--> [request events (opt-in), quota history (default 45 days, thinned to hourly after one day), settled reservations, automation runs, warm-up attempts, affinities] --log a short summary--> next cycle
 
 Requirements:
 
@@ -211,7 +211,7 @@ Each retention kind SHALL delete in batches of at most 500 rows per `s.write` jo
 When no override is stored, quota history SHALL be retained for 45 days; an explicit 0 disables it. Request events SHALL remain kept indefinitely unless the operator sets request-log retention.
 
   R16:
-Quota history older than nine days SHALL be thinned to the newest observation per series and UTC hour; the newest observation of every series SHALL never be deleted.
+Quota history older than one day SHALL be thinned to the newest observation per series, UTC hour, reset time and window length; the newest observation of every series SHALL never be deleted.
 
   R17:
 A reservation SHALL be deleted only when it is settled, last updated more than seven days ago, not referenced by a usage event, an account outcome or a continuation, and not the reservation with the largest rowid; reservations of pruned request events SHALL be deleted under the same conditions in the same transaction.
@@ -233,7 +233,7 @@ retention defaults:
 |---|---|---|---|
 | request events | disabled | 30 days | 500 |
 | quota history | 45 days | 45 days | 500 |
-| quota history full resolution | 9 days | — | 500 |
+| quota history full resolution | 1 day | — | 500 |
 | settled reservations | 7 days | — | 500 |
 | automation cycles per job | 100 | — | 500 |
 | warm-up attempts per account | 100 (reset > 8 days ago) | — | 500 |
@@ -362,8 +362,10 @@ None blocking. Non-blocking assumptions are recorded in the decision log (defaul
 ## Decision log
 
 - 2026-10-28: Quota history is coalesced at write time into five-minute buckets (update the series' latest row within its bucket) rather than deduplicated by value. Value-only deduplication lets an idle series lose its zero-burn samples and an active series still writes every minute; bucket coalescing bounds every series to 288 rows/day while reset and window changes always start a new row, so resets are never smoothed together and missing polls remain visible as gaps.
-- 2026-10-28: The history read is restricted to series present in `account_quotas`; every consumer looks history up by the current window set, so older windows were already unused.
-- 2026-10-28: Scheduled backups default to on (24 h, keep 3) instead of off. A same-disk snapshot does not replace off-host copies, but without it a corrupted file, operator mistake or failed upgrade on an unmanaged installation is unrecoverable. The free-space guard (max(256 MiB, 5 %)) prevents the backup from starving SQLite of disk; rotation bounds the directory.
+- 2026-10-28: The history read is restricted to series present in `account_quotas`; every consumer looks history up by the current window set, so older windows were already unused. Demand is read only for windows that can be the weekly pace window (secondary, monthly, seven-day primary), the only window its consumer uses.
+- 2026-10-28: The series index becomes covering (migration 34) and reads pin it with `INDEXED BY` and a `CROSS JOIN` from `account_quotas`: without statistics SQLite otherwise scans the time index or the whole series index. Measured at 500 accounts (steady shape): history 111 ms, demand 152 ms; with one day of legacy one-minute rows 0.49 s / 0.48 s.
+- 2026-10-28: Thinning starts after one day instead of nine: the per-account trend chart shows the hourly mean, which for thinned hours becomes the hourly last value, a negligible difference; in exchange seven-day demand reads 432 instead of 2 016 rows per series. Thinning keys include reset time and window length so the last pre-reset observation and therefore the demand before a reset survive.
+- 2026-10-28: Scheduled backups default to on (24 h, keep 3) instead of off. A same-disk snapshot does not replace off-host copies, but without it a corrupted file, operator mistake or failed upgrade on an unmanaged installation is unrecoverable. The free-space guard (5 % of the filesystem, clamped to 256 MiB–2 GiB) prevents the backup from starving SQLite of disk; rotation bounds the directory.
 - 2026-10-28: Backups never contain `encryption.key`. A stolen snapshot then exposes only encrypted credentials; the key changes only on reinstall, so the operator stores it once off-host. The UI and API say so explicitly.
 - 2026-10-28: The CLI reads through SQLite's own locking instead of the service's inode `flock`, so cron works while the service runs; it never migrates or writes the source.
 - 2026-10-28: Quota history gets a 45-day default (the existing floor; every consumer reads ≤ 30 days). Request events stay opt-in: they are the per-request financial evidence for key ledgers and reconciliation, and folding preserves only aggregates. Operators who need bounded growth set request-log retention explicitly; the backup card shows database size so growth is visible.

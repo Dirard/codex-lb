@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"codex-lb/internal/application"
+	"codex-lb/internal/domain"
 )
 
 func (r *runtime) maintainReports(ctx context.Context) {
@@ -51,5 +53,44 @@ func (r *runtime) maintainReportRetention(ctx context.Context) {
 	defer cancelArchive()
 	if err := r.data.store.PruneErrorArchives(archiveCtx, time.Now().UTC()); err != nil && ctx.Err() == nil {
 		r.logger.Warn("error-diagnostic retention did not complete; will retry next interval")
+	}
+}
+
+// Scheduled backups wait a few minutes after start so a restart loop does not
+// take a snapshot on every start, then check the schedule periodically.
+const (
+	backupStartDelay    = 5 * time.Minute
+	backupCheckInterval = 10 * time.Minute
+)
+
+func (r *runtime) maintainBackups(ctx context.Context) {
+	timer := time.NewTimer(backupStartDelay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		started := time.Now()
+		attempted, file, err := r.backups.CreateIfDue(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			r.logger.Warn("scheduled backup failed; existing backups are kept", "error_code", backupLogCode(err))
+		case attempted && err == nil:
+			r.logger.Info("backup ok", "name", file.Name, "size_bytes", file.SizeBytes, "duration_ms", time.Since(started).Milliseconds())
+		}
+		timer.Reset(backupCheckInterval)
+	}
+}
+
+func backupLogCode(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrInsufficientStorage):
+		return "insufficient_space"
+	case errors.Is(err, domain.ErrBackupBusy):
+		return "busy"
+	default:
+		return "backup_failed"
 	}
 }

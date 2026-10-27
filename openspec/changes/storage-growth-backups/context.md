@@ -30,14 +30,15 @@ during managed updates.
 - **Backups default on.** Every 24 h, keep 3, first check five minutes after
   start. A same-disk copy does not survive disk loss, but it covers corruption,
   operator mistakes and failed upgrades of unmanaged installations. The guard
-  refuses a snapshot that would leave less than max(256 MiB, 5 %) free, so a
+  refuses a snapshot that would leave less than 5 % of the filesystem free
+  (at least 256 MiB, at most 2 GiB), so a
   backup can never starve SQLite of disk. Interval 0 disables the schedule.
 - **The key is not in the backup.** `encryption.key` does not change after
   installation; store it once off-host (password manager, offline medium).
   A leaked snapshot alone exposes only encrypted credentials.
 - **Request events are not deleted by default.** They are the per-request
   evidence behind key ledgers and reconciliation. Quota history (operational
-  telemetry) gets a 45-day default and hourly thinning after nine days; every
+  telemetry) gets a 45-day default and hourly thinning after one day; every
   consumer reads at most 30 days.
 - **Reservation rowids are fences.** Account outcomes, continuations and
   affinity versions compare `usage_reservations` rowids. Pruning keeps the
