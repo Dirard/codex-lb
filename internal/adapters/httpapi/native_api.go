@@ -115,9 +115,7 @@ func (h *NativeAPIHandler) options(r *http.Request, keyID string) application.Re
 	if identity := ResolveIdentity(r, h.trusted); identity.IP.IsValid() {
 		options.ClientIP = identity.IP.String()
 	}
-	if fields := strings.Fields(options.UserAgent); len(fields) != 0 {
-		options.UserAgentGroup, _, _ = strings.Cut(fields[0], "/")
-	}
+	options.UserAgentGroup = userAgentGroup(options.UserAgent)
 	return options
 }
 

@@ -2,10 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -57,6 +59,31 @@ func TestOperationsRealtimeBridgesLiveCallAndStopsOnUpstreamClose(t *testing.T) 
 }
 
 func operationAdapterURL(server *httptest.Server) string { return server.URL }
+
+// NET-22: an upstream realtime socket that stops answering while silent ends
+// the session as a disconnect instead of holding the pump indefinitely.
+func TestOperationsRealtimeEndsWhenUpstreamStopsAnsweringPings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		<-r.Context().Done() // never reads: no pong, no frames
+	}))
+	defer server.Close()
+	adapter, _ := operationAdapter(t, server)
+	adapter.realtime = realtimeBounds{write: time.Second, pingInterval: 20 * time.Millisecond, pingTimeout: 50 * time.Millisecond}
+	downstream := &realtimeTestConnection{incoming: make(chan application.CodexRealtimeMessage), closed: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	err := adapter.Realtime(ctx, application.CodexOperationTarget{Account: operationAccount(), KeyID: "key"}, application.CodexRealtimeRequest{CallID: "call_1"}, downstream)
+	var failure *application.ProviderFailure
+	if !errors.As(err, &failure) || failure.Code != "realtime_live_disconnected" || time.Since(started) > 2*time.Second {
+		t.Fatalf("dead realtime upstream held the session: %v after %v", err, time.Since(started))
+	}
+}
 
 type realtimeTestConnection struct {
 	incoming chan application.CodexRealtimeMessage

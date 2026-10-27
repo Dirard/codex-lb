@@ -120,7 +120,7 @@ func TestCodexOperationsRoutesAuthenticateAndDispatch(t *testing.T) {
 	service := application.NewCodexOperations(store, &codexOwnerStore{}, provider, time.Hour)
 	service.ConfigureAdmission(codexTestAdmission{})
 	service.ConfigureAccountSelection(application.NewProxy(store, nil, nil, application.ProxyConfig{}))
-	handler := NewCodexOperationsHandler(store, service)
+	handler := NewCodexOperationsHandler(store, service, nil)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
@@ -174,7 +174,7 @@ func TestCodexOperationsTranscriptionMultipartBoundary(t *testing.T) {
 	service := application.NewCodexOperations(store, &codexOwnerStore{}, provider, time.Hour)
 	service.ConfigureAdmission(codexTestAdmission{})
 	service.ConfigureAccountSelection(application.NewProxy(store, nil, nil, application.ProxyConfig{}))
-	handler := NewCodexOperationsHandler(store, service)
+	handler := NewCodexOperationsHandler(store, service, nil)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

@@ -94,7 +94,7 @@ func TestCreatedFilePinsResponsesToOwnerAcrossRestart(t *testing.T) {
 	operations := &filePinOperationsProvider{}
 	ops := application.NewCodexOperations(store, store, operations, time.Hour)
 	ops.ConfigureAdmission(application.NewProxy(store, &filePinResponseProvider{}, vault, application.ProxyConfig{}))
-	files := NewCodexOperationsHandler(store, ops)
+	files := NewCodexOperationsHandler(store, ops, nil)
 	request := func(handler http.Handler, path, key string, body []byte) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "http://localhost"+path, bytes.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+key)

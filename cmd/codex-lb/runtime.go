@@ -164,7 +164,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		}
 		return price, err
 	})
-	httpapi.RegisterCodexOperationRoutes(proxyMux, data.store, operations)
+	httpapi.RegisterCodexOperationRoutes(proxyMux, data.store, operations, cfg.trusted)
 	native := application.NewNativeAPIService(data.store, adapter, adapter, proxy)
 	native.ConfigureAdmission(proxy)
 	native.ConfigureDiagnostics(proxy.Diagnostics)

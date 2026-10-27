@@ -35,7 +35,7 @@ func TestCodexControlMethodAndSlashAliases(t *testing.T) {
 	defer adapter.Close()
 	ops := application.NewCodexOperations(store, store, adapter, time.Hour)
 	ops.ConfigureAdmission(proxy)
-	handler := httpapi.NewCodexOperationsHandler(store, ops)
+	handler := httpapi.NewCodexOperationsHandler(store, ops, nil)
 	for _, route := range []struct{ method, path string }{
 		{"GET", "thread/goal/get"}, {"POST", "thread/goal/get"}, {"POST", "thread/goal/set"}, {"POST", "thread/goal/clear"},
 		{"POST", "analytics-events/events"}, {"POST", "memories/trace_summarize"}, {"POST", "safety/arc"}, {"POST", "alpha/search"},

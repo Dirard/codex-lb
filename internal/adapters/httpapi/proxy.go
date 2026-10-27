@@ -120,9 +120,7 @@ func (p *ProxyHandler) responseOptions(r *http.Request, keyID string) applicatio
 	if len(options.UserAgent) > 1024 {
 		options.UserAgent = options.UserAgent[:1024]
 	}
-	if fields := strings.Fields(options.UserAgent); len(fields) > 0 {
-		options.UserAgentGroup, _, _ = strings.Cut(fields[0], "/")
-	}
+	options.UserAgentGroup = userAgentGroup(options.UserAgent)
 	headers := []string{}
 	switch {
 	case strings.HasPrefix(strings.ToLower(options.UserAgent), "codex"):

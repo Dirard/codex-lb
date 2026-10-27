@@ -82,7 +82,7 @@ func TestCompactUncertainUsageIsHeldWithoutSuccessOrReprobe(t *testing.T) {
 			operations.ConfigureAccountSelection(proxy)
 			proxy.ConfigureCompaction(operations)
 			mux := http.NewServeMux()
-			httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+			httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 			standalone := httptest.NewServer(mux)
 			defer standalone.Close()
 			url, input := standalone.URL+"/v1/responses/compact/", `[{"role":"user","content":"summarize"}]`
@@ -143,7 +143,7 @@ func TestCompactExplicitZeroAndValidErrorUsageAreNotUncertain(t *testing.T) {
 			operations.ConfigureAdmission(proxy)
 			operations.ConfigureAccountSelection(proxy)
 			mux := http.NewServeMux()
-			httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+			httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 			server := httptest.NewServer(mux)
 			defer server.Close()
 			status, response := liteHTTPPost(t, server.URL+"/backend-api/codex/responses/compact", `{"model":"gpt-6-sol","input":"summarize"}`)

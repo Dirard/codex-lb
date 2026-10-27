@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -14,6 +16,16 @@ import (
 )
 
 const defaultLiveBaseURL = "https://api.openai.com/v1"
+
+// realtimeBounds limit how long one realtime write may block and how an
+// upstream realtime socket proves transport liveness.
+type realtimeBounds struct {
+	write        time.Duration
+	pingInterval time.Duration
+	pingTimeout  time.Duration
+}
+
+var defaultRealtimeBounds = realtimeBounds{write: 30 * time.Second, pingInterval: 30 * time.Second, pingTimeout: 10 * time.Second}
 
 func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperationTarget, request application.CodexRealtimeRequest, downstream application.CodexRealtimeConnection) error {
 	if err := application.ValidateCodexRealtimeRequest(request); err != nil {
@@ -48,7 +60,7 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 	if query := encodeQuery(queryValues); query != "" {
 		endpoint += "?" + query
 	}
-	upstream, _, err := websocket.Dial(ctx, websocketEndpointURL(endpoint), &websocket.DialOptions{HTTPClient: a.config.HTTPClient, HTTPHeader: headers})
+	upstream, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: a.config.HTTPClient, HTTPHeader: headers})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
@@ -59,7 +71,16 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 	upstream.SetReadLimit(application.MaxRealtimeMessageBytes)
 	requestContext := ctx
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	bounds := a.realtime
+	var lastUpstream atomic.Int64
+	var delivering atomic.Bool
+	pingFailed := make(chan error, 1)
+	pingerDone := make(chan struct{})
+	go func() {
+		defer close(pingerDone)
+		probeRealtimeUpstream(ctx, upstream, bounds, &lastUpstream, &delivering, pingFailed)
+	}()
+	defer func() { cancel(); <-pingerDone }()
 	upstreamDone := make(chan error, 1)
 	go func() {
 		for {
@@ -75,7 +96,13 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 				upstreamDone <- err
 				return
 			}
-			if err := downstream.Write(ctx, application.CodexRealtimeMessage{Binary: messageType == websocket.MessageBinary, Data: data}); err != nil {
+			lastUpstream.Store(time.Now().UnixNano())
+			delivering.Store(true)
+			writeCtx, stop := context.WithTimeout(ctx, bounds.write)
+			err = downstream.Write(writeCtx, application.CodexRealtimeMessage{Binary: messageType == websocket.MessageBinary, Data: data})
+			stop()
+			delivering.Store(false)
+			if err != nil {
 				upstreamDone <- err
 				return
 			}
@@ -98,7 +125,9 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 			if message.Binary {
 				kind = websocket.MessageBinary
 			}
-			err = upstream.Write(ctx, kind, message.Data)
+			writeCtx, stop := context.WithTimeout(ctx, bounds.write)
+			err = upstream.Write(writeCtx, kind, message.Data)
+			stop()
 			if err != nil {
 				downstreamErr <- err
 				return
@@ -129,12 +158,51 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 			return nil
 		}
 		return providerFailure("realtime_live_disconnected", 502, true)
+	case err := <-pingFailed:
+		cancel()
+		<-upstreamDone
+		<-downstreamErr
+		_ = downstream.Close(realtimeCloseCode(err), realtimeCloseReason(err))
+		if requestContext.Err() != nil {
+			return requestContext.Err()
+		}
+		return providerFailure("realtime_live_disconnected", 502, true)
 	case <-ctx.Done():
 		cancel()
 		<-upstreamDone
 		<-downstreamErr
 		_ = downstream.Close("1000", "")
 		return ctx.Err()
+	}
+}
+
+// probeRealtimeUpstream pings an upstream realtime socket that sent nothing for
+// a ping interval. A frame received after the ping, or a frame still being
+// written to a slow client (bounded by the write timeout), proves the peer is
+// alive; only a silent, unanswered ping ends the session.
+func probeRealtimeUpstream(ctx context.Context, upstream *websocket.Conn, bounds realtimeBounds, lastUpstream *atomic.Int64, delivering *atomic.Bool, failed chan<- error) {
+	ticker := time.NewTicker(bounds.pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if time.Since(time.Unix(0, lastUpstream.Load())) < bounds.pingInterval {
+				continue
+			}
+			sent := time.Now().UnixNano()
+			pingCtx, stop := context.WithTimeout(ctx, bounds.pingTimeout)
+			err := upstream.Ping(pingCtx)
+			stop()
+			if err == nil || delivering.Load() || lastUpstream.Load() >= sent {
+				continue
+			}
+			if ctx.Err() == nil {
+				failed <- err
+			}
+			return
+		}
 	}
 }
 
@@ -187,16 +255,6 @@ func realtimeCloseReason(err error) string {
 		return ""
 	}
 	return "realtime upstream failed"
-}
-
-func websocketEndpointURL(endpoint string) string {
-	if strings.HasPrefix(endpoint, "https://") {
-		return "wss://" + strings.TrimPrefix(endpoint, "https://")
-	}
-	if strings.HasPrefix(endpoint, "http://") {
-		return "ws://" + strings.TrimPrefix(endpoint, "http://")
-	}
-	return endpoint
 }
 
 var _ application.CodexOperationProvider = (*Adapter)(nil)

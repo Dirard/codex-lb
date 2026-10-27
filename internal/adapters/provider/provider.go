@@ -52,6 +52,7 @@ type Adapter struct {
 	config       Config
 	sourceMu     sync.Mutex
 	sourceActive map[string]int
+	realtime     realtimeBounds
 }
 
 func (a *Adapter) Close() error { return a.client.Close() }
@@ -75,7 +76,7 @@ func New(store SourceStore, tokens ChatGPTTokenSource, cipher application.Secret
 	}
 	return &Adapter{
 		store: store, cipher: cipher, chatgpt: tokens, client: upstream.New(config.HTTPClient, config.Continuations),
-		config: config,
+		config: config, realtime: defaultRealtimeBounds,
 	}
 }
 

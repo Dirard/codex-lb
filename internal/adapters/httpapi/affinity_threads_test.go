@@ -163,7 +163,7 @@ func TestCompactCacheAffinitySeparatesNamedThreads(t *testing.T) {
 	operations.ConfigureAdmission(proxy)
 	operations.ConfigureAccountSelection(proxy)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	for i, want := range []string{"wire-account", "alternative", "wire-account"} {

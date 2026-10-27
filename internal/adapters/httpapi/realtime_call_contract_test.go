@@ -47,7 +47,7 @@ func TestRealtimeCallPreservesOfferMediaQueryAndPrivateOwner(t *testing.T) {
 			ops.ConfigureAdmission(proxy)
 			var archives atomic.Int32
 			ops.ConfigureDiagnostics(func(context.Context, application.ErrorDiagnostic) { archives.Add(1) })
-			handler := httpapi.NewCodexOperationsHandler(store, ops)
+			handler := httpapi.NewCodexOperationsHandler(store, ops, nil)
 			request := func(body, media, encoding, query, token string) *httptest.ResponseRecorder {
 				r := httptest.NewRequest("POST", "/backend-api/codex/realtime/calls"+query, strings.NewReader(body))
 				r.Header.Set("Content-Type", media)
@@ -131,7 +131,7 @@ func TestRealtimeCallFailuresNeverExposeOrArchivePrivatePayloads(t *testing.T) {
 			ops.ConfigureAdmission(proxy)
 			var archives atomic.Int32
 			ops.ConfigureDiagnostics(func(context.Context, application.ErrorDiagnostic) { archives.Add(1) })
-			handler := httpapi.NewCodexOperationsHandler(store, ops)
+			handler := httpapi.NewCodexOperationsHandler(store, ops, nil)
 			r := httptest.NewRequest("POST", "/backend-api/codex/realtime/calls", strings.NewReader(`{"sdp":"synthetic-private-SDP"}`))
 			r.Header.Set("Content-Type", "application/json")
 			r.Header.Set("Authorization", "Bearer synthetic-key")
