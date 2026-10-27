@@ -20,7 +20,6 @@ const manualChunkPackages: Record<string, string[]> = {
   // the bundler hoist shared helper modules into that group, which turned
   // the (lazy-only) 580 KB chart bundle into a static import of the entry
   // chunk, modulepreloaded before first paint.
-  "vendor-ui": ["radix-ui"],
 };
 
 function manualChunks(id: string): string | undefined {
@@ -143,8 +142,6 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    exclude: ["browser-smoke/**", "screenshots/**", "node_modules/**"],
-    fileParallelism: false,
     testTimeout: 15_000,
     coverage: {
       provider: "v8",
