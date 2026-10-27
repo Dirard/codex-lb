@@ -20,8 +20,7 @@ type chatStreamState struct {
 	reasoningID    string
 	text           strings.Builder
 	reasoning      strings.Builder
-	toolCalls      map[int]ChatToolCall
-	toolItemIDs    map[int]string
+	toolCalls      map[int]*chatToolCallState
 	outputIndexes  map[string]int
 	nextIndex      int
 	usage          Usage
@@ -50,8 +49,7 @@ func (a *HTTPAdapter) streamChat(ctx context.Context, target Target, req respons
 	state := &chatStreamState{
 		target: target, model: req.Model, catalog: catalog, emit: emit,
 		responseID: newID("resp_"), messageID: newID("msg_"), reasoningID: newID("rs_"),
-		toolCalls: make(map[int]ChatToolCall), toolItemIDs: make(map[int]string),
-		outputIndexes: make(map[string]int),
+		toolCalls: make(map[int]*chatToolCallState), outputIndexes: make(map[string]int),
 	}
 	req.Raw, req.Input, req.Tools = nil, nil, nil
 	items = nil
@@ -175,21 +173,100 @@ func (s *chatStreamState) push(chunk chatStreamChunk) error {
 			if call.Index != nil {
 				callIndex = *call.Index
 			}
-			existing := s.toolCalls[callIndex]
-			if call.ID != "" {
-				existing.ID = call.ID
+			if err := s.pushToolCall(callIndex, call); err != nil {
+				return err
 			}
-			if call.Function != nil {
-				if call.Function.Name != "" {
-					existing.Function.Name += call.Function.Name
-				}
-				existing.Function.Arguments += call.Function.Arguments
-			}
-			existing.Type = "function"
-			s.toolCalls[callIndex] = existing
 		}
 	}
 	return nil
+}
+
+// chatToolCallState accumulates one Chat tool call in linear time. A declared
+// function call starts streaming as a Responses function_call item at its
+// first arguments delta; after that its ID and name are fixed.
+type chatToolCallState struct {
+	id          string
+	name        string
+	arguments   strings.Builder
+	itemID      string
+	outputIndex int
+	streaming   bool
+}
+
+// call returns the accumulated call with completed (non-empty) arguments.
+func (c *chatToolCallState) call() ChatToolCall {
+	return ChatToolCall{ID: c.id, Type: "function", Function: ChatToolCallFunction{Name: c.name, Arguments: completedArguments(c.arguments.String())}}
+}
+
+// pushToolCall streams Chat tool-call deltas as soon as the call is known to be
+// a declared function; custom tools keep terminal-time emission because their
+// input is derived from the complete arguments object.
+func (s *chatStreamState) pushToolCall(callIndex int, delta chatStreamToolCall) error {
+	call := s.toolCalls[callIndex]
+	if call == nil {
+		call = &chatToolCallState{outputIndex: -1}
+		s.toolCalls[callIndex] = call
+	}
+	changed := delta.ID != "" && delta.ID != call.id || delta.Function != nil && delta.Function.Name != ""
+	if call.streaming && changed {
+		return &Error{Code: ErrorCodeInvalidToolCall, Message: "upstream changed a tool call after its arguments started"}
+	}
+	if delta.ID != "" {
+		call.id = delta.ID
+	}
+	if delta.Function == nil {
+		return nil
+	}
+	call.name += delta.Function.Name
+	if delta.Function.Arguments == "" {
+		return nil
+	}
+	call.arguments.WriteString(delta.Function.Arguments)
+	if call.streaming {
+		return s.emitJSON("response.function_call_arguments.delta", map[string]any{
+			"type": "response.function_call_arguments.delta", "item_id": call.itemID,
+			"output_index": call.outputIndex, "delta": delta.Function.Arguments,
+		})
+	}
+	if _, custom := s.catalog.custom[call.name]; call.id == "" || custom || !s.catalog.allowed[call.name] {
+		return nil
+	}
+	call.streaming, call.itemID, call.outputIndex = true, newID("fc_"), s.nextIndex
+	s.nextIndex++
+	added, err := s.addedToolItem(call)
+	if err != nil {
+		return err
+	}
+	if err := s.emitJSON("response.output_item.added", map[string]any{
+		"type": "response.output_item.added", "output_index": call.outputIndex, "item": added,
+	}); err != nil {
+		return err
+	}
+	return s.emitJSON("response.function_call_arguments.delta", map[string]any{
+		"type": "response.function_call_arguments.delta", "item_id": call.itemID,
+		"output_index": call.outputIndex, "delta": call.arguments.String(),
+	})
+}
+
+// addedToolItem is the in-progress form of a tool call's completed item.
+func (s *chatStreamState) addedToolItem(call *chatToolCallState) (map[string]json.RawMessage, error) {
+	done, err := toolCallResponseItem(call.call(), s.catalog, call.itemID)
+	if err != nil {
+		return nil, err
+	}
+	var doneObject map[string]json.RawMessage
+	if err := json.Unmarshal(done, &doneObject); err != nil {
+		return nil, err
+	}
+	for key := range doneObject {
+		switch key {
+		case "status":
+			doneObject[key] = mustJSON("in_progress")
+		case "arguments", "input":
+			doneObject[key] = mustJSON("")
+		}
+	}
+	return doneObject, nil
 }
 
 func (s *chatStreamState) emitText(kind string, delta string) error {
@@ -234,11 +311,11 @@ func (s *chatStreamState) validateToolCalls() error {
 	seen := make(map[string]bool)
 	for _, index := range s.toolCallIndexes() {
 		call := s.toolCalls[index]
-		if call.ID == "" || seen[call.ID] {
+		if call.id == "" || seen[call.id] {
 			return &Error{Code: ErrorCodeInvalidToolCall, Message: "upstream returned an empty or duplicate tool call ID"}
 		}
-		seen[call.ID] = true
-		if !s.catalog.allowed[call.Function.Name] {
+		seen[call.id] = true
+		if !s.catalog.allowed[call.name] {
 			return &Error{Code: ErrorCodeInvalidToolCall, Message: "upstream returned an undeclared tool call"}
 		}
 	}
@@ -258,10 +335,7 @@ func (s *chatStreamState) complete(requestMessages []ChatMessage) (Result, ChatM
 	text := s.text.String()
 	assistant := ChatMessage{Role: "assistant", Content: mustJSON(text), ReasoningContent: s.reasoning.String()}
 	for _, index := range s.toolCallIndexes() {
-		call := s.toolCalls[index]
-		call.Function.Arguments = completedArguments(call.Function.Arguments)
-		s.toolCalls[index] = call
-		assistant.ToolCalls = append(assistant.ToolCalls, call)
+		assistant.ToolCalls = append(assistant.ToolCalls, s.toolCalls[index].call())
 	}
 	type indexedOutput struct {
 		index int
@@ -281,17 +355,20 @@ func (s *chatStreamState) complete(requestMessages []ChatMessage) (Result, ChatM
 		})})
 	}
 	for offset, index := range s.toolCallIndexes() {
-		call := assistant.ToolCalls[offset]
-		itemID := newID("fc_")
-		if _, custom := s.catalog.custom[call.Function.Name]; custom {
-			itemID = newID("ctc_")
+		call, state := assistant.ToolCalls[offset], s.toolCalls[index]
+		if !state.streaming {
+			state.itemID = newID("fc_")
+			if _, custom := s.catalog.custom[call.Function.Name]; custom {
+				state.itemID = newID("ctc_")
+			}
+			state.outputIndex = s.nextIndex
+			s.nextIndex++
 		}
-		s.toolItemIDs[index] = itemID
-		item, err := toolCallResponseItem(call, s.catalog, itemID)
+		item, err := toolCallResponseItem(call, s.catalog, state.itemID)
 		if err != nil {
 			return Result{}, ChatMessage{}, Continuation{}, err
 		}
-		outputs = append(outputs, indexedOutput{s.nextIndex + offset, item})
+		outputs = append(outputs, indexedOutput{state.outputIndex, item})
 	}
 	sort.Slice(outputs, func(i, j int) bool { return outputs[i].index < outputs[j].index })
 	output := make([]json.RawMessage, len(outputs))
@@ -328,30 +405,24 @@ func (s *chatStreamState) emitTerminal(terminal Result) error {
 			return err
 		}
 	}
-	base := s.nextIndex
-	for offset, index := range s.toolCallIndexes() {
-		call := s.toolCalls[index]
-		itemID := s.toolItemIDs[index]
+	for _, index := range s.toolCallIndexes() {
+		state := s.toolCalls[index]
+		call := state.call()
+		itemID, outputIndex := state.itemID, state.outputIndex
 		done, err := toolCallResponseItem(call, s.catalog, itemID)
 		if err != nil {
 			return err
 		}
-		var doneObject map[string]json.RawMessage
-		if err := json.Unmarshal(done, &doneObject); err != nil {
+		if state.streaming {
+			if err := s.emitItemDone(outputIndex, done); err != nil {
+				return err
+			}
+			continue
+		}
+		added, err := s.addedToolItem(state)
+		if err != nil {
 			return err
 		}
-		added := make(map[string]json.RawMessage, len(doneObject))
-		for key, value := range doneObject {
-			switch key {
-			case "status":
-				added[key] = mustJSON("in_progress")
-			case "arguments", "input":
-				added[key] = mustJSON("")
-			default:
-				added[key] = value
-			}
-		}
-		outputIndex := base + offset
 		if err := s.emitJSON("response.output_item.added", map[string]any{
 			"type": "response.output_item.added", "output_index": outputIndex, "item": added,
 		}); err != nil {
