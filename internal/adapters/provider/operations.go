@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -323,11 +325,10 @@ func transcriptionForm(request application.CodexTranscriptionRequest, includeMod
 	if filename == "" {
 		filename = "audio.wav"
 	}
-	contentType := strings.TrimSpace(request.ContentType)
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	file, err := form.CreateFormFile("file", filename)
+	part := textproto.MIMEHeader{}
+	part.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": filename}))
+	part.Set("Content-Type", audioPartContentType(request.ContentType))
+	file, err := form.CreatePart(part)
 	if err != nil {
 		return nil, "", providerFailure("invalid_audio_form", 0, false)
 	}
@@ -407,3 +408,17 @@ func encodeQuery(values [][2]string) string {
 
 func (a *Adapter) chatGPTBaseURL() string { return strings.TrimSuffix(a.config.ChatGPTBaseURL, "/") }
 func (a *Adapter) fileBaseURL() string    { return strings.TrimSuffix(a.chatGPTBaseURL(), "/codex") }
+
+// audioPartContentType keeps the client's audio media type for the upstream
+// multipart part; an absent or malformed value falls back to a generic type
+// instead of being copied into the part header.
+func audioPartContentType(value string) string {
+	mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
+	if err != nil || mediaType == "" {
+		return "application/octet-stream"
+	}
+	if formatted := mime.FormatMediaType(mediaType, params); formatted != "" {
+		return formatted
+	}
+	return "application/octet-stream"
+}
