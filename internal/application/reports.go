@@ -39,6 +39,7 @@ type ReportParams struct {
 
 type RequestLogParams struct {
 	Limit, Offset                                                           int
+	Cursor                                                                  string
 	Search, ConversationID, Timeframe                                       string
 	Since, Until                                                            *time.Time
 	AccountIDs, APIKeyIDs, Statuses, Models, ReasoningEfforts, ModelOptions []string
@@ -156,7 +157,18 @@ func (s *ReportsService) requestLogFilter(p RequestLogParams) (domain.RequestLog
 	if since != nil && p.Until != nil && !since.Before(*p.Until) {
 		return domain.RequestLogFilter{}, domain.ErrInvalid
 	}
-	filter := domain.RequestLogFilter{Limit: p.Limit, Offset: p.Offset, Search: strings.TrimSpace(p.Search),
+	var before *domain.RequestLogCursor
+	if p.Cursor != "" {
+		if p.Offset != 0 {
+			return domain.RequestLogFilter{}, domain.ErrInvalid
+		}
+		cursor, err := domain.ParseRequestLogCursor(p.Cursor)
+		if err != nil {
+			return domain.RequestLogFilter{}, err
+		}
+		before = &cursor
+	}
+	filter := domain.RequestLogFilter{Limit: p.Limit, Offset: p.Offset, Before: before, Search: strings.TrimSpace(p.Search),
 		ConversationID: strings.TrimSpace(p.ConversationID), Since: since, Until: p.Until,
 		AccountIDs: uniqueNonblank(p.AccountIDs), APIKeyIDs: uniqueNonblank(p.APIKeyIDs),
 		Statuses: uniqueNonblank(p.Statuses), Models: uniqueNonblank(p.Models),

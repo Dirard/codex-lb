@@ -121,6 +121,23 @@ func BenchmarkStorageGrowth(b *testing.B) {
 			}
 		})
 	}
+	b.Run("ListRequestLogs_cursor_after_250000", func(b *testing.B) {
+		deep, err := s.ListRequestLogs(ctx, domain.RequestLogFilter{Limit: 25, Offset: 249975})
+		if err != nil || deep.NextCursor == nil {
+			b.Fatalf("cursor setup: %v", err)
+		}
+		cursor, err := domain.ParseRequestLogCursor(*deep.NextCursor)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if _, err := s.ListRequestLogs(ctx, domain.RequestLogFilter{Limit: 25, Before: &cursor}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 	b.Run("RequestLogOptions", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {

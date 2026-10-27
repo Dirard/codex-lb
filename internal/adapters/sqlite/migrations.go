@@ -250,3 +250,11 @@ DROP INDEX idx_usage_reservations_status_age;
 CREATE INDEX idx_usage_reservations_open ON usage_reservations(needs_reconciliation,id) WHERE status='reserved';
 CREATE INDEX idx_usage_reservations_released ON usage_reservations(updated_at) WHERE status='released';
 `
+
+// schemaV37 orders request-log pages and keyset cursors by (requested_at,
+// request_id) without a temporary B-tree (DB-16). The new index also serves
+// every time-range scan of the replaced single-column index.
+const schemaV37 = `
+CREATE INDEX idx_usage_events_time_id ON usage_events(requested_at,request_id);
+DROP INDEX idx_usage_events_time;
+`

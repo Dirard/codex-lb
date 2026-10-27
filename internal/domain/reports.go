@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"encoding/base64"
+	"strconv"
+	"strings"
+	"time"
+)
 
 type ReportFilter struct {
 	Start, End     time.Time
@@ -142,6 +147,15 @@ type RequestLogFilter struct {
 	Models           []string
 	ReasoningEfforts []string
 	ModelOptions     []string
+	// Before is an optional keyset cursor: only rows strictly after it in the
+	// descending (requested_at, request_id) order are returned.
+	Before *RequestLogCursor
+}
+
+// RequestLogCursor is the position of the last row of a request-log page.
+type RequestLogCursor struct {
+	RequestedAt time.Time
+	RequestID   string
 }
 
 type RequestLogEntry struct {
@@ -178,9 +192,11 @@ type RequestLogEntry struct {
 }
 
 type RequestLogsResponse struct {
-	Requests     []RequestLogEntry `json:"requests"`
-	Total        int64             `json:"total"`
-	HasMore      bool              `json:"hasMore"`
+	Requests []RequestLogEntry `json:"requests"`
+	Total    int64             `json:"total"`
+	HasMore  bool              `json:"hasMore"`
+	// NextCursor continues after the last returned row without OFFSET.
+	NextCursor   *string `json:"nextCursor,omitempty"`
 	Conversation *struct {
 		RequestCount      int64   `json:"requestCount"`
 		AggregatedCostUSD float64 `json:"aggregatedCostUsd"`
@@ -203,4 +219,26 @@ type RequestLogOptions struct {
 	ModelOptions []RequestLogModelOption  `json:"modelOptions"`
 	APIKeys      []RequestLogAPIKeyOption `json:"apiKeys"`
 	Statuses     []string                 `json:"statuses"`
+}
+
+// String encodes the cursor opaquely for clients.
+func (c RequestLogCursor) String() string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(c.RequestedAt.UnixMilli(), 10) + ":" + c.RequestID))
+}
+
+// ParseRequestLogCursor decodes a cursor produced by String.
+func ParseRequestLogCursor(raw string) (RequestLogCursor, error) {
+	if len(raw) > 1024 {
+		return RequestLogCursor{}, ErrInvalid
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return RequestLogCursor{}, ErrInvalid
+	}
+	at, id, ok := strings.Cut(string(decoded), ":")
+	ms, err := strconv.ParseInt(at, 10, 64)
+	if !ok || err != nil || id == "" {
+		return RequestLogCursor{}, ErrInvalid
+	}
+	return RequestLogCursor{RequestedAt: time.UnixMilli(ms).UTC(), RequestID: id}, nil
 }
