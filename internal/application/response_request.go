@@ -128,6 +128,9 @@ func parseResponse(body json.RawMessage, key domain.APIKey, settings domain.Runt
 		return request, &ProxyError{Code: "reasoning_effort_not_allowed", Status: 403, Message: "This key does not allow the requested reasoning effort"}
 	}
 	request.ReasoningEffort = effort
+	// Provider-side conversation state lives on one account; local history is
+	// not the whole conversation, so the request is account-bound like a file.
+	conversationBound := providerConversationBound(request.Object["conversation"])
 	rawInput := request.Object["input"]
 	if len(rawInput) != 0 && rawInput[0] == '"' {
 		var text string
@@ -135,7 +138,7 @@ func parseResponse(body json.RawMessage, key domain.APIKey, settings domain.Runt
 			return request, bad
 		}
 		// Scalar text is a user message, never a structured compact/Lite item.
-		request.FilePinned = strings.HasPrefix(text, "file-") || strings.HasPrefix(text, "file_")
+		request.FilePinned = conversationBound || strings.HasPrefix(text, "file-") || strings.HasPrefix(text, "file_")
 		request.DeferredInput = true
 		return request, nil
 	}
@@ -144,7 +147,7 @@ func parseResponse(body json.RawMessage, key domain.APIKey, settings domain.Runt
 		return request, bad
 	}
 	request.Input = input
-	request.FilePinned = accountBoundItems(input)
+	request.FilePinned = conversationBound || accountBoundItems(input)
 	triggerSeen, err := validateCompactTrigger(input)
 	if err != nil {
 		return request, err
@@ -174,6 +177,13 @@ func validateCompactTrigger(input []json.RawMessage) (bool, error) {
 }
 
 func jsonString(value string) json.RawMessage { encoded, _ := json.Marshal(value); return encoded }
+
+// providerConversationBound reports a present, non-null, non-empty-string
+// `conversation`: any such reference names state held by one provider account.
+func providerConversationBound(raw json.RawMessage) bool {
+	value := bytes.TrimSpace(raw)
+	return len(value) != 0 && !bytes.Equal(value, []byte("null")) && !bytes.Equal(value, []byte(`""`))
+}
 
 func canonicalModel(model string) string {
 	// Model aliases used for policy are deliberately narrower than pricing globs:
@@ -276,6 +286,9 @@ func accountBoundItems(items []json.RawMessage) bool {
 func replayBody(request responseRequest, history responseContext) (json.RawMessage, error) {
 	if err := request.loadInput(); err != nil {
 		return nil, err
+	}
+	if providerConversationBound(request.Object["conversation"]) {
+		return nil, errors.New("provider conversation state cannot be replayed")
 	}
 	items := append(slices.Clone(history.Items), request.Input...)
 	if accountBoundItems(items) {
