@@ -1,0 +1,46 @@
+name: Release
+
+# Pushing a go-vX.Y.Z tag builds, verifies and publishes the Linux archives.
+# Publishing never updates a running installation; operators apply updates.
+on:
+  push:
+    tags: ["go-v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm --prefix web run install:deps
+      - run: npm --prefix web run test
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...
+      - name: Build archives
+        run: scripts/release.sh "${GITHUB_REF_NAME}" "dist/${GITHUB_REF_NAME}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="openspec/specs/go-runtime/releases/${GITHUB_REF_NAME}.md"
+          if [[ ! -s "$notes" ]]; then
+            echo "missing release notes $notes" >&2
+            exit 1
+          fi
+          title="$(head -n 1 "$notes" | sed 's/^# *//')"
+          gh release create "${GITHUB_REF_NAME}" --verify-tag --title "$title" --notes-file "$notes" \
+            "dist/${GITHUB_REF_NAME}"/codex-lb-*.tar.gz "dist/${GITHUB_REF_NAME}/SHA256SUMS"
