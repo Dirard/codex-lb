@@ -7,27 +7,27 @@
 
 ## 2. HTTP upstream
 
-- [ ] 2.1 HTTP/2 health configuration and TLS session cache in the runtime transport literal.
-- [ ] 2.2 Bounded body drain after the Responses terminal and Chat `[DONE]` (upstream and native provider paths).
+- [x] 2.1 HTTP/2 health configuration and TLS session cache in the runtime transport literal.
+- [x] 2.2 Bounded body drain after the Responses terminal and Chat `[DONE]` (upstream and native provider paths).
 
 ## 3. Streaming behavior
 
-- [ ] 3.1 Linear tool-call argument accumulation and streamed function calls for Chat sources.
-- [ ] 3.2 Payload-size stream bound instead of the event-count bound.
-- [ ] 3.3 Silence-based heartbeats; native SSE data-event heartbeats; downstream WebSocket protocol pings.
-- [ ] 3.4 Native chat incomplete mapping with `created` and `model`.
+- [x] 3.1 Linear tool-call argument accumulation and streamed function calls for Chat sources.
+- [x] 3.2 Payload-size stream bound instead of the event-count bound.
+- [x] 3.3 Silence-based heartbeats; native SSE data-event heartbeats; downstream WebSocket protocol pings.
+- [x] 3.4 Native chat incomplete mapping with `created` and `model`.
 
 ## 4. Realtime and operations
 
-- [ ] 4.1 Realtime write bounds and pings in both directions.
-- [ ] 4.2 Trusted-proxy client identity for operation requests.
+- [x] 4.1 Realtime write bounds and pings in both directions.
+- [x] 4.2 Trusted-proxy client identity for operation requests.
 
 ## 5. Cost
 
-- [ ] 5.1 Header-only event decode, single-copy SSE events, buffered `writeSSE`, 8 KiB scanner; record benchmarks.
-- [ ] 5.2 Raw object re-assembly, single-parse WebSocket create, gated image detection, fresh-map WebSocket reader; record benchmarks; `GOEXPERIMENT=jsonv2` decision.
-- [ ] 5.3 Remove dead parameters, per-request mux and redundant URL rewriting.
+- [x] 5.1 Header-only event decode, single-copy SSE events, buffered `writeSSE`, 8 KiB scanner; record benchmarks.
+- [x] 5.2 Raw object re-assembly, single-parse WebSocket create, gated image detection, fresh-map WebSocket reader; record benchmarks; `GOEXPERIMENT=jsonv2` decision.
+- [x] 5.3 Remove dead parameters, per-request mux and redundant URL rewriting (ProxyHandler.mux, publicWarmupKey and native pump unification deferred: owner/auth zones).
 
 ## 6. Verification
 
-- [ ] 6.1 `go vet ./...`, `golangci-lint run ./...`, `go test -count=1 ./...`, targeted `go test -race`; strict OpenSpec validation. Do not archive.
+- [x] 6.1 `go vet ./...`, `golangci-lint run ./...` (no new findings; pre-existing findings outside the transport files remain), `go test -count=1 ./...`, targeted `go test -race`; strict OpenSpec validation. Do not archive.

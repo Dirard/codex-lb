@@ -189,7 +189,7 @@ Requirements:
 Upstream SSE and WebSocket events SHALL be validated as exact JSON values and decoded only for the type (and error presence/terminal data where needed), with one owned copy per SSE event and no copy for WebSocket frames.
 
   R15:
-`writeSSE` SHALL compact data only when it contains CR or LF and SHALL emit the event with one write from a reusable buffer; the SSE line scanner SHALL start with 8 KiB.
+SSE framing SHALL compact data only when it contains CR or LF and SHALL emit each event with one write from a reusable buffer; the SSE line scanner SHALL start with 8 KiB. The application worker SHALL write SSE and WebSocket events through one serialized per-response writer, so emit returns the actual downstream write result without a per-event goroutine hand-off; heartbeats share that writer.
 
 Files And Functions:
  - existing: internal/adapters/upstream/sse.go#readSSE, internal/adapters/upstream/responses_stream.go, internal/adapters/upstream/responses_websocket.go
@@ -210,7 +210,7 @@ Requirements:
 Transformations of a Responses body that change only top-level fields SHALL re-assemble the object from already validated raw values (sorted keys, values verbatim) instead of `json.Marshal` on `map[string]json.RawMessage`; the WebSocket `response.create` SHALL be built from the same parse as the HTTP passthrough body.
 
   R17:
-Image-input detection SHALL run only when the provider lacks image input; string-input normalization SHALL decode `input` only when it is a JSON string.
+Image-input detection SHALL run only when the provider lacks image input; string-input normalization SHALL decode `input` only when it is a JSON string; the upstream request decoder SHALL validate the body in the same scan that decodes it.
 
   R18:
 The WebSocket reader SHALL decode the prepared capability payload into a fresh object, so fields removed by preparation cannot reappear, and SHALL skip that decode when preparation did not change the payload.
@@ -269,7 +269,7 @@ operation request --resolve client identity through trusted proxies--> attribute
 Requirements:
 
   R24:
-Realtime writes in both directions SHALL be bounded by 30 s, and both the upstream and the downstream realtime sockets SHALL be pinged every 30 s with a 10 s pong bound; a failed ping or write ends the session as a disconnect.
+Realtime writes in both directions SHALL be bounded by 30 s and a failed write ends the session as a disconnect. The upstream realtime socket SHALL be pinged after 30 s without received frames with a 10 s pong bound; an unanswered ping while nothing was received and no frame waits for the client ends the session. The downstream socket SHALL receive protocol pings every 30 s as intermediary keepalive; their outcome is ignored because the bounded writes already end a client that stops reading.
 
   R25:
 Compact, files, transcription, control and realtime operations SHALL derive `ClientIP` with the trusted-proxy identity resolution used by Responses and `UserAgentGroup` from the User-Agent product token.
@@ -280,7 +280,7 @@ Files And Functions:
  - existing: cmd/codex-lb/runtime.go - pass trusted prefixes to the operations routes (one call)
 
 Tests:
- - description: a realtime client that stops reading is disconnected within the write/ping bound
+ - description: an upstream realtime socket that stops answering pings ends the session as realtime_live_disconnected
    requirements: R24
  - description: compact behind a trusted proxy records the forwarded client IP
    requirements: R25
@@ -319,15 +319,15 @@ Files And Functions:
 2. [x] Per-response lease hand-off, unsolicited marking, response identity checks (R1–R3).
 3. [x] Frame-aware probe, detached joined pings, create write timeout (R4–R6, R9).
 4. [x] Reuse fence with redial or pre-create continuation rejection (R7, R8).
-5. [ ] HTTP/2 health config and TLS session cache in the transport literal; bounded body drain (R10, R11).
-6. [ ] Linear tool-call accumulation and streamed function calls (R12, R13).
-7. [ ] Lighter event decode, single-copy SSE, buffered `writeSSE`, 8 KiB scanner; record benchmarks (R14, R15).
-8. [ ] Raw object re-assembly, single-parse WS create, gated image detection, fresh-map WS reader; record benchmarks; NET-6 decision (R16–R19).
-9. [ ] Byte-bounded streams, silence-based heartbeats, native SSE data heartbeats, downstream WS pings (R20–R23).
-10. [ ] Realtime write bounds and pings; operations identity (R24, R25).
-11. [ ] Native chat incomplete mapping (R26).
-12. [ ] Dead code removal (R27).
-13. [ ] OpenSpec change `harden-upstream-transport-reliability` validated with `--strict`; `go vet`, `golangci-lint`, `go test`, targeted `-race`.
+5. [x] HTTP/2 health config and TLS session cache in the transport literal; bounded body drain (R10, R11).
+6. [x] Linear tool-call accumulation and streamed function calls (R12, R13).
+7. [x] Lighter event decode, single-copy SSE, buffered SSE framing, single-writer pumps, 8 KiB scanner; benchmarks recorded (R14, R15).
+8. [x] Raw object re-assembly, single-parse WS create, gated image detection, single-scan request decode, fresh-map WS reader; benchmarks recorded; NET-6 decision (R16–R19).
+9. [x] Byte-bounded streams, silence-based heartbeats, native SSE data heartbeats, downstream WS pings (R20–R23).
+10. [x] Realtime write bounds and upstream liveness, downstream keepalive pings; operations identity (R24, R25).
+11. [x] Native chat incomplete mapping (R26).
+12. [x] Dead code removal within the slice (R27); remaining NET-21 parts deferred (decision log).
+13. [x] OpenSpec change `harden-upstream-transport-reliability` validated with `--strict`; `go vet`, `golangci-lint`, `go test`, targeted `-race`.
 
 ## Open questions
 
@@ -340,3 +340,10 @@ None blocking. Non-blocking: whether ChatGPT emits frames after a WebSocket term
 - 2026-10-28: Pings run detached from lease contexts (coordinator CI finding): cancelling a coder/websocket control write closes the connection. Probe goroutines are still joined by `stopProbe`; ping goroutines are bounded by their timeout and joined by `HTTPAdapter.Close`.
 - 2026-10-28: Reuse fence threshold 20 s / 3 s: Codex tool loops reuse sockets within seconds (no cost), NAT/LB idle limits are ≥ 60 s; a false fence failure costs one handshake or a pre-execution continuation miss that the existing lost-anchor path already handles.
 - 2026-10-28: A test stub in `internal/adapters/provider/chatgpt_identity_test.go` reused one response ID for every turn on one socket; it now issues unique IDs, as a provider does, because R3 rejects a repeated previous ID.
+- 2026-10-28: Measurements (i9-14900K, Go 1.26.6, loaded shared host, ns/op noisy ±20%). `BenchmarkStreamResponsesSSE` (1000 deltas, in-memory transport): 3.6 µs → 1.24 µs per event, 36.1 → 8.1 allocs/event, 2251 → 482 B/event. `BenchmarkReadSSE`: 125 → 81 ns/event, 2 → 1 allocs/event, 258 → 169 KB per stream. SSE framing (`BenchmarkWriteSSE`): ~820 ns, 3 allocs → ~31 ns, 0 allocs. `BenchmarkWebSocketRequestPipeline` 1 MiB: ~22–27 ms, 7.3 MB, 4610 allocs → ~10 ms, 3.9 MB, 1681 allocs; 16 KiB: 0.79 → 0.50 ms. `chatGPTWireBody` 1 MiB: the removed work was ~6.7 ms of ~17 ms. 20 000 tool-argument deltas: ~1 GB → linear (test bound 256 MiB, actual a few MB). HTTP/1.1 reuse probe: 20 → 1 connection per 20 streams.
+- 2026-10-28: The per-event goroutine rendezvous and ack (NET-8) was replaced by a mutex-serialized writer used directly by the application worker, not by a buffered channel: emit must keep returning the real downstream write result for output/settlement classification. Heartbeats use `TryLock` so a blocked write (≤ 30 s) never stalls the handler loop.
+- 2026-10-28: SSE framing no longer re-validates JSON without CR/LF: every event was validated at ingestion (upstream header decode, `json.Marshal` for synthesized events, authenticated prelude replay); a CR/LF still forces `json.Compact`, which also validates, so framing cannot be split.
+- 2026-10-28: NET-6 `GOEXPERIMENT=jsonv2` is not enabled. Transport packages (upstream, provider, httpapi, wirejson, streambuffer, chatgpt) pass with it (without `-race`), and on top of this slice it halves the 1 MiB pipeline (~10 → ~5.3 ms) and cuts per-event cost (1.24 → 0.87 µs). It is an experiment of Go 1.26 that changes the whole binary, including ledger/SQLite and application code outside this slice; enable it only as an owner decision after a full `go test -race ./...` and review of code that depends on encoding/json error text.
+- 2026-10-28: Native Codex SSE heartbeats are data events because the Codex CLI parser (`codex-rs/codex-api/src/sse/responses.rs`, `eventsource-stream` 0.2.3) drops comment lines before its `timeout(idle_timeout, stream.next())`; unknown types (`codex.keepalive`) and `response.in_progress` are parsed and ignored. The hypothesis of NET-15 is therefore confirmed from source; a real-CLI check needs separate authorization.
+- 2026-10-28: Deferred: the shared realtime/Responses socket budget (NET-22) and `ProxyHandler.mux` removal (NET-21) touch `NewProxyHandler`/socket budgets owned by the administrator; `publicWarmupKey` (NET-21) is authentication code; unifying the native chat pump (NET-21) and the remaining NET-5 scans in application code (`PrepareCapability`, `NormalizeCodexResponsesLite`) and in `requestModelAndStream`/`validateReasoningEffort` are left for a follow-up because they cross the application boundary; NET-14 and NET-24 are out of this slice. Downstream realtime pings ignore failures: the 30 s write bound already ends a client that stops reading, and a reader blocked on a slow upstream write would otherwise fail pings falsely.
+- 2026-10-28: Other-zone edits, minimal: `cmd/codex-lb/runtime.go` passes `cfg.trusted` to `RegisterCodexOperationRoutes` (one call) besides the transport literal; `internal/adapters/httpapi/proxy.go` gained the `websocketPingInterval` test field and the shared `userAgentGroup` helper use; `NewProxyHandler` is unchanged.

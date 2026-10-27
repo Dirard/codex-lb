@@ -91,11 +91,15 @@ For Chat-compatible sources, the runtime SHALL accumulate tool-call arguments in
 
 ### Requirement: Realtime sessions bound writes and detect dead peers
 
-Codex Realtime proxying SHALL bound each write in either direction by thirty seconds and SHALL protocol-ping both the upstream and the downstream socket every thirty seconds with ten seconds to receive pong. A failed write or ping SHALL end the session as a disconnect with joined pump activity.
+Codex Realtime proxying SHALL bound each write in either direction by thirty seconds; a failed write SHALL end the session as a disconnect with joined pump activity. The upstream socket SHALL be protocol-pinged after thirty seconds without received frames with ten seconds to receive pong, and an unanswered ping while nothing was received and no frame waits for the client SHALL end the session as a disconnect. The downstream socket SHALL receive protocol pings every thirty seconds as intermediary keepalive.
 
 #### Scenario: A realtime client stops reading
-- **WHEN** the downstream realtime client neither reads nor answers pings
-- **THEN** the session SHALL end within the write or ping bound
+- **WHEN** the downstream realtime client stops reading while upstream sends frames
+- **THEN** the session SHALL end within the write bound
+
+#### Scenario: The realtime upstream goes silent and stops answering
+- **WHEN** the upstream sends nothing and does not answer a ping
+- **THEN** the session SHALL end as a realtime disconnect within the ping bound
 
 ### Requirement: Operation requests resolve client identity like Responses
 
