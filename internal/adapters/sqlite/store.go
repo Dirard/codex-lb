@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +28,7 @@ const readPoolSize = 8
 
 var memoryDBSequence atomic.Int64
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34}
 
 type Store struct {
 	db                  *sql.DB
@@ -35,6 +36,10 @@ type Store struct {
 	writer              *batchWriter
 	accountAdmissionEnv accountAdmissionEnvironment
 	affinityStartupTTL  int
+	// background owns store-internal recovery work (interrupted repricing);
+	// Close cancels and joins it before the writer stops.
+	background     sync.WaitGroup
+	stopBackground context.CancelFunc
 }
 
 // Open accepts a new Go database or one previously created by this adapter.
@@ -107,10 +112,18 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	store.writer = newBatchWriter(db)
+	background, stop := context.WithCancel(context.Background())
+	store.stopBackground = stop
+	if err := store.resumeModelReprices(background); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
 func (s *Store) Close() error {
+	s.stopBackground()
+	s.background.Wait()
 	s.writer.close()
 	return errors.Join(s.readDB.Close(), s.db.Close())
 }

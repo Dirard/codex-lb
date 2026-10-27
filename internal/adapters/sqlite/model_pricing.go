@@ -76,7 +76,13 @@ func (s *Store) ApplyModelPriceChange(ctx context.Context, model string, overrid
 	if model == "" || len(model) > 128 || now.IsZero() || override != nil && override.Validate() != nil {
 		return summary, ErrInvalid
 	}
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	// A dry run on a read snapshot rejects missing current-limit provenance and
+	// other reconciliation failures before the tariff or any ledger value changes.
+	if err := s.checkModelReprice(ctx, model, override); err != nil {
+		return summary, err
+	}
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		summary = application.ModelRepriceSummary{}
 		_, existed, err := modelPriceOverrideTx(ctx, tx, model)
 		if err != nil {
 			return err
@@ -103,9 +109,17 @@ func (s *Store) ApplyModelPriceChange(ctx context.Context, model string, overrid
 			return err
 		}
 		summary.Applied = true
-		return repriceModelHistoryTx(ctx, tx, model, &summary)
+		_, err = tx.ExecContext(ctx, `INSERT INTO model_reprice_pending(model,requested_at) VALUES(?,?)
+ ON CONFLICT(model) DO UPDATE SET requested_at=excluded.requested_at`, model, millis(now))
+		return err
 	})
-	if err != nil {
+	if err != nil || !summary.Applied {
+		return summary, err
+	}
+	// History follows in bounded jobs that interleave with ledger writes. The
+	// pass no longer depends on the administrator's connection; an interrupted
+	// pass stays pending and resumes after the next start.
+	if err := s.repriceModelHistory(context.WithoutCancel(ctx), model, millis(now), &summary); err != nil {
 		return application.ModelRepriceSummary{}, err
 	}
 	return summary, nil
@@ -125,9 +139,28 @@ func modelPriceOverrideTx(ctx context.Context, tx *sql.Tx, model string) (pricin
 }
 
 func resolveCodexPriceTx(ctx context.Context, tx *sql.Tx, model string) (pricing.Price, bool, error) {
-	model = strings.ToLower(model)
-	if custom, ok, err := modelPriceOverrideTx(ctx, tx, model); err != nil || ok {
-		return custom, ok, err
+	return resolveCodexPriceWith(strings.ToLower(model), func(name string) (pricing.Price, bool, error) {
+		return modelPriceOverrideTx(ctx, tx, name)
+	})
+}
+
+// prospectiveCodexPriceTx resolves a price as if the change to `changed` had
+// already been saved; the dry run uses it before the tariff is written.
+func prospectiveCodexPriceTx(ctx context.Context, tx *sql.Tx, changed string, override *pricing.Price, model string) (pricing.Price, bool, error) {
+	return resolveCodexPriceWith(strings.ToLower(model), func(name string) (pricing.Price, bool, error) {
+		if name != changed {
+			return modelPriceOverrideTx(ctx, tx, name)
+		}
+		if override == nil {
+			return pricing.Price{}, false, nil
+		}
+		return *override, true, nil
+	})
+}
+
+func resolveCodexPriceWith(model string, custom func(string) (pricing.Price, bool, error)) (pricing.Price, bool, error) {
+	if price, ok, err := custom(model); err != nil || ok {
+		return price, ok, err
 	}
 	canonical, builtin, err := pricing.LookupCodex(model)
 	if errors.Is(err, pricing.ErrUnpriced) {
@@ -137,8 +170,8 @@ func resolveCodexPriceTx(ctx context.Context, tx *sql.Tx, model string) (pricing
 		return pricing.Price{}, false, err
 	}
 	if canonical != model {
-		if custom, ok, err := modelPriceOverrideTx(ctx, tx, canonical); err != nil || ok {
-			return custom, ok, err
+		if price, ok, err := custom(canonical); err != nil || ok {
+			return price, ok, err
 		}
 	}
 	return builtin, true, nil

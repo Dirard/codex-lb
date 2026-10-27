@@ -220,3 +220,11 @@ ALTER TABLE runtime_settings ADD COLUMN show_reset_credit_expiry_badge INTEGER N
 const schemaV26 = `ALTER TABLE runtime_settings ADD COLUMN warmup_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini';`
 
 const schemaV33 = `ALTER TABLE runtime_settings ADD COLUMN codex_client_version TEXT NOT NULL DEFAULT '0.156.0' CHECK(length(codex_client_version) BETWEEN 1 AND 64);`
+
+// schemaV34 records model repricing that has not finished all of its history
+// chunks, so it resumes after a restart.
+const schemaV34 = `
+CREATE TABLE model_reprice_pending (
+ model TEXT PRIMARY KEY, requested_at INTEGER NOT NULL
+);
+`

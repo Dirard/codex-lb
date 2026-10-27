@@ -32,8 +32,8 @@ func finalizeFixture(t *testing.T) (*Store, func(string) domain.ResponseFinaliza
 		event := usageEvent("event-"+id, 10)
 		event.APIKeyID, event.AccountID = "key", "acct"
 		return domain.ResponseFinalization{ReservationID: id,
-			Settlement: domain.UsageSettlement{Status: "finalized", Event: event},
-			Outcome:    &domain.AccountOutcome{AccountID: "acct", Success: true},
+			Settlement:   domain.UsageSettlement{Status: "finalized", Event: event},
+			Outcome:      &domain.AccountOutcome{AccountID: "acct", Success: true},
 			Continuation: &owner, Aliases: []domain.Continuation{alias},
 			Bounds: domain.ContinuationBounds{MaxRecords: 100, MaxContextBytes: 1 << 20}}
 	}

@@ -30,7 +30,32 @@ type currentCostLimit struct {
 	backfillUntil    sql.NullInt64
 }
 
-func repriceModelHistoryTx(ctx context.Context, tx *sql.Tx, changed string, summary *application.ModelRepriceSummary) error {
+// Repricing chunk sizes bound one batch-writer job.
+const (
+	repriceRawChunk    = 500
+	repriceBucketChunk = 100
+)
+
+type priceResolver func(context.Context, *sql.Tx, string) (pricing.Price, bool, error)
+
+// checkModelReprice dry-runs the whole history repricing on one read
+// snapshot with the prospective tariff, writing nothing.
+func (s *Store) checkModelReprice(ctx context.Context, changed string, override *pricing.Price) error {
+	tx, err := s.readDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, existed, err := modelPriceOverrideTx(ctx, tx, changed)
+	if err != nil || override == nil && !existed {
+		return err
+	}
+	resolve := func(ctx context.Context, tx *sql.Tx, model string) (pricing.Price, bool, error) {
+		return prospectiveCodexPriceTx(ctx, tx, changed, override, model)
+	}
+	if _, priced, err := resolve(ctx, tx, changed); err != nil || !priced {
+		return err
+	}
 	models, err := affectedPriceModelsTx(ctx, tx, changed)
 	if err != nil {
 		return err
@@ -39,36 +64,162 @@ func repriceModelHistoryTx(ctx context.Context, tx *sql.Tx, changed string, summ
 	if err != nil {
 		return err
 	}
-	totalsDelta := map[pricingScope]int64{}
-	limitsDelta := map[int64]int64{}
+	var summary application.ModelRepriceSummary
+	totals, limitDeltas := map[pricingScope]int64{}, map[int64]int64{}
 	for _, model := range models {
-		price, priced, err := resolveCodexPriceTx(ctx, tx, model)
+		price, priced, err := resolve(ctx, tx, model)
 		if err != nil {
 			return err
 		}
 		if !priced {
 			return fmt.Errorf("affected model has no price: %w", ErrInvalid)
 		}
-		if err := repriceRawModelTx(ctx, tx, model, price, limits, totalsDelta, limitsDelta, summary); err != nil {
+		for after, done := "", false; !done; {
+			if after, done, err = repriceRawChunkTx(ctx, tx, model, after, price, limits, totals, limitDeltas, &summary, false); err != nil {
+				return err
+			}
+		}
+		for after, done := (foldedCursor{}), false; !done; {
+			if after, done, err = repriceFoldedChunkTx(ctx, tx, model, after, resolve, limits, totals, limitDeltas, &summary, false); err != nil {
+				return err
+			}
+		}
+	}
+	return applyPriceDeltasTx(ctx, tx, totals, limitDeltas, false)
+}
+
+// repriceModelHistory reprices the saved tariff's history in bounded write
+// jobs. Each job applies its event costs with their aggregate and current-limit
+// deltas, so the ledger stays consistent between chunks and a repeated pass
+// changes nothing already repriced. The pending marker is cleared only for the
+// change that started this pass.
+func (s *Store) repriceModelHistory(ctx context.Context, changed string, requestedAt int64, summary *application.ModelRepriceSummary) error {
+	var models []string
+	if err := s.readSnapshot(ctx, func(tx *sql.Tx) (err error) {
+		models, err = affectedPriceModelsTx(ctx, tx, changed)
+		return err
+	}); err != nil {
+		return err
+	}
+	chunk := func(run func(context.Context, *sql.Tx, map[string][]currentCostLimit, map[pricingScope]int64, map[int64]int64, *application.ModelRepriceSummary) error) error {
+		return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+			limits, err := currentCostLimitsTx(ctx, tx)
+			if err != nil {
+				return err
+			}
+			partial := *summary
+			totals, limitDeltas := map[pricingScope]int64{}, map[int64]int64{}
+			if err := run(ctx, tx, limits, totals, limitDeltas, &partial); err != nil {
+				return err
+			}
+			if err := applyPriceDeltasTx(ctx, tx, totals, limitDeltas, true); err != nil {
+				return err
+			}
+			*summary = partial
+			return nil
+		})
+	}
+	for _, model := range models {
+		for after, done := "", false; !done; {
+			err := chunk(func(ctx context.Context, tx *sql.Tx, limits map[string][]currentCostLimit, totals map[pricingScope]int64, limitDeltas map[int64]int64, partial *application.ModelRepriceSummary) error {
+				price, priced, err := resolveCodexPriceTx(ctx, tx, model)
+				if err != nil {
+					return err
+				}
+				if !priced {
+					return fmt.Errorf("affected model has no price: %w", ErrInvalid)
+				}
+				after, done, err = repriceRawChunkTx(ctx, tx, model, after, price, limits, totals, limitDeltas, partial, true)
+				return err
+			})
+			if err != nil {
+				return err
+			}
+		}
+		if err := s.readSnapshot(ctx, func(tx *sql.Tx) error {
+			unknown, err := unknownRawPriceRequestsTx(ctx, tx, model)
+			summary.PartialRawRequests += unknown
+			return err
+		}); err != nil {
 			return err
 		}
-		var unknown int64
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e
-		 LEFT JOIN accounts a ON a.id=e.account_id WHERE e.model=?
-		 AND (a.id IS NULL OR (a.kind='chatgpt' AND e.request_kind IN ('transcription','reconciled')))
+	}
+	for _, model := range models {
+		for after, done := (foldedCursor{}), false; !done; {
+			err := chunk(func(ctx context.Context, tx *sql.Tx, limits map[string][]currentCostLimit, totals map[pricingScope]int64, limitDeltas map[int64]int64, partial *application.ModelRepriceSummary) (err error) {
+				after, done, err = repriceFoldedChunkTx(ctx, tx, model, after, resolveCodexPriceTx, limits, totals, limitDeltas, partial, true)
+				return err
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.readSnapshot(ctx, func(tx *sql.Tx) error { return markUndimensionedPriceHistoryTx(ctx, tx, summary) }); err != nil {
+		return err
+	}
+	_, err := s.exec(ctx, `DELETE FROM model_reprice_pending WHERE model=? AND requested_at=?`, changed, requestedAt)
+	return err
+}
+
+// readSnapshot runs fn in one read transaction of the read pool.
+func (s *Store) readSnapshot(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.readDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return fn(tx)
+}
+
+// resumeModelReprices finishes repricing interrupted by a restart. It runs in
+// the background owned by the store and stops with it.
+func (s *Store) resumeModelReprices(ctx context.Context) error {
+	type pending struct {
+		model       string
+		requestedAt int64
+	}
+	var work []pending
+	err := s.readSnapshot(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT model,requested_at FROM model_reprice_pending ORDER BY requested_at,model`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item pending
+			if err := rows.Scan(&item.model, &item.requestedAt); err != nil {
+				return err
+			}
+			work = append(work, item)
+		}
+		return rows.Err()
+	})
+	if err != nil || len(work) == 0 {
+		return err
+	}
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		defer func() { _ = recover() }() // A failed resume stays pending for the next start.
+		for _, item := range work {
+			var summary application.ModelRepriceSummary
+			if s.repriceModelHistory(ctx, item.model, item.requestedAt, &summary) != nil {
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+func unknownRawPriceRequestsTx(ctx context.Context, tx *sql.Tx, model string) (int64, error) {
+	var unknown int64
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e
+	 LEFT JOIN accounts a ON a.id=e.account_id WHERE e.model=?
+	 AND (a.id IS NULL OR (a.kind='chatgpt' AND e.request_kind IN ('transcription','reconciled')))
  AND e.model_source_id IS NULL AND (e.legacy_request_id IS NULL OR
- e.requested_at>=coalesce((SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))`, model).Scan(&unknown); err != nil {
-			return err
-		}
-		summary.PartialRawRequests += unknown
-	}
-	if err := repriceFoldedPriceHistoryTx(ctx, tx, models, limits, totalsDelta, limitsDelta, summary); err != nil {
-		return err
-	}
-	if err := applyPriceDeltasTx(ctx, tx, totalsDelta, limitsDelta); err != nil {
-		return err
-	}
-	return markUndimensionedPriceHistoryTx(ctx, tx, summary)
+ e.requested_at>=coalesce((SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))`, model).Scan(&unknown)
+	return unknown, err
 }
 
 func affectedPriceModelsTx(ctx context.Context, tx *sql.Tx, changed string) ([]string, error) {
@@ -146,13 +297,12 @@ func currentCostLimitsTx(ctx context.Context, tx *sql.Tx) (map[string][]currentC
 	return limits, rows.Err()
 }
 
-func repriceRawModelTx(ctx context.Context, tx *sql.Tx, model string, price pricing.Price,
+// repriceRawChunkTx reprices at most repriceRawChunk raw events after the
+// request ID cursor and reports the next cursor and whether the model is done.
+func repriceRawChunkTx(ctx context.Context, tx *sql.Tx, model, after string, price pricing.Price,
 	limits map[string][]currentCostLimit, totalsDelta map[pricingScope]int64, limitsDelta map[int64]int64,
-	summary *application.ModelRepriceSummary) error {
-	const batch = 500
-	after := ""
-	for {
-		rows, err := tx.QueryContext(ctx, `SELECT e.request_id,e.model,e.service_tier,e.request_kind,
+	summary *application.ModelRepriceSummary, write bool) (string, bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT e.request_id,e.model,e.service_tier,e.request_kind,
  e.account_id,e.api_key_id,e.reservation_id,e.legacy_request_id,e.requested_at,
  e.input_tokens,e.output_tokens,e.cached_input_tokens,e.cost_microdollars,e.legacy_deleted
  FROM usage_events e JOIN accounts a ON a.id=e.account_id
@@ -160,42 +310,41 @@ func repriceRawModelTx(ctx context.Context, tx *sql.Tx, model string, price pric
  AND e.request_kind NOT IN ('transcription','reconciled')
  AND (e.legacy_request_id IS NULL OR e.requested_at>=coalesce(
  (SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))
- ORDER BY e.request_id LIMIT ?`, model, after, batch)
-		if err != nil {
-			return err
-		}
-		events := make([]pricingEvent, 0, batch)
-		for rows.Next() {
-			var event pricingEvent
-			if err := rows.Scan(&event.id, &event.model, &event.tier, &event.kind,
-				&event.account, &event.key, &event.reservation, &event.legacyID,
-				&event.requested, &event.input, &event.output, &event.cached,
-				&event.oldCost, &event.deleted); err != nil {
-				rows.Close()
-				return err
-			}
-			events = append(events, event)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		if len(events) == 0 {
-			return nil
-		}
-		for _, event := range events {
-			if _, err := applyPriceEventTx(ctx, tx, event, price, limits, totalsDelta, limitsDelta, summary, false); err != nil {
-				return err
-			}
-		}
-		after = events[len(events)-1].id
+ ORDER BY e.request_id LIMIT ?`, model, after, repriceRawChunk)
+	if err != nil {
+		return after, false, err
 	}
+	events := make([]pricingEvent, 0, repriceRawChunk)
+	for rows.Next() {
+		var event pricingEvent
+		if err := rows.Scan(&event.id, &event.model, &event.tier, &event.kind,
+			&event.account, &event.key, &event.reservation, &event.legacyID,
+			&event.requested, &event.input, &event.output, &event.cached,
+			&event.oldCost, &event.deleted); err != nil {
+			rows.Close()
+			return after, false, err
+		}
+		events = append(events, event)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return after, false, err
+	}
+	for _, event := range events {
+		if _, err := applyPriceEventTx(ctx, tx, event, price, limits, totalsDelta, limitsDelta, summary, false, write); err != nil {
+			return after, false, err
+		}
+	}
+	if len(events) == 0 {
+		return after, true, nil
+	}
+	return events[len(events)-1].id, len(events) < repriceRawChunk, nil
 }
 
 func applyPriceEventTx(ctx context.Context, tx *sql.Tx, event pricingEvent, price pricing.Price,
 	limits map[string][]currentCostLimit, totalsDelta map[pricingScope]int64, limitsDelta map[int64]int64,
-	summary *application.ModelRepriceSummary, strict bool) (int64, error) {
+	summary *application.ModelRepriceSummary, strict, write bool) (int64, error) {
 	usage := domain.UsageAmount{InputTokens: event.input, OutputTokens: event.output, CachedInputTokens: event.cached}
 	if usage.Validate() != nil || event.input == 0 && event.output == 0 && event.oldCost > 0 {
 		if strict {
@@ -214,10 +363,12 @@ func applyPriceEventTx(ctx context.Context, tx *sql.Tx, event pricingEvent, pric
 	if err != nil || delta == 0 {
 		return delta, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE usage_events SET cost_microdollars=? WHERE request_id=?`, newCost, event.id); err != nil {
-		return 0, err
+	if write {
+		if _, err := tx.ExecContext(ctx, `UPDATE usage_events SET cost_microdollars=? WHERE request_id=?`, newCost, event.id); err != nil {
+			return 0, err
+		}
 	}
-	if event.reservation.Valid {
+	if event.reservation.Valid && write {
 		if _, err := tx.ExecContext(ctx, `UPDATE usage_reservations SET cost_microdollars=? WHERE id=?`,
 			newCost, event.reservation.String); err != nil {
 			return 0, err
@@ -327,7 +478,8 @@ func addPriceDelta(current, delta int64) (int64, error) {
 	return current + delta, nil
 }
 
-func applyPriceDeltasTx(ctx context.Context, tx *sql.Tx, totals map[pricingScope]int64, limits map[int64]int64) error {
+// applyPriceDeltasTx validates aggregate deltas and, when write is set, applies them.
+func applyPriceDeltasTx(ctx context.Context, tx *sql.Tx, totals map[pricingScope]int64, limits map[int64]int64, write bool) error {
 	for scope, delta := range totals {
 		var current int64
 		if err := tx.QueryRowContext(ctx, `SELECT cost_microdollars FROM usage_totals
@@ -337,6 +489,9 @@ func applyPriceDeltasTx(ctx context.Context, tx *sql.Tx, totals map[pricingScope
 		updated, err := addPriceDelta(current, delta)
 		if err != nil || updated < 0 {
 			return ErrInvalid
+		}
+		if !write {
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE usage_totals SET cost_microdollars=?
  WHERE scope=? AND scope_id=?`, updated, scope.name, scope.id); err != nil {
@@ -351,6 +506,9 @@ func applyPriceDeltasTx(ctx context.Context, tx *sql.Tx, totals map[pricingScope
 		updated, err := addPriceDelta(current, delta)
 		if err != nil || updated < 0 {
 			return ErrInvalid
+		}
+		if !write {
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE api_key_limits SET current_value=? WHERE id=?`, updated, id); err != nil {
 			return err
