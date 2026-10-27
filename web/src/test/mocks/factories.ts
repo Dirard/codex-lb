@@ -378,8 +378,6 @@ export function createRequestLogEntry(
 		clientIp: null,
 		conversationId: null,
 		serviceTier: null,
-		requestedServiceTier: null,
-		actualServiceTier: null,
 		status: "ok",
 		errorCode: null,
 		errorMessage: null,
@@ -389,12 +387,6 @@ export function createRequestLogEntry(
 		cachedInputTokens: 320,
 		reasoningEffort: null,
 		costUsd: 0.0132,
-		costBreakdown: {
-			inputUsd: 0.0054,
-			cachedInputUsd: 0.0012,
-			outputUsd: 0.0066,
-			totalUsd: 0.0132,
-		},
 		latencyMs: 920,
 		...overrides,
 	});

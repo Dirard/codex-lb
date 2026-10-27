@@ -12,14 +12,6 @@ import {
 import { RequestLogSchema, type RequestLog } from "@/features/dashboard/schemas";
 
 const ISO = "2026-01-01T12:00:00+00:00";
-const NULL_FAILURE_METADATA = {
-  failurePhase: null,
-  failureDetail: null,
-  failureExceptionType: null,
-  upstreamStatusCode: null,
-  upstreamErrorCode: null,
-  bridgeStage: null,
-};
 const NULL_USERAGENT_METADATA = {
   useragent: null,
   useragentGroup: null,
@@ -67,26 +59,20 @@ const LAYOUT_REQUEST = {
   model: "gpt-5.1",
   source: null,
   serviceTier: null,
-  requestedServiceTier: null,
-  actualServiceTier: null,
   transport: "http",
-  upstreamTransport: "http",
   status: "ok",
   errorCode: null,
   errorMessage: null,
-  ...NULL_FAILURE_METADATA,
   ...NULL_USERAGENT_METADATA,
   tokens: 1200,
   inputTokens: 1000,
   outputTokens: 200,
-  outputTokensRaw: 200,
   reasoningTokens: 0,
   latencyFirstTokenMs: 200,
   latencyQueueMs: null,
   cachedInputTokens: 0,
   reasoningEffort: null,
   costUsd: 0.01,
-  costBreakdown: null,
   latencyMs: 1000,
 } satisfies RequestLog;
 
@@ -302,40 +288,23 @@ describe("RecentRequestsTable", () => {
             apiKeyId: "key-alpha",
             requestId: "req-1",
             conversationId: null,
-            archiveRequestId: "archive-req-1",
             requestKind: "normal",
             model: "gpt-5.1",
             source: null,
             serviceTier: "default",
-            requestedServiceTier: "priority",
-            actualServiceTier: "default",
             transport: "websocket",
              status: "rate_limit",
              errorCode: "rate_limit_exceeded",
              errorMessage: longError,
-            ...NULL_FAILURE_METADATA,
             ...NULL_USERAGENT_METADATA,
-            upstreamTransport: "auto",
-            upstreamProxyRouteMode: "account_bound",
-            upstreamProxyPoolId: "pool-1",
-            upstreamProxyEndpointId: "endpoint-1",
-            upstreamProxyFallbackUsed: true,
-            upstreamProxyFailClosedReason: "no_healthy_endpoint",
              tokens: 1200,
              inputTokens: 1000,
              outputTokens: 200,
-             outputTokensRaw: null,
              latencyFirstTokenMs: null,
             latencyQueueMs: null,
              cachedInputTokens: 200,
              reasoningEffort: "high",
              costUsd: 0.01,
-             costBreakdown: {
-               inputUsd: 0.004,
-               cachedInputUsd: 0.001,
-               outputUsd: 0.005,
-               totalUsd: 0.01,
-             },
              latencyMs: 1000,
            },
          ]}
@@ -346,9 +315,7 @@ describe("RecentRequestsTable", () => {
     expect(screen.getByRole("cell", { name: "Plus" })).toBeInTheDocument();
     expect(screen.getByText("Key Alpha")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.1 (high, default)")).toBeInTheDocument();
-    expect(screen.getByText("Requested priority")).toBeInTheDocument();
     expect(screen.getByText("WS")).toBeInTheDocument();
-    expect(screen.getByText("Up Auto")).toBeInTheDocument();
     expect(screen.getByText("Rate limit")).toBeInTheDocument();
     expect(screen.getByText("rate_limit_exceeded")).toBeInTheDocument();
 
@@ -356,20 +323,10 @@ describe("RecentRequestsTable", () => {
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByText("Request Details")).toBeInTheDocument();
     expect(within(dialog).getByText("req-1")).toBeInTheDocument();
-    expect(within(dialog).getByTestId("request-archive-panel")).toHaveTextContent("Archive for archive-req-1");
+    expect(within(dialog).getByTestId("request-archive-panel")).toHaveTextContent("Archive for req-1");
     expect(within(dialog).getByText("rate_limit_exceeded")).toBeInTheDocument();
     expect(dialog.textContent).toContain("Rate limit reached while processing this request");
     expect(within(dialog).getByText("1.0 s")).toBeInTheDocument();
-    expect(within(dialog).getByText("Route mode")).toBeInTheDocument();
-    expect(within(dialog).getByText("account_bound")).toBeInTheDocument();
-    expect(within(dialog).getByText("Proxy pool")).toBeInTheDocument();
-    expect(within(dialog).getByText("pool-1")).toBeInTheDocument();
-    expect(within(dialog).getByText("Proxy endpoint")).toBeInTheDocument();
-    expect(within(dialog).getByText("endpoint-1")).toBeInTheDocument();
-    expect(within(dialog).getByText("Same-pool fallback")).toBeInTheDocument();
-    expect(within(dialog).getByText("Used")).toBeInTheDocument();
-    expect(within(dialog).getByText("Fail-closed reason")).toBeInTheDocument();
-    expect(within(dialog).getByText("no_healthy_endpoint")).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy Request ID" }));
@@ -406,23 +363,18 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             ...NULL_USERAGENT_METADATA,
             status: "cancelled",
             errorCode: "client_disconnected",
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: 0,
             reasoningTokens: null,
             cachedInputTokens: 0,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 10,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
@@ -455,23 +407,18 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             ...NULL_USERAGENT_METADATA,
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1200,
             inputTokens: 1000,
             outputTokens: 200,
-            outputTokensRaw: 200,
             reasoningTokens: 40,
             cachedInputTokens: 0,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1000,
             latencyFirstTokenMs: 200,
             latencyQueueMs: null,
@@ -557,7 +504,7 @@ describe("RecentRequestsTable", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not calculate TPS from fallback output tokens", () => {
+  it("computes TPS from Go outputTokens when reasoning usage is unknown", () => {
     render(
       <RecentRequestsTable
         {...PAGINATION_PROPS}
@@ -575,22 +522,17 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             ...NULL_USERAGENT_METADATA,
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1200,
             inputTokens: 1000,
             outputTokens: 200,
-            outputTokensRaw: null,
             cachedInputTokens: 0,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1000,
             latencyFirstTokenMs: 200,
             latencyQueueMs: null,
@@ -603,8 +545,23 @@ describe("RecentRequestsTable", () => {
 
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText("200ms")).toBeInTheDocument();
-    expect(within(row as HTMLElement).getByText("--")).toBeInTheDocument();
-    expect(within(row as HTMLElement).queryByText("250.0")).not.toBeInTheDocument();
+    // 200 output tokens over 800 ms after the first token.
+    expect(within(row as HTMLElement).getByText("250.0")).toBeInTheDocument();
+  });
+
+  it("shows Go token counts and total cost in request details", () => {
+    render(
+      <RecentRequestsTable
+        {...PAGINATION_PROPS}
+        accounts={[]}
+        requests={[{ ...LAYOUT_REQUEST, inputTokens: 1000, cachedInputTokens: 400, outputTokens: 200, costUsd: 0.25 }]}
+      />,
+    );
+
+    const dialog = openRequestDetails();
+
+    expect(within(dialog).getByText("Input 1K · Cached 400 · Output 200")).toBeInTheDocument();
+    expect(within(dialog).getByText("$0.25")).toBeInTheDocument();
   });
 
   it("renders first-run empty copy when no filters are applied", () => {
@@ -664,14 +621,11 @@ describe("RecentRequestsTable", () => {
             apiKeyName: null,
             apiKeyId: null,
             requestId: "req-guest",
-            archiveRequestId: null,
             conversationId: null,
             requestKind: "normal",
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: "codex-cli",
@@ -679,17 +633,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 120,
             inputTokens: 100,
             outputTokens: 20,
-            outputTokensRaw: 20,
             latencyFirstTokenMs: 50,
             latencyQueueMs: null,
             cachedInputTokens: 0,
             reasoningEffort: null,
             costUsd: 0.01,
-            costBreakdown: null,
             latencyMs: 250,
           },
         ]}
@@ -724,11 +675,8 @@ describe("RecentRequestsTable", () => {
             conversationId: null,
             requestKind: "normal",
             source: null,
-            ...NULL_FAILURE_METADATA,
             model: "gpt-5.1",
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             ...NULL_USERAGENT_METADATA,
             status: "ok",
@@ -737,13 +685,11 @@ describe("RecentRequestsTable", () => {
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
           {
@@ -756,11 +702,8 @@ describe("RecentRequestsTable", () => {
             conversationId: null,
             requestKind: "warmup",
             source: null,
-            ...NULL_FAILURE_METADATA,
             model: "gpt-5.1",
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             ...NULL_USERAGENT_METADATA,
              status: "ok",
@@ -769,13 +712,11 @@ describe("RecentRequestsTable", () => {
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -804,24 +745,19 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: null,
             ...NULL_USERAGENT_METADATA,
              status: "ok",
              errorCode: null,
              errorMessage: null,
-            ...NULL_FAILURE_METADATA,
              tokens: 1,
              inputTokens: 1,
              outputTokens: 0,
-             outputTokensRaw: null,
              latencyFirstTokenMs: null,
             latencyQueueMs: null,
              cachedInputTokens: null,
              reasoningEffort: null,
              costUsd: 0,
-             costBreakdown: null,
              latencyMs: 1,
            },
          ]}
@@ -851,24 +787,19 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             ...NULL_USERAGENT_METADATA,
              status: "error",
              errorCode: "upstream_error",
              errorMessage: null,
-            ...NULL_FAILURE_METADATA,
              tokens: 1,
              inputTokens: 1,
              outputTokens: 0,
-             outputTokensRaw: null,
              latencyFirstTokenMs: null,
             latencyQueueMs: null,
              cachedInputTokens: null,
              reasoningEffort: null,
              costUsd: 0,
-             costBreakdown: null,
              latencyMs: 1,
            },
          ]}
@@ -879,63 +810,6 @@ describe("RecentRequestsTable", () => {
 
     expect(dialog).toHaveTextContent("upstream_error");
     expect(dialog).toHaveTextContent("Full Error");
-  });
-
-  it("shows a cost section for ok rows", () => {
-    render(
-      <RecentRequestsTable
-        {...PAGINATION_PROPS}
-        accounts={[]}
-        requests={[
-          {
-            requestedAt: ISO,
-            accountId: "acc-cost",
-            planType: "plus",
-            apiKeyName: "Key Cost",
-            apiKeyId: "key-cost",
-            requestId: "req-cost",
-            conversationId: null,
-            requestKind: "normal",
-            model: "gpt-5.1",
-            source: null,
-            serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
-            transport: "http",
-            ...NULL_USERAGENT_METADATA,
-            status: "ok",
-            errorCode: null,
-            errorMessage: null,
-            ...NULL_FAILURE_METADATA,
-            tokens: 1400,
-            inputTokens: 1000,
-            outputTokens: 400,
-            outputTokensRaw: null,
-            latencyFirstTokenMs: null,
-            latencyQueueMs: null,
-            cachedInputTokens: 200,
-            reasoningEffort: null,
-            costUsd: 0.01,
-            costBreakdown: {
-              inputUsd: 0.004,
-              cachedInputUsd: 0.002,
-              outputUsd: 0.004,
-              totalUsd: 0.01,
-            },
-            latencyMs: 100,
-          },
-        ]}
-      />,
-    );
-
-    const dialog = openRequestDetails();
-    const costSection = within(dialog).getByText("Cost").closest("div.space-y-2");
-
-    expect(within(dialog).getByText("Cost")).toBeInTheDocument();
-    expect(costSection).toHaveTextContent("$0.01 =");
-    expect(costSection).toHaveTextContent("800 Input ($0.00)");
-    expect(costSection).toHaveTextContent("200 Cached ($0.00)");
-    expect(costSection).toHaveTextContent("400 Output ($0.00)");
   });
 
   it("shows the full user agent in request details when present", () => {
@@ -956,8 +830,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36",
             useragentGroup: "Mozilla",
@@ -965,17 +837,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1019,8 +888,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: null,
@@ -1028,17 +895,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1056,172 +920,6 @@ describe("RecentRequestsTable", () => {
     expect(clientIpField).toHaveTextContent("Client IP");
     expect(clientIpField).toHaveTextContent("—");
     expect(within(dialog).queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
-  });
-
-  it("hides the cost section for non-ok rows", () => {
-    render(
-      <RecentRequestsTable
-        {...PAGINATION_PROPS}
-        accounts={[]}
-        requests={[
-          {
-            requestedAt: ISO,
-            accountId: "acc-no-cost",
-            planType: null,
-            apiKeyName: null,
-            apiKeyId: null,
-            requestId: "req-no-cost",
-            conversationId: null,
-            requestKind: "normal",
-            model: "gpt-5.1",
-            source: null,
-            serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
-            transport: "http",
-            ...NULL_USERAGENT_METADATA,
-            status: "error",
-            errorCode: "upstream_error",
-            errorMessage: "boom",
-            ...NULL_FAILURE_METADATA,
-            tokens: 1,
-            inputTokens: 1,
-            outputTokens: 0,
-            outputTokensRaw: null,
-            latencyFirstTokenMs: null,
-            latencyQueueMs: null,
-            cachedInputTokens: 0,
-            reasoningEffort: null,
-            costUsd: 0.01,
-            costBreakdown: {
-              inputUsd: 0.01,
-              cachedInputUsd: null,
-              outputUsd: null,
-              totalUsd: 0.01,
-            },
-            latencyMs: 1,
-          },
-        ]}
-      />,
-    );
-
-    const dialog = openRequestDetails();
-
-    expect(within(dialog).queryByText("Cost")).not.toBeInTheDocument();
-  });
-
-  it("renders only available cost segments for partial data", () => {
-    render(
-      <RecentRequestsTable
-        {...PAGINATION_PROPS}
-        accounts={[]}
-        requests={[
-          {
-            requestedAt: ISO,
-            accountId: "acc-partial-cost",
-            planType: "plus",
-            apiKeyName: "Key Partial",
-            apiKeyId: "key-partial",
-            requestId: "req-partial-cost",
-            conversationId: null,
-            requestKind: "normal",
-            model: "gpt-5.1",
-            source: null,
-            serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
-            transport: "http",
-            ...NULL_USERAGENT_METADATA,
-            status: "ok",
-            errorCode: null,
-            errorMessage: null,
-            ...NULL_FAILURE_METADATA,
-            tokens: 700,
-            inputTokens: 700,
-            outputTokens: null,
-            outputTokensRaw: null,
-            latencyFirstTokenMs: null,
-            latencyQueueMs: null,
-            cachedInputTokens: 200,
-            reasoningEffort: null,
-            costUsd: 0.01,
-            costBreakdown: {
-              inputUsd: 0.006,
-              cachedInputUsd: 0.004,
-              outputUsd: null,
-              totalUsd: 0.01,
-            },
-            latencyMs: 1,
-          },
-        ]}
-      />,
-    );
-
-    const dialog = openRequestDetails();
-    const costSection = within(dialog).getByText("Cost").closest("div.space-y-2");
-
-    expect(within(dialog).getByText("Cost")).toBeInTheDocument();
-    expect(costSection).toHaveTextContent("$0.01 =");
-    expect(costSection).toHaveTextContent("500 Input ($0.01)");
-    expect(costSection).toHaveTextContent("200 Cached ($0.00)");
-    expect(costSection).not.toHaveTextContent("Output");
-  });
-
-  it("renders available cost segments when total cost is unavailable", () => {
-    render(
-      <RecentRequestsTable
-        {...PAGINATION_PROPS}
-        accounts={[]}
-        requests={[
-          {
-            requestedAt: ISO,
-            accountId: "acc-partial-no-total",
-            planType: "plus",
-            apiKeyName: "Key Partial No Total",
-            apiKeyId: "key-partial-no-total",
-            requestId: "req-partial-no-total",
-            conversationId: null,
-            requestKind: "normal",
-            model: "gpt-5.1",
-            source: null,
-            serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
-            transport: "http",
-            ...NULL_USERAGENT_METADATA,
-            status: "ok",
-            errorCode: null,
-            errorMessage: null,
-            ...NULL_FAILURE_METADATA,
-            tokens: null,
-            inputTokens: 1000,
-            outputTokens: null,
-            outputTokensRaw: null,
-            latencyFirstTokenMs: null,
-            latencyQueueMs: null,
-            cachedInputTokens: 200,
-            reasoningEffort: null,
-            costUsd: null,
-            costBreakdown: {
-              inputUsd: 0.006,
-              cachedInputUsd: 0.004,
-              outputUsd: null,
-              totalUsd: null,
-            },
-            latencyMs: 1,
-          },
-        ]}
-      />,
-    );
-
-    const dialog = openRequestDetails();
-    const costSection = within(dialog).getByText("Cost").closest("div.space-y-2");
-
-    expect(within(dialog).getByText("Cost")).toBeInTheDocument();
-    expect(costSection).not.toHaveTextContent("=");
-    expect(costSection).toHaveTextContent("800 Input ($0.01)");
-    expect(costSection).toHaveTextContent("200 Cached ($0.00)");
-    expect(costSection).not.toHaveTextContent("Output");
   });
 
   it("shows the full user agent in request details when present", () => {
@@ -1242,8 +940,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36",
             useragentGroup: "Mozilla",
@@ -1251,17 +947,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1303,8 +996,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: null,
@@ -1312,17 +1003,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1340,60 +1028,6 @@ describe("RecentRequestsTable", () => {
     expect(clientIpField).toHaveTextContent("Client IP");
     expect(clientIpField).toHaveTextContent("—");
     expect(within(dialog).getByText("1 ms")).toBeInTheDocument();
-  });
-
-  it("hides the cost section for total-only cost breakdown rows", () => {
-    render(
-      <RecentRequestsTable
-        {...PAGINATION_PROPS}
-        accounts={[]}
-        requests={[
-          {
-            requestedAt: ISO,
-            accountId: "acc-total-only-cost",
-            planType: "plus",
-            apiKeyName: "Key Total Only",
-            apiKeyId: "key-total-only",
-            requestId: "req-total-only-cost",
-            conversationId: null,
-            requestKind: "normal",
-            model: "gpt-5.1",
-            source: null,
-            serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
-            transport: "http",
-            useragent: null,
-            useragentGroup: null,
-            clientIp: null,
-            status: "ok",
-            errorCode: null,
-            errorMessage: null,
-            ...NULL_FAILURE_METADATA,
-            tokens: 1500,
-            inputTokens: 1000,
-            outputTokens: 500,
-            outputTokensRaw: null,
-            latencyFirstTokenMs: null,
-            latencyQueueMs: null,
-            cachedInputTokens: null,
-            reasoningEffort: null,
-            costUsd: 4.321234,
-            costBreakdown: {
-              inputUsd: null,
-              cachedInputUsd: null,
-              outputUsd: null,
-              totalUsd: 4.321234,
-            },
-            latencyMs: 1,
-          },
-        ]}
-      />,
-    );
-
-    const dialog = openRequestDetails();
-
-    expect(within(dialog).queryByText("Cost")).not.toBeInTheDocument();
   });
 
   it("closes the dialog when conversation ID button is clicked and fires handler", () => {
@@ -1415,8 +1049,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: null,
@@ -1425,17 +1057,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1469,8 +1098,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: null,
@@ -1479,17 +1106,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1526,8 +1150,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: null,
@@ -1536,17 +1158,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
@@ -1578,8 +1197,6 @@ describe("RecentRequestsTable", () => {
             model: "gpt-5.1",
             source: null,
             serviceTier: null,
-            requestedServiceTier: null,
-            actualServiceTier: null,
             transport: "http",
             useragent: null,
             useragentGroup: null,
@@ -1588,17 +1205,14 @@ describe("RecentRequestsTable", () => {
             status: "ok",
             errorCode: null,
             errorMessage: null,
-            ...NULL_FAILURE_METADATA,
             tokens: 1,
             inputTokens: 1,
             outputTokens: 0,
-            outputTokensRaw: null,
             latencyFirstTokenMs: null,
             latencyQueueMs: null,
             cachedInputTokens: null,
             reasoningEffort: null,
             costUsd: 0,
-            costBreakdown: null,
             latencyMs: 1,
           },
         ]}
