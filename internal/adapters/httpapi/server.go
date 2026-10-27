@@ -91,37 +91,7 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	s.registerAuth(mux)
 	s.registerKeyReportSession(mux)
-	admin := http.NewServeMux()
-	s.registerAdmin(admin)
-	s.registerReportsRoutes(admin, s.store)
-	s.registerAffinityRoutes(admin)
-	if s.modelPricing != nil {
-		s.modelPricing.RegisterAdminRoutes(admin)
-	}
-	if s.catalog != nil {
-		NewModelCatalogHandler(s.store, s.catalog).RegisterAdminRoutes(admin)
-	}
-	if s.archives != nil {
-		s.registerErrorArchiveRoutes(admin)
-	}
-	if s.firewall != nil {
-		s.registerFirewallRoutes(admin)
-	}
-	s.registerRuntimeUpdateRoutes(admin)
-	if s.accounts != nil {
-		s.registerAccountRoutes(admin)
-	}
-	if s.usage != nil {
-		s.registerAccountUsageRoutes(admin, s.usage)
-	}
-	if s.automations != nil {
-		s.registerAutomationsRoutes(admin, s.automations)
-	}
-	if s.warmups != nil {
-		s.registerWarmupRoutes(admin, s.warmups)
-	}
-	s.registerModelSourceRoutes(admin)
-	mux.Handle("/api/", s.requireAdmin(admin))
+	mux.Handle("/api/", compressJSON(s.requireAdmin(s.adminRoutes())))
 	if proxy != nil {
 		proxy = s.proxyIngress(proxy)
 		mux.Handle("/v1/", proxy)
@@ -153,6 +123,42 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 		}
 		protected.ServeHTTP(w, r)
 	})
+}
+
+// adminRoutes registers every authenticated dashboard API group on one mux;
+// Handler mounts it at /api/ behind requireAdmin and JSON compression.
+func (s *Server) adminRoutes() *http.ServeMux {
+	admin := http.NewServeMux()
+	s.registerAdmin(admin)
+	s.registerReportsRoutes(admin, s.store)
+	s.registerAffinityRoutes(admin)
+	if s.modelPricing != nil {
+		s.modelPricing.RegisterAdminRoutes(admin)
+	}
+	if s.catalog != nil {
+		NewModelCatalogHandler(s.store, s.catalog).RegisterAdminRoutes(admin)
+	}
+	if s.archives != nil {
+		s.registerErrorArchiveRoutes(admin)
+	}
+	if s.firewall != nil {
+		s.registerFirewallRoutes(admin)
+	}
+	s.registerRuntimeUpdateRoutes(admin)
+	if s.accounts != nil {
+		s.registerAccountRoutes(admin)
+	}
+	if s.usage != nil {
+		s.registerAccountUsageRoutes(admin, s.usage)
+	}
+	if s.automations != nil {
+		s.registerAutomationsRoutes(admin, s.automations)
+	}
+	if s.warmups != nil {
+		s.registerWarmupRoutes(admin, s.warmups)
+	}
+	s.registerModelSourceRoutes(admin)
+	return admin
 }
 
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
