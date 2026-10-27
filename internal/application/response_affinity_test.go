@@ -13,12 +13,12 @@ import (
 )
 
 type affinityRoutingStub struct {
-	binding         domain.AffinityBinding
-	lookupErr       error
-	lookupCount     int
-	lookupKey       string
-	lookupKind      domain.AffinityKind
-	lookupKeyID     string
+	binding     domain.AffinityBinding
+	lookupErr   error
+	lookupCount int
+	lookupKey   string
+	lookupKind  domain.AffinityKind
+	lookupKeyID string
 }
 
 func (stub *affinityRoutingStub) LookupAffinity(_ context.Context, keyID string, kind domain.AffinityKind, key string) (domain.AffinityBinding, error) {
@@ -29,7 +29,6 @@ func (stub *affinityRoutingStub) LookupAffinity(_ context.Context, keyID string,
 	}
 	return stub.binding, nil
 }
-
 
 func TestRequestAffinityExplicitCacheKeyIsScopedAndIndependentOfStickySetting(t *testing.T) {
 	request := responseRequest{Object: map[string]json.RawMessage{

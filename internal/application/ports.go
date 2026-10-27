@@ -49,9 +49,7 @@ type UsageLedger interface {
 	SettleUsage(context.Context, string, domain.UsageSettlement) (bool, error)
 	GetReservation(context.Context, string) (domain.Reservation, error)
 	ListReservationsNeedingReconciliation(context.Context, string, int) ([]domain.Reservation, error)
-	TouchReservation(context.Context, string, time.Time) (bool, error)
 	MarkReservationUncertain(context.Context, string) (bool, error)
-	ReleaseStaleReservations(context.Context, time.Time) (int, error)
 	RecordUsage(context.Context, domain.UsageEvent) (bool, error)
 	UsageTotals(context.Context, string, string) (domain.UsageTotals, error)
 }

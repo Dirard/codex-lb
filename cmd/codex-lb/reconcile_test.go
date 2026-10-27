@@ -49,9 +49,6 @@ func TestInterruptedUsageRetainedUntilExplicitOfflineSettlement(t *testing.T) {
 	if err != nil || !reservation.NeedsReconciliation || reservation.Status != "reserved" {
 		t.Fatal("restart silently discarded interrupted accounting")
 	}
-	if n, err := r.data.store.ReleaseStaleReservations(ctx, now.Add(time.Hour)); err != nil || n != 0 {
-		t.Fatal("unknown usage automatically released")
-	}
 	var output bytes.Buffer
 	if err := reconcileUsage(ctx, cfg, &output); err == nil {
 		t.Fatal("reconciliation opened the running server database")

@@ -113,9 +113,6 @@ func TestNativeMissingUsageRetainsReservationAndBlocksFurtherLimitedTraffic(t *t
 			if err != nil || len(key.Limits) != 1 || key.Limits[0].CurrentValue != 1 {
 				t.Fatalf("reservation budget was forgiven: %+v, %v", key.Limits, err)
 			}
-			if released, err := store.ReleaseStaleReservations(ctx, time.Now().Add(24*time.Hour)); err != nil || released != 0 {
-				t.Fatalf("unknown usage was stale-released: %d, %v", released, err)
-			}
 			if second := post(); second.Code != 429 || calls.Load() != 1 {
 				t.Fatalf("limited key bypassed held budget: %d calls=%d body=%s", second.Code, calls.Load(), second.Body.String())
 			}

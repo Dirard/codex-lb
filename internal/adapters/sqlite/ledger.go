@@ -324,24 +324,11 @@ func (s *Store) ListReservationsNeedingReconciliation(ctx context.Context, after
 	return result, nil
 }
 
-func (s *Store) TouchReservation(ctx context.Context, id string, now time.Time) (bool, error) {
-	if now.IsZero() {
-		return false, ErrInvalid
-	}
-	res, err := s.exec(ctx, `UPDATE usage_reservations
- SET updated_at=max(updated_at,?) WHERE id=? AND status='reserved'`, millis(now), id)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n != 0, err
-}
-
 func (s *Store) SettleUsage(ctx context.Context, id string, settlement domain.UsageSettlement) (bool, error) {
-	return s.settleUsage(ctx, id, settlement, nil)
+	return s.settleUsage(ctx, id, settlement)
 }
 
-func (s *Store) settleUsage(ctx context.Context, id string, settlement domain.UsageSettlement, staleBefore *time.Time) (bool, error) {
+func (s *Store) settleUsage(ctx context.Context, id string, settlement domain.UsageSettlement) (bool, error) {
 	if id == "" || (settlement.Status != "finalized" && settlement.Status != "failed" && settlement.Status != "released") {
 		return false, ErrInvalid
 	}
@@ -362,7 +349,7 @@ func (s *Store) settleUsage(ctx context.Context, id string, settlement domain.Us
 			}
 			return err
 		}
-		if status != "reserved" || (staleBefore != nil && updated >= millis(*staleBefore)) {
+		if status != "reserved" {
 			return nil
 		}
 		event := settlement.Event
@@ -465,41 +452,4 @@ func (s *Store) settleUsage(ctx context.Context, id string, settlement domain.Us
 		return nil
 	})
 	return applied, err
-}
-
-func (s *Store) ReleaseStaleReservations(ctx context.Context, cutoff time.Time) (int, error) {
-	if cutoff.IsZero() {
-		return 0, ErrInvalid
-	}
-	rows, err := s.readDB.QueryContext(ctx, `SELECT id FROM usage_reservations
-	 WHERE status='reserved' AND needs_reconciliation=0 AND updated_at<?
-	 ORDER BY updated_at,id LIMIT 100`, millis(cutoff))
-	if err != nil {
-		return 0, err
-	}
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, id := range ids {
-		applied, err := s.settleUsage(ctx, id, domain.UsageSettlement{Status: "released"}, &cutoff)
-		if err != nil {
-			return count, err
-		}
-		if applied {
-			count++
-		}
-	}
-	return count, nil
 }

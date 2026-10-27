@@ -242,7 +242,4 @@ func TestCodexOperationsSQLiteCancellationRetainsUnknownReservation(t *testing.T
 	if err != nil || len(uncertain) != 1 || !uncertain[0].NeedsReconciliation {
 		t.Fatalf("cancelled reservation not retained: %+v %v", uncertain, err)
 	}
-	if released, err := store.ReleaseStaleReservations(ctx, time.Now().Add(24*time.Hour)); err != nil || released != 0 {
-		t.Fatalf("unknown cancellation was stale-released: %d %v", released, err)
-	}
 }
