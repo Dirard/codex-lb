@@ -127,12 +127,12 @@ Tests:
    expected outcome: reservation succeeds
 
 ### 3.1 Reprice model history in bounded chunks
-price change --read-only provenance check--> accepted change --save override and pending marker--> saved price --reprice raw events and covered buckets in chunks of at most 500 per write job--> repriced history --clear pending marker--> done
+price change --dry run of the whole reprice on a read snapshot--> accepted change --save override and pending marker--> saved price --reprice raw events and covered buckets in chunks of at most 500 per write job--> repriced history --clear pending marker--> done
 
 Requirements:
 
   R11:
-`ApplyModelPriceChange` SHALL check current cost-limit charge provenance on a read snapshot before writing and SHALL fail with `ErrConflict` without saving the tariff when provenance is missing.
+`ApplyModelPriceChange` SHALL dry-run the whole history reprice with the prospective tariff on a read snapshot before writing and SHALL fail without saving the tariff when it fails, including `ErrConflict` for missing current cost-limit charge provenance.
 
   R12:
 The override SHALL be saved in its own job; history SHALL be repriced in jobs of at most 500 events (raw) or 100 rollup buckets, each applying event costs and their aggregate and current-limit deltas atomically, so ledger jobs interleave between chunks.
@@ -240,13 +240,14 @@ raw input bytes --byte prefilter for markers and escapes--> decode skipped unles
 Requirements:
 
   R20:
-`accountBoundItems`, `collectFileIDs` and `autoTransportRequiresHTTP` SHALL return without a generic decode when the raw items contain none of their trigger substrings and no `\u` escape; results SHALL equal the generic decode for every input.
+`accountBoundItems`, `collectFileIDs` and `autoTransportRequiresHTTP` SHALL return without a generic decode when the raw items contain none of their trigger substrings and no `\u` escape (after a `json.Valid` check where invalid input changes the answer); results SHALL equal the decoded walk for every input. Numbers never make an item account-bound (an out-of-range literal used to, through the generic decode error).
 
   R21:
-`remember` SHALL derive `FilePinned` incrementally from the request, the new output and the previous owner instead of rescanning the whole history.
+`continuationPlan` SHALL derive `FilePinned` incrementally from the request, the new output and the previous owner instead of rescanning the whole history.
 
 Files And Functions:
- - existing: internal/application/response_request.go#accountBoundItems
+ - existing: internal/application/response_request.go#accountBoundItems, #accountBoundDecoded
+ - existing: internal/application/response_ownership.go#continuationPlan - incremental pin
  - existing: internal/application/codex_operations.go#collectFileIDs
  - existing: internal/application/response_transport.go#autoTransportRequiresHTTP
  - planned: internal/application/json_prefilter.go, json_prefilter_test.go - prefilter and fuzz equivalence
@@ -296,23 +297,26 @@ Files And Functions:
 
 ## Implementation checklist
 
-1. [ ] OpenSpec change `hot-path-single-commit` (affinity persistence, terminal durability, chunked repricing, provider conversation state) validated strictly.
-2. [ ] APP-11 regression test, then fix (R15).
-3. [ ] APP-5 route regression test, then fix (R14).
-4. [ ] Writer deadline after connection, batch size 64, DB-2 conversions (R8–R10).
-5. [ ] APP-1 reservation with affinity CAS (R1–R3).
-6. [ ] APP-2 `FinalizeResponse` and plan-then-finalize in `Respond` (R4–R7).
-7. [ ] DB-1 chunked repricing with pending marker and resume (R11–R13).
-8. [ ] APP-7/DB-9 price memo and selection snapshot (R16, R17).
-9. [ ] APP-4 lazy history (R18, R19).
-10. [ ] APP-3a/APP-14 prefilters and incremental `FilePinned` (R20, R21).
-11. [ ] APP-6/DB-11 alias references and stats (R22, R23) in schema 34.
-12. [ ] DB-7 analytics pool, DB-13 removal (R24, R25).
-13. [ ] Measure pre-dispatch p50 (c=1, c=8) and fsync per request after; record below. Run vet, lint, tests, race.
+1. [x] OpenSpec change `hot-path-single-commit` (affinity persistence, terminal durability, chunked repricing, provider conversation state) validated strictly.
+2. [x] APP-11 regression test, then fix (R15).
+3. [x] APP-5 route regression test, then fix (R14).
+4. [x] Writer deadline after connection, batch size 64, DB-2 conversions (R8–R10).
+5. [x] APP-1 reservation with affinity CAS (R1–R3).
+6. [x] APP-2 `FinalizeResponse` and plan-then-finalize in `Respond` (R4–R7).
+7. [x] DB-1 chunked repricing with dry run, pending marker and resume (R11–R13).
+8. [x] APP-7/DB-9 price memo and selection snapshot (R16, R17).
+9. [x] APP-4 lazy history (R18, R19).
+10. [x] APP-3a/APP-14 prefilters and incremental `FilePinned` (R20, R21).
+11. [x] APP-6/DB-11 alias references and stats (R22, R23) in schema 34.
+12. [x] DB-7 analytics pool, DB-13 removal (R24, R25).
+13. [x] Measure pre-dispatch p50 (c=1, c=8) and fsync per request after; record below. Run vet, lint, tests, race.
 
 ## Open questions
 
-None blocking. DB-18 (TTL for durable locality kinds) conflicts with the current operator-purge scenario and is left for a separate decision.
+None blocking. Deferred, outside this slice:
+- DB-18 (TTL for `sticky_thread`/`codex_session` affinity): the current operator-purge scenario keeps durable locality kinds; an automatic TTL needs its own OpenSpec decision and a maintenance-loop change in the data slice.
+- Compact finalization still uses separate settle/outcome/continuation writes (each now a batch-writer job).
+- `reports_retention.go` and `reports_account_trends.go#PruneAccountQuotaHistory` keep direct writer transactions (data slice); they no longer fail queued jobs because the writer deadline starts after the connection.
 
 ## Decision log
 
@@ -323,3 +327,8 @@ None blocking. DB-18 (TTL for durable locality kinds) conflicts with the current
 - 2026-10-28: Non-empty `conversation` reuses the file-pinned path (account-bound) instead of a new flag: every failover branch already honours it and the stored continuation inherits it.
 - 2026-10-28: Compact finalization keeps its separate writes in this slice; only Responses uses `FinalizeResponse`.
 - 2026-10-28: Baseline numbers (before): pre-dispatch p50 c=1 2.68 ms, c=8/2 KiB 12.4 ms, c=8/256 KiB 41.3 ms; fsync per request 6.12 (c=1), 3.5 (c=8).
+- 2026-10-28: Repricing dry-runs the whole pass on a read snapshot (not only provenance), so every reconciliation failure the old atomic transaction rolled back still changes nothing; per-chunk aggregate deltas cannot go negative midway because new costs are non-negative and current values contain the old charges.
+- 2026-10-28: An unreadable stored history no longer fails a same-owner turn before dispatch (the history is read after dispatch); cross-account replay stays closed and the next continuation is stored without context.
+- 2026-10-28: The account-bound walk decodes numbers as `json.Number`; an out-of-range number literal no longer marks an item account-bound (found by the prefilter fuzz test).
+- 2026-10-28: DB-7 required replacing `s.readDB` with `s.analyticsDB` in `reports_*.go` (data slice) — a mechanical change only.
+- 2026-10-28: After (same host, alternating runs, audit harness, file DB, 20 accounts). Quiet round: pre-dispatch p50 c=1 2.57 → 2.02 ms (Respond total 6.27 → 3.79 ms); c=8/2 KiB 11.4 → 7.1 ms (total 30.4 → 13.0 ms); c=8/256 KiB 42.3 → 19.9 ms (total 80.9 → 38.0 ms). Loaded-disk round: c=1 9.5 → 5.6 ms; c=8/2 KiB 44.1 → 10.7 ms; c=8/256 KiB 70.3 → 30.1 ms. `previous_response_id` with 1 MiB history: 8.96 → 6.71 ms and 14.9 → 7.1 ms. fsync per request (strace between markers): 6.12 → 2.09 at c=1, 3.5 → 0.55 at c=8. Durable commits per turn: 6 → 2 (one before dispatch, one before the terminal). Selection reads for 20 accounts: 40 per-account queries plus N price lookups → one 4-query snapshot and one price lookup.
