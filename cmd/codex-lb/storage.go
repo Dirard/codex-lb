@@ -18,6 +18,10 @@ type persistentData struct {
 }
 
 func openData(ctx context.Context, directory string) (*persistentData, error) {
+	return openDataWithOptions(ctx, directory, sqlite.Options{})
+}
+
+func openDataWithOptions(ctx context.Context, directory string, options sqlite.Options) (*persistentData, error) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, errors.New("cannot create data directory")
 	}
@@ -40,7 +44,7 @@ func openData(ctx context.Context, directory string) (*persistentData, error) {
 	if err != nil {
 		return nil, errors.New("cannot open private encryption.key; do not replace the key of an existing database")
 	}
-	store, err := sqlite.Open((&url.URL{Scheme: "file", Path: path}).String())
+	store, err := sqlite.OpenWithOptions((&url.URL{Scheme: "file", Path: path}).String(), options)
 	if err != nil {
 		return nil, errors.New("cannot open or migrate Go database; foreign/legacy databases must be imported into a separate directory")
 	}

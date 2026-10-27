@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ type config struct {
 	reservation, settlement, afterReservation string
 	releaseReservation                        bool
 	selfUpdate                                bool
+	memoryLimit                               int64 // 0 derive from host, <0 leave unset
+	maxGenerations, maxClientWebSockets       int
 	updater                                   application.RuntimeUpdater
 }
 
@@ -43,6 +46,16 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		flags.StringVar(&cfg.authHeader, "dashboard-auth-header", "X-Auth-Request-Email", "identity header supplied by a configured trusted reverse proxy")
 		flags.StringVar(&cfg.listen, "listen", "127.0.0.1:2455", "HTTP listen address; use a reverse proxy for TLS")
 		flags.DurationVar(&cfg.shutdownGrace, "shutdown-grace", 30*time.Second, "time allowed for active responses before cancellation")
+		flags.Func("memory-limit", "Go soft memory limit: auto (75% of detected memory), off, or a size such as 3GiB; GOMEMLIMIT is honored when this is auto", func(raw string) error {
+			limit, err := parseMemoryLimit(raw)
+			if err != nil {
+				return err
+			}
+			cfg.memoryLimit = limit
+			return nil
+		})
+		flags.Func("max-generations", "concurrent generation bound; default derived from detected memory (512 on a 1 GB host)", positiveIntFlag("max-generations", &cfg.maxGenerations))
+		flags.Func("max-client-websockets", "client WebSocket bound; default derived from detected memory and descriptor limit (4096 on a 1 GB host)", positiveIntFlag("max-client-websockets", &cfg.maxClientWebSockets))
 		flags.Func("unauthenticated-client", "socket CIDR permitted without a key only while API-key auth is disabled", func(raw string) error {
 			prefix, err := netip.ParsePrefix(raw)
 			if err != nil {
@@ -119,4 +132,42 @@ func listenError(purpose, address string, err error) error {
 		reason = opErr.Err.Error()
 	}
 	return fmt.Errorf("cannot bind %s %s: %s", purpose, address, reason)
+}
+
+func positiveIntFlag(name string, target *int) func(string) error {
+	return func(raw string) error {
+		value, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || value <= 0 || value > 1<<20 {
+			return fmt.Errorf("%s must be a positive integer", name)
+		}
+		*target = value
+		return nil
+	}
+}
+
+// parseMemoryLimit accepts auto, off, or a byte size with the GOMEMLIMIT
+// suffixes B, KiB, MiB, GiB and TiB.
+func parseMemoryLimit(raw string) (int64, error) {
+	value := strings.TrimSpace(raw)
+	switch strings.ToLower(value) {
+	case "auto", "":
+		return 0, nil
+	case "off":
+		return -1, nil
+	}
+	multiplier := int64(1)
+	for _, unit := range []struct {
+		suffix string
+		bytes  int64
+	}{{"TiB", 1 << 40}, {"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}, {"B", 1}} {
+		if strings.HasSuffix(value, unit.suffix) {
+			value, multiplier = strings.TrimSuffix(value, unit.suffix), unit.bytes
+			break
+		}
+	}
+	number, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || number <= 0 || number > (1<<62)/multiplier || number*multiplier < 64<<20 {
+		return 0, errors.New("memory-limit must be auto, off, or a size of at least 64MiB such as 3GiB")
+	}
+	return number * multiplier, nil
 }

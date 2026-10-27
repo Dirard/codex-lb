@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/chatgpt"
+	"codex-lb/internal/adapters/hostinfo"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/adapters/provider"
+	"codex-lb/internal/adapters/sqlite"
 	"codex-lb/internal/adapters/streambuffer"
 	"codex-lb/internal/adapters/webui"
 	"codex-lb/internal/application"
@@ -43,7 +45,9 @@ type runtime struct {
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
-	data, err := openData(ctx, cfg.dataDir)
+	capacity := planCapacity(cfg, detectHost())
+	applyCapacity(capacity, logger)
+	data, err := openDataWithOptions(ctx, cfg.dataDir, sqlite.Options{ReadConnections: capacity.SQLiteReaders})
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +73,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		DialContext:       (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2: true, TLSHandshakeTimeout: 10 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second, ExpectContinueTimeout: time.Second,
-		MaxIdleConns: 128, MaxIdleConnsPerHost: 64, MaxConnsPerHost: 512,
+		MaxIdleConns: 128, MaxIdleConnsPerHost: 64, MaxConnsPerHost: capacity.UpstreamConnsPerHost,
 		IdleConnTimeout: 90 * time.Second,
 	}
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -87,7 +91,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	catalogClient := chatgpt.NewModelCatalogClient("", "", &oauthClient)
 	catalogClient.ResolveClientVersion = data.store.LoadCodexClientVersion
 	catalog := application.NewModelCatalogService(data.store, catalogClient, tokens, application.ModelCatalogConfig{})
-	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client,
+	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client, UpstreamWebSocketSessions: capacity.UpstreamWebSockets,
 		ResolveClientVersion: data.store.LoadCodexClientVersion, ChatGPTReasoningFallback: catalog.SubscriptionReasoningFallback})
 	if err := catalog.Load(ctx); err != nil {
 		_ = accounts.Close()
@@ -96,7 +100,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		data.close()
 		return nil, errors.New("cannot load model catalog snapshot")
 	}
-	proxy := application.NewProxy(data.store, adapter, data.vault, application.ProxyConfig{})
+	proxy := application.NewProxy(data.store, adapter, data.vault, application.ProxyConfig{MaxStreams: capacity.MaxGenerations, MaxQueued: capacity.MaxQueued})
 	proxy.OpenResponsePrelude = func() (application.ResponsePrelude, error) { return streambuffer.New(cfg.dataDir, data.vault) }
 	proxy.Catalog = catalog
 	archives := application.NewErrorArchives(data.store, data.vault)
@@ -164,7 +168,12 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	native.ConfigurePrice(proxy.ResolvePrice)
 	httpapi.RegisterNativeAPIRoutes(proxyMux, data.store, native, cfg.trusted)
 	httpapi.NewModelCatalogHandler(data.store, catalog).RegisterPublicRoutes(proxyMux)
-	responses := httpapi.NewProxyHandler(data.store, proxy, cfg.trusted)
+	responses := httpapi.NewProxyHandlerWithLimits(data.store, proxy, cfg.trusted, httpapi.ProxyHandlerLimits{BodyReaders: capacity.BodyReaders, ClientWebSockets: capacity.ClientWebSockets})
+	api.ConfigureRuntimeCapacity(httpapi.RuntimeCapacitySource{Plan: capacity, Usage: func() httpapi.CapacityUsage {
+		active, queued := proxy.AdmissionUsage()
+		sockets, _ := responses.ClientWebSockets()
+		return httpapi.CapacityUsage{ActiveGenerations: active, QueuedGenerations: queued, ClientWebSockets: sockets, ResidentBytes: hostinfo.ResidentBytes()}
+	}})
 	responses.QuotaHeaders = keyUsage.QuotaHeaders
 	responses.RegisterRoutes(proxyMux)
 	handler := api.Handler(proxyMux, webui.Handler())
