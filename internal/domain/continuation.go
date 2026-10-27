@@ -18,6 +18,9 @@ type Continuation struct {
 	FilePinned           bool      `json:"filePinned"`
 	QuotaRefused         bool      `json:"quotaRefused"`
 	TurnStateForwardable bool      `json:"-"`
+	// ContextResponseID makes an alias share the stored context of that
+	// response row instead of holding a copy.
+	ContextResponseID string `json:"-"`
 }
 
 type ContinuationBounds struct {

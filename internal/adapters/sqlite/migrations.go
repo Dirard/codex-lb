@@ -221,9 +221,30 @@ const schemaV26 = `ALTER TABLE runtime_settings ADD COLUMN warmup_model TEXT NOT
 
 const schemaV33 = `ALTER TABLE runtime_settings ADD COLUMN codex_client_version TEXT NOT NULL DEFAULT '0.156.0' CHECK(length(codex_client_version) BETWEEN 1 AND 64);`
 
-// schemaV34 records model repricing that has not finished all of its history
-// chunks, so it resumes after a restart.
+// schemaV34 lets session/turn aliases reference their owner's stored context
+// instead of copying it, keeps continuation bounds counters in O(1) through
+// triggers (each stored context counted once), and records model repricing
+// that has not finished all of its history chunks.
 const schemaV34 = `
+ALTER TABLE continuations ADD COLUMN context_response_id TEXT;
+CREATE TABLE continuation_stats (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ records INTEGER NOT NULL, context_bytes INTEGER NOT NULL
+);
+INSERT INTO continuation_stats(id,records,context_bytes)
+ SELECT 1,count(*),coalesce(sum(length(context_encrypted)),0) FROM continuations;
+CREATE TRIGGER continuation_stats_insert AFTER INSERT ON continuations BEGIN
+ UPDATE continuation_stats SET records=records+1,
+ context_bytes=context_bytes+coalesce(length(NEW.context_encrypted),0) WHERE id=1;
+END;
+CREATE TRIGGER continuation_stats_delete AFTER DELETE ON continuations BEGIN
+ UPDATE continuation_stats SET records=records-1,
+ context_bytes=context_bytes-coalesce(length(OLD.context_encrypted),0) WHERE id=1;
+END;
+CREATE TRIGGER continuation_stats_update AFTER UPDATE OF context_encrypted ON continuations BEGIN
+ UPDATE continuation_stats SET context_bytes=context_bytes
+ -coalesce(length(OLD.context_encrypted),0)+coalesce(length(NEW.context_encrypted),0) WHERE id=1;
+END;
 CREATE TABLE model_reprice_pending (
  model TEXT PRIMARY KEY, requested_at INTEGER NOT NULL
 );

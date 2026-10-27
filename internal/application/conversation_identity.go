@@ -127,6 +127,8 @@ func (resolved resolvedConversation) validateFileOwner(accountID string, generat
 // accounted owner; the store fences them by the reservation that settled it.
 func conversationAliases(owner domain.Continuation, identity conversationIdentity, forwardTurn bool) []domain.Continuation {
 	var aliases []domain.Continuation
+	// Aliases resolve the owner's stored context; one copy per response.
+	owner.ContextEncrypted, owner.ContextResponseID = nil, owner.ResponseID
 	if id := logicalSessionLookupID(identity.SessionID, identity.ThreadID); id != "" {
 		alias := owner
 		alias.ResponseID = id

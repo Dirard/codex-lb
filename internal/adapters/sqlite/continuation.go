@@ -17,13 +17,20 @@ func (s *Store) GetContinuation(ctx context.Context, keyID, responseID string, n
 		return c, ErrInvalid
 	}
 	var created, expires int64
+	var contextResponseID sql.NullString
+	// An alias reads its owner's retained context; an evicted owner leaves it empty.
 	err := s.readDB.QueryRowContext(ctx, `SELECT c.response_id,c.key_id,c.account_id,c.provider_id,c.model,
- c.created_at,c.expires_at,c.context_encrypted,c.file_pinned,c.quota_refused,c.turn_state_forwardable,a.generation,a.route_revision
+ c.created_at,c.expires_at,coalesce(o.context_encrypted,c.context_encrypted),c.file_pinned,c.quota_refused,
+ c.turn_state_forwardable,c.context_response_id,a.generation,a.route_revision
  FROM continuations c JOIN accounts a ON a.id=c.account_id
+ LEFT JOIN continuations o ON o.response_id=c.context_response_id AND o.key_id=c.key_id
+ AND o.account_id=c.account_id AND o.expires_at>?
  WHERE c.response_id=? AND c.key_id=? AND c.expires_at>?
- AND NOT(a.status='deactivated' AND a.deactivation_reason='deleted')`, responseID, keyID, millis(now)).Scan(
+ AND NOT(a.status='deactivated' AND a.deactivation_reason='deleted')`, millis(now), responseID, keyID, millis(now)).Scan(
 		&c.ResponseID, &c.KeyID, &c.AccountID, &c.ProviderID, &c.Model,
-		&created, &expires, &c.ContextEncrypted, &c.FilePinned, &c.QuotaRefused, &c.TurnStateForwardable, &c.AccountGeneration, &c.RouteRevision)
+		&created, &expires, &c.ContextEncrypted, &c.FilePinned, &c.QuotaRefused, &c.TurnStateForwardable, &contextResponseID,
+		&c.AccountGeneration, &c.RouteRevision)
+	c.ContextResponseID = contextResponseID.String
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -58,7 +65,8 @@ func (s *Store) SaveSessionContinuation(ctx context.Context, c domain.Continuati
 // alias fenced by the reservation that settled its turn.
 func validContinuation(c domain.Continuation, reservationID string, bounds domain.ContinuationBounds) error {
 	alias := strings.HasPrefix(c.ResponseID, "session:")
-	if alias != (reservationID != "") || c.TurnStateForwardable && !strings.HasPrefix(c.ResponseID, "session:turn:") {
+	if alias != (reservationID != "") || c.TurnStateForwardable && !strings.HasPrefix(c.ResponseID, "session:turn:") ||
+		c.ContextResponseID != "" && (!alias || len(c.ContextEncrypted) != 0 || strings.HasPrefix(c.ContextResponseID, "session:")) {
 		return ErrInvalid
 	}
 	if c.ResponseID == "" || c.KeyID == "" || c.AccountID == "" || c.ProviderID == "" || c.Model == "" ||
@@ -92,22 +100,26 @@ func saveContinuationTx(ctx context.Context, tx *sql.Tx, c domain.Continuation, 
 		return err
 	}
 	update := `expires_at=excluded.expires_at,context_encrypted=excluded.context_encrypted,
- file_pinned=excluded.file_pinned
+ file_pinned=excluded.file_pinned,context_response_id=excluded.context_response_id
  WHERE continuations.account_id=excluded.account_id AND
  continuations.provider_id=excluded.provider_id AND continuations.model=excluded.model`
 	if reservationID != "" {
 		update = `account_id=excluded.account_id,provider_id=excluded.provider_id,model=excluded.model,
  created_at=excluded.created_at,expires_at=excluded.expires_at,context_encrypted=excluded.context_encrypted,
  file_pinned=excluded.file_pinned,quota_refused=excluded.quota_refused,reservation_rowid=excluded.reservation_rowid,
- turn_state_forwardable=excluded.turn_state_forwardable
+ turn_state_forwardable=excluded.turn_state_forwardable,context_response_id=excluded.context_response_id
  WHERE continuations.reservation_rowid<excluded.reservation_rowid`
+	}
+	var contextResponseID any
+	if c.ContextResponseID != "" {
+		contextResponseID = c.ContextResponseID
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO continuations
  (response_id,key_id,account_id,provider_id,model,created_at,expires_at,
- context_encrypted,file_pinned,quota_refused,reservation_rowid,turn_state_forwardable) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+ context_encrypted,file_pinned,quota_refused,reservation_rowid,turn_state_forwardable,context_response_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(response_id,key_id) DO UPDATE SET `+update,
 		c.ResponseID, c.KeyID, c.AccountID, c.ProviderID, c.Model, millis(c.CreatedAt),
-		millis(c.ExpiresAt), c.ContextEncrypted, boolInt(c.FilePinned), boolInt(c.QuotaRefused), sequence, boolInt(c.TurnStateForwardable))
+		millis(c.ExpiresAt), c.ContextEncrypted, boolInt(c.FilePinned), boolInt(c.QuotaRefused), sequence, boolInt(c.TurnStateForwardable), contextResponseID)
 	if err != nil {
 		return err
 	}
@@ -122,9 +134,9 @@ func saveContinuationTx(ctx context.Context, tx *sql.Tx, c domain.Continuation, 
 		return fmt.Errorf("continuation owner changed: %w", ErrConflict)
 	}
 	for {
+		// Triggers keep the counters in the same transaction; no table scan.
 		var count, bytes int64
-		if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(length(context_encrypted)),0)
- FROM continuations`).Scan(&count, &bytes); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT records,context_bytes FROM continuation_stats WHERE id=1`).Scan(&count, &bytes); err != nil {
 			return err
 		}
 		if count <= int64(bounds.MaxRecords) && bytes <= bounds.MaxContextBytes {

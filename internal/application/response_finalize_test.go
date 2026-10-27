@@ -1,9 +1,13 @@
 package application_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,5 +119,25 @@ func TestOwnershipFailureWithholdsTerminalButKeepsSettlement(t *testing.T) {
 	totals, err := store.UsageTotals(ctx, "key-test", "")
 	if err != nil || totals.RequestCount != 1 || totals.Usage.InputTokens != 10 {
 		t.Fatalf("settlement lost with ownership: %+v %v", totals, err)
+	}
+}
+
+// A remembered session alias points at its response's stored context instead
+// of a second encrypted copy.
+func TestSessionAliasSharesResponseContext(t *testing.T) {
+	proxy, store, _ := proxyFixture(t)
+	ctx := context.Background()
+	body := json.RawMessage(`{"model":"gpt-6-sol","input":[{"type":"message","role":"user","content":"` + strings.Repeat("x", 64<<10) + `"}]}`)
+	result, err := proxy.Respond(ctx, application.ResponseOptions{KeyID: "key-test", SessionID: "s1"}, body, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := store.GetContinuation(ctx, "key-test", result.ResponseID, time.Now())
+	if err != nil || len(owner.ContextEncrypted) == 0 {
+		t.Fatalf("owner context missing: %v", err)
+	}
+	alias, err := store.GetContinuation(ctx, "key-test", fmt.Sprintf("session:%x", sha256.Sum256([]byte("s1"))), time.Now())
+	if err != nil || alias.ContextResponseID != result.ResponseID || !bytes.Equal(alias.ContextEncrypted, owner.ContextEncrypted) {
+		t.Fatalf("alias does not share the owner's context: ref=%q %v", alias.ContextResponseID, err)
 	}
 }
