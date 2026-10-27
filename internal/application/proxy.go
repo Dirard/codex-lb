@@ -16,6 +16,7 @@ import (
 type ProxyStore interface {
 	Accounts
 	AccountQuotaMetadata
+	AccountSelectionSnapshots
 	QuotaCandidateAccounts(context.Context, string) ([]domain.Account, error)
 	APIKeys
 	UsageLedger

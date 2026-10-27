@@ -126,8 +126,31 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 	quotaDefinition, quotaMapped := domain.AdditionalQuotaForModel(model)
 	blockedByData, blockedByAdditionalQuota := false, false
 	unpriced := 0
+	ids := make([]string, 0, len(accounts))
 	for _, account := range accounts {
-		price, err := p.ResolvePrice(ctx, account, model)
+		ids = append(ids, account.ID)
+	}
+	snapshot, err := p.store.AccountSelectionSnapshot(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	// A subscription price depends only on the model; external sources keep
+	// their own per-account price.
+	var subscriptionPrice *pricing.Price
+	var subscriptionPriceErr error
+	resolvePrice := func(account domain.Account) (pricing.Price, error) {
+		if account.Kind != domain.AccountChatGPT {
+			return p.ResolvePrice(ctx, account, model)
+		}
+		if subscriptionPrice == nil && subscriptionPriceErr == nil {
+			price, err := p.ResolvePrice(ctx, account, model)
+			subscriptionPrice, subscriptionPriceErr = &price, err
+		}
+		return *subscriptionPrice, subscriptionPriceErr
+	}
+	for _, account := range accounts {
+		state := snapshot[account.ID]
+		price, err := resolvePrice(account)
 		if errors.Is(err, pricing.ErrUnpriced) {
 			unpriced++
 			continue
@@ -144,26 +167,18 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 			if policy != "inherit" {
 				entry.account.RoutingPolicy = policy
 			}
-			additional, err := p.store.ListAccountAdditionalQuotas(ctx, account.ID)
-			if err != nil {
-				return nil, err
-			}
-			applies, state, primary, secondary := additionalQuotaEligibility(account, quotaDefinition, additional, quotaOmissions[account.ID], now)
-			if state == "data_unavailable" {
+			applies, eligibility, primary, secondary := additionalQuotaEligibility(account, quotaDefinition, state.Additional, quotaOmissions[account.ID], now)
+			if eligibility == "data_unavailable" {
 				blockedByData = true
 				continue
 			}
-			if state == "quota_exhausted" {
+			if eligibility == "quota_exhausted" {
 				blockedByAdditionalQuota = true
 				continue
 			}
 			if applies {
 				if account.Status == domain.AccountQuotaExceeded {
-					refusalAt, err := p.store.LoadAccountQuotaRefusalAt(ctx, account.ID)
-					if err != nil {
-						return nil, err
-					}
-					if !additionalQuotaBlockRecovered(refusalAt, primary, secondary, now) {
+					if !additionalQuotaBlockRecovered(state.RefusalAt, primary, secondary, now) {
 						continue
 					}
 				} else if account.Status != domain.AccountActive {
@@ -180,22 +195,12 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 				continue
 			}
 		}
-		credits, err := p.store.LoadAccountCreditStatus(ctx, account.ID)
-		if err != nil {
-			return nil, err
-		}
-		quotas, err := p.store.ListAccountQuota(ctx, account.ID)
-		if err != nil {
-			return nil, err
-		}
+		quotas := state.Quotas
 		var refusalAt *time.Time
 		if account.Status == domain.AccountQuotaExceeded {
-			refusalAt, err = p.store.LoadAccountQuotaRefusalAt(ctx, account.ID)
-			if err != nil {
-				return nil, err
-			}
+			refusalAt = state.RefusalAt
 		}
-		if EffectiveAccountQuotaStatus(account, quotas, credits, refusalAt, now) != domain.AccountActive {
+		if EffectiveAccountQuotaStatus(account, quotas, state.Credits, refusalAt, now) != domain.AccountActive {
 			continue
 		}
 		primary, long := selectionQuotaWindows(account, quotas)

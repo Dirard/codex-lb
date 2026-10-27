@@ -25,6 +25,12 @@ type AccountQuotaMetadata interface {
 	LoadAccountQuotaRefusalAt(context.Context, string) (*time.Time, error)
 }
 
+// AccountSelectionSnapshots loads routing telemetry for many candidates with a
+// constant number of reads.
+type AccountSelectionSnapshots interface {
+	AccountSelectionSnapshot(context.Context, []string) (map[string]domain.AccountSelectionState, error)
+}
+
 type Groups interface {
 	SaveGroup(context.Context, domain.AccountGroup, time.Time) error
 	GetGroup(context.Context, string) (domain.AccountGroup, error)
