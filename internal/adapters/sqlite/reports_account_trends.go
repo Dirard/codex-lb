@@ -52,20 +52,15 @@ func (s *Store) AccountQuotaTrendBuckets(ctx context.Context, id string, since, 
 // PruneAccountQuotaHistory keeps the latest observation per account/window,
 // even when that observation is older than the cutoff.
 func (s *Store) PruneAccountQuotaHistory(ctx context.Context, cutoff time.Time, limit int) (int, error) {
-	if cutoff.IsZero() || limit < 1 || limit > 1000 {
+	if cutoff.IsZero() || !validRetentionBatch(limit) {
 		return 0, ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM account_quota_history WHERE id IN (
+	return s.writeDeleteCount(ctx, `DELETE FROM account_quota_history WHERE id IN (
  SELECT h.id FROM account_quota_history h WHERE h.observed_at<? AND EXISTS (
  SELECT 1 FROM account_quota_history newer WHERE newer.account_id=h.account_id
  AND newer.window=h.window AND (newer.observed_at>h.observed_at OR
  (newer.observed_at=h.observed_at AND newer.id>h.id)))
  ORDER BY h.observed_at,h.id LIMIT ?)`, millis(cutoff), limit)
-	if err != nil {
-		return 0, err
-	}
-	n, err := res.RowsAffected()
-	return int(n), err
 }
 
 // recentQuotaHistoryQuery walks each current series once through its index,

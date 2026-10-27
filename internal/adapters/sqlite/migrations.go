@@ -240,3 +240,13 @@ CREATE TABLE backup_settings (
 );
 INSERT INTO backup_settings(id) VALUES(1);
 `
+
+// schemaV36 replaces the status/age index, rewritten on every settlement, with
+// partial indexes for the only two access paths: open reservations (pending
+// reconciliation and interrupted-request marking, DB-17) and released
+// reservations awaiting retention (DB-5).
+const schemaV36 = `
+DROP INDEX idx_usage_reservations_status_age;
+CREATE INDEX idx_usage_reservations_open ON usage_reservations(needs_reconciliation,id) WHERE status='reserved';
+CREATE INDEX idx_usage_reservations_released ON usage_reservations(updated_at) WHERE status='released';
+`

@@ -9,9 +9,18 @@ import (
 	"codex-lb/internal/domain"
 )
 
+// Retention runs hourly with a 20 s budget of bounded batches; while a backlog
+// remains (for example after an upgrade) it continues every minute.
+const (
+	retentionInterval        = time.Hour
+	retentionBacklogInterval = time.Minute
+	retentionBudget          = 20 * time.Second
+)
+
 func (r *runtime) maintainReports(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	retention := application.NewRetentionService(r.data.store, time.Now)
 	var nextRetention time.Time
 	for {
 		cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -20,8 +29,7 @@ func (r *runtime) maintainReports(ctx context.Context) {
 		}
 		cancel()
 		if now := time.Now(); !now.Before(nextRetention) {
-			r.maintainReportRetention(ctx)
-			nextRetention = now.Add(time.Hour)
+			nextRetention = now.Add(r.maintainReportRetention(ctx, retention))
 		}
 		select {
 		case <-ctx.Done():
@@ -31,29 +39,26 @@ func (r *runtime) maintainReports(ctx context.Context) {
 	}
 }
 
-func (r *runtime) maintainReportRetention(ctx context.Context) {
-	service := application.NewReportsService(r.data.store, nil)
-	cycle, cancel := context.WithTimeout(ctx, 30*time.Second)
-	settings, err := r.data.store.LoadSettings(cycle)
-	if err == nil && settings.RequestLogRetentionDays != nil {
-		// A bounded batch leaves the single SQLite writer available for accounting.
-		_, err = service.PruneRequestLogs(cycle, *settings.RequestLogRetentionDays)
-	}
-	if err == nil && settings.UsageHistoryRetentionDays != nil {
-		_, err = service.PruneAccountQuotaHistory(cycle, *settings.UsageHistoryRetentionDays)
-	}
-	if err == nil {
-		_, err = r.data.store.PruneAffinities(cycle, time.Now().UTC(), time.Duration(settings.OpenAICacheAffinityMaxAgeSeconds)*time.Second, 1000)
-	}
-	cancel()
+// maintainReportRetention runs one budgeted retention cycle and returns the
+// delay until the next one.
+func (r *runtime) maintainReportRetention(ctx context.Context, retention *application.RetentionService) time.Duration {
+	cycle, cancel := context.WithTimeout(ctx, retentionBudget+10*time.Second)
+	defer cancel()
+	result, err := retention.RunCycle(cycle, retentionBudget)
 	if err != nil && ctx.Err() == nil {
-		r.logger.Warn("report retention did not complete; will retry next interval")
+		r.logger.Warn("report retention did not complete; will retry next interval", "failed", result.Failed)
 	}
-	archiveCtx, cancelArchive := context.WithTimeout(ctx, 5*time.Second)
-	defer cancelArchive()
-	if err := r.data.store.PruneErrorArchives(archiveCtx, time.Now().UTC()); err != nil && ctx.Err() == nil {
-		r.logger.Warn("error-diagnostic retention did not complete; will retry next interval")
+	total := 0
+	for _, n := range result.Deleted {
+		total += n
 	}
+	if total > 0 || result.Backlog {
+		r.logger.Info("retention cycle", "deleted", result.Deleted, "backlog", result.Backlog)
+	}
+	if result.Backlog {
+		return retentionBacklogInterval
+	}
+	return retentionInterval
 }
 
 // Scheduled backups wait a few minutes after start so a restart loop does not

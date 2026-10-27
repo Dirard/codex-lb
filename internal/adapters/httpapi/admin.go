@@ -114,14 +114,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	days := 0
-	if settings.RequestLogRetentionDays != nil {
-		days = *settings.RequestLogRetentionDays
-	}
-	historyDays := 0
-	if settings.UsageHistoryRetentionDays != nil {
-		historyDays = *settings.UsageHistoryRetentionDays
-	}
+	days := settings.EffectiveRequestLogRetentionDays()
+	historyDays := settings.EffectiveUsageHistoryRetentionDays()
 	writeJSON(w, http.StatusOK, struct {
 		domain.RuntimeSettings
 		TOTPConfigured                       bool    `json:"totpConfigured"`
