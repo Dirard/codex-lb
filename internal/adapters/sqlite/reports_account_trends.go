@@ -13,7 +13,7 @@ func (s *Store) AccountQuotaTrendBuckets(ctx context.Context, id string, since, 
 	if id == "" || !since.Before(until) || until.Sub(since) > 8*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	rows, err := s.readDB.QueryContext(ctx, `WITH samples AS (
+	rows, err := s.analyticsDB.QueryContext(ctx, `WITH samples AS (
  SELECT window,(observed_at/3600000)*3600000 AS hour,observed_at,used_percent,
  reset_at,window_minutes,id FROM account_quota_history
  WHERE account_id=? AND observed_at>=? AND observed_at<?
@@ -74,7 +74,7 @@ func (s *Store) RecentAccountQuotaHistory(ctx context.Context, since, until time
 	if !since.Before(until) || until.Sub(since) > 32*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	rows, err := s.readDB.QueryContext(ctx, `WITH ranked AS (
+	rows, err := s.analyticsDB.QueryContext(ctx, `WITH ranked AS (
  SELECT account_id,window,observed_at,used_percent,reset_at,window_minutes,id,
  row_number() OVER (PARTITION BY account_id,window ORDER BY observed_at DESC,id DESC) AS position
  FROM account_quota_history WHERE observed_at>=? AND observed_at<=?

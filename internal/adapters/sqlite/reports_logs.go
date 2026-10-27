@@ -127,7 +127,7 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	if filter.Limit < 1 || filter.Limit > 1000 || filter.Offset < 0 {
 		return response, ErrInvalid
 	}
-	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return response, err
 	}
@@ -239,7 +239,7 @@ func logNullableInt(value sql.NullInt64) *int64 {
 func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogFilter) (domain.RequestLogOptions, error) {
 	options := domain.RequestLogOptions{AccountIDs: []string{}, ModelOptions: []domain.RequestLogModelOption{},
 		APIKeys: []domain.RequestLogAPIKeyOption{}, Statuses: []string{}}
-	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return options, err
 	}

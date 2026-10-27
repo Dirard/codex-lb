@@ -84,7 +84,7 @@ func (s *Store) aggregateReportWindow(ctx context.Context, filter domain.ReportF
  coalesce(sum(cost_usd),0),coalesce(sum(error_count),0),
  coalesce(sum(cancelled_count),0),
  count(DISTINCT CASE WHEN account_id!=char(31) THEN account_id END) FROM facts`
-	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(&result.requests, &result.input, &result.output,
+	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&result.requests, &result.input, &result.output,
 		&result.reasoning, &result.known, &result.cached, &result.costUSD, &result.errors,
 		&result.cancelled, &result.accounts)
 	return result, err
@@ -93,7 +93,7 @@ func (s *Store) aggregateReportWindow(ctx context.Context, filter domain.ReportF
 func (s *Store) reportHasActivityBefore(ctx context.Context, filter domain.ReportFilter, before time.Time) (bool, error) {
 	facts, args := reportFacts(filter, time.Unix(0, 0), before)
 	var exists bool
-	err := s.readDB.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&exists)
+	err := s.analyticsDB.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&exists)
 	return exists, err
 }
 
@@ -139,7 +139,7 @@ func (s *Store) reportMedian(ctx context.Context, filter domain.ReportFilter, st
  count(*) OVER () AS total FROM usage_events e WHERE ` + where + ` AND ` + guard + `
 ) WHERE rank IN ((total+1)/2,(total+2)/2)`
 	var median float64
-	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(&median)
+	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&median)
 	return roundReport(median, 2), err
 }
 
