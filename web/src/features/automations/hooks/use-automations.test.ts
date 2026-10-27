@@ -3,7 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type PropsWithChildren } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { useAutomations } from "@/features/automations/hooks/use-automations";
+import { useAutomationMutations } from "@/features/automations/hooks/use-automations";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -22,22 +22,13 @@ function createWrapper(queryClient: QueryClient) {
   };
 }
 
-describe("useAutomations", () => {
-  it("loads, creates, updates, runs and deletes automation entries", async () => {
+describe("useAutomationMutations", () => {
+  it("creates, updates, runs and deletes automation entries", async () => {
     const queryClient = createTestQueryClient();
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-    const initialProps: { selectedAutomationId: string | null } = { selectedAutomationId: null };
-
-    const { result, rerender } = renderHook(
-      ({ selectedAutomationId }: { selectedAutomationId: string | null }) =>
-        useAutomations(selectedAutomationId),
-      {
-        initialProps,
-        wrapper: createWrapper(queryClient),
-      },
-    );
-
-    await waitFor(() => expect(result.current.automationsQuery.isSuccess).toBe(true));
+    const { result } = renderHook(() => useAutomationMutations(), {
+      wrapper: createWrapper(queryClient),
+    });
 
     const created = await result.current.createMutation.mutateAsync({
       name: "Daily ping",
@@ -61,9 +52,6 @@ describe("useAutomations", () => {
         prompt: "health-check",
       },
     });
-
-    rerender({ selectedAutomationId: created.id });
-    await waitFor(() => expect(result.current.runsQuery.isSuccess).toBe(true));
 
     await result.current.runNowMutation.mutateAsync(created.id);
     await result.current.deleteMutation.mutateAsync(created.id);
