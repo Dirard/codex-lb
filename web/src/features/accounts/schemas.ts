@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { markDuplicateEmails } from "@/features/accounts/email-duplicates";
+
 const UsageTrendPointSchema = z.object({
   t: z.iso.datetime({ offset: true }),
   v: z.number(),
@@ -100,7 +102,6 @@ export const AccountSummarySchema = z.object({
   additionalQuotas: z.array(AccountAdditionalQuotaSchema).default([]),
   limitWarmupEnabled: z.boolean().default(false),
   limitWarmup: AccountLimitWarmupStatusSchema.nullable().optional(),
-  isEmailDuplicate: z.boolean().optional(),
   availableResetCredits: z.number().nullable().optional(),
   resetCreditNearestExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
 });
@@ -137,7 +138,7 @@ export const AccountTrendsResponseSchema = z.object({
 });
 
 export const AccountsResponseSchema = z.object({
-  accounts: z.array(AccountSummarySchema),
+  accounts: z.array(AccountSummarySchema).transform(markDuplicateEmails),
 });
 
 export const AccountImportResponseSchema = z.object({
@@ -335,7 +336,8 @@ export const ImportStateSchema = z.object({
 });
 
 export type UsageTrendPoint = z.infer<typeof UsageTrendPointSchema>;
-export type AccountSummary = z.infer<typeof AccountSummarySchema>;
+/** A parsed account row; `isEmailDuplicate` is derived per list by `markDuplicateEmails`. */
+export type AccountSummary = z.infer<typeof AccountSummarySchema> & { isEmailDuplicate?: boolean };
 export type RateLimitResetCreditItem = z.infer<typeof RateLimitResetCreditItemSchema>;
 export type RateLimitResetCreditsSnapshot = z.infer<
   typeof RateLimitResetCreditsSnapshotSchema

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { AccountAdditionalQuotaSchema, AccountSummarySchema } from "@/features/accounts/schemas";
 import type { AccountSummary } from "@/features/accounts/schemas";
+import { markDuplicateEmails } from "@/features/accounts/email-duplicates";
 
 export { AccountAdditionalQuotaSchema, AccountSummarySchema };
 export type { AccountSummary };
@@ -171,7 +172,7 @@ export const DashboardStatusSchema = z.object({
 export const DashboardOverviewSchema = z.object({
   lastSyncAt: z.iso.datetime({ offset: true }).nullable(),
   timeframe: DashboardOverviewTimeframeSchema,
-  accounts: z.array(AccountSummarySchema),
+  accounts: z.array(AccountSummarySchema).transform(markDuplicateEmails),
   summary: z.object({
     primaryWindow: UsageSummaryWindowSchema,
     secondaryWindow: UsageSummaryWindowSchema.nullable(),
