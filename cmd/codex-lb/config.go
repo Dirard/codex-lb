@@ -30,6 +30,7 @@ type config struct {
 	releaseReservation                        bool
 	selfUpdate                                bool
 	publicOrigin                              string
+	allowPrivateModelSources                  bool
 	updater                                   application.RuntimeUpdater
 }
 
@@ -46,6 +47,7 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		flags.StringVar(&cfg.listen, "listen", "127.0.0.1:2455", "HTTP listen address; use a reverse proxy for TLS")
 		flags.DurationVar(&cfg.shutdownGrace, "shutdown-grace", 30*time.Second, "time allowed for active responses before cancellation")
 		flags.StringVar(&cfg.publicOrigin, "public-origin", "", "HTTPS origin browsers use for the dashboard, e.g. https://lb.example.com; enables Secure cookies and HSTS")
+		flags.BoolVar(&cfg.allowPrivateModelSources, "allow-private-model-sources", false, "allow model sources on loopback, private and link-local addresses (self-hosted sources)")
 		flags.Func("unauthenticated-client", "client CIDR (resolved through trusted proxies) permitted without a key only while API-key auth is disabled", func(raw string) error {
 			prefix, err := netip.ParsePrefix(raw)
 			if err != nil {
@@ -124,7 +126,7 @@ func (cfg config) apiConfig(version string) httpapi.Config {
 		Version:            version, ConnectAddress: cfg.connectAddress,
 		DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader,
 		UnauthenticatedClientCIDRs: cfg.unauthenticatedClients,
-		PublicOrigin:               cfg.publicOrigin,
+		PublicOrigin:               cfg.publicOrigin, AllowPrivateModelSources: cfg.allowPrivateModelSources,
 	}
 }
 

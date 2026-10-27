@@ -102,7 +102,7 @@ func TestExternalSourceHTTPRouteEditDuringRequest(t *testing.T) {
 			adapter = provider.New(store, fixedTokenSource{}, vault, provider.Config{HTTPClient: upstream.Client()})
 			defer adapter.Close()
 
-			admin := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(nil, nil)
+			admin := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef", AllowPrivateModelSources: true}, nil).Handler(nil, nil)
 			var cookie *http.Cookie
 			adminRequest := func(method, path, body string) *httptest.ResponseRecorder {
 				r := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body))

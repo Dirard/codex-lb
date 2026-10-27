@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/chatgpt"
+	"codex-lb/internal/adapters/egress"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/adapters/provider"
 	"codex-lb/internal/adapters/streambuffer"
@@ -64,9 +65,10 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	if interrupted != 0 {
 		logger.Warn("interrupted usage retained; use offline reconcile-usage before releasing unknown charges", "count", interrupted)
 	}
+	egressGuard := egress.New(cfg.allowPrivateModelSources, logger)
 	transport := &http.Transport{
-		Proxy:             http.ProxyFromEnvironment,
-		DialContext:       (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		Proxy:             egressGuard.Proxy(http.ProxyFromEnvironment),
+		DialContext:       egressGuard.DialContext((&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext),
 		ForceAttemptHTTP2: true, TLSHandshakeTimeout: 10 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second, ExpectContinueTimeout: time.Second,
 		MaxIdleConns: 128, MaxIdleConnsPerHost: 64, MaxConnsPerHost: 512,

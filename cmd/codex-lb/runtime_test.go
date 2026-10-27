@@ -230,9 +230,9 @@ func TestCLIConfigurationAndVersion(t *testing.T) {
 func TestCLISecurityConfiguration(t *testing.T) {
 	t.Setenv("CODEX_LB_DATA_DIR", filepath.Join(t.TempDir(), "secure"))
 	t.Setenv("CODEX_LB_CONNECT_ADDRESS", "")
-	cfg, err := parseConfig("serve", []string{"--public-origin", "https://lb.example",
+	cfg, err := parseConfig("serve", []string{"--public-origin", "https://lb.example", "--allow-private-model-sources",
 		"--trusted-proxy", "127.0.0.1/32", "--unauthenticated-client", "10.0.0.0/8"}, io.Discard)
-	if err != nil || cfg.publicOrigin != "https://lb.example" {
+	if err != nil || cfg.publicOrigin != "https://lb.example" || !cfg.allowPrivateModelSources {
 		t.Fatalf("secure configuration rejected: %v", err)
 	}
 	if api := cfg.apiConfig("go-test"); api.BootstrapTokenFile == nil || api.BootstrapTokenFile.Location() != filepath.Join(cfg.dataDir, "dashboard-bootstrap-token") {

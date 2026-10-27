@@ -44,6 +44,9 @@ type Config struct {
 	// PublicOrigin is the HTTPS origin browsers use for the dashboard. It
 	// enables Secure __Host- cookies and HSTS independently of proxy headers.
 	PublicOrigin string
+	// AllowPrivateModelSources permits model-source base URLs on non-public
+	// addresses for self-hosted sources.
+	AllowPrivateModelSources bool
 }
 
 type Server struct {
