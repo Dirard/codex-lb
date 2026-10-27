@@ -325,131 +325,138 @@ func (s *Store) ListReservationsNeedingReconciliation(ctx context.Context, after
 }
 
 func (s *Store) SettleUsage(ctx context.Context, id string, settlement domain.UsageSettlement) (bool, error) {
-	return s.settleUsage(ctx, id, settlement)
-}
-
-func (s *Store) settleUsage(ctx context.Context, id string, settlement domain.UsageSettlement) (bool, error) {
-	if id == "" || (settlement.Status != "finalized" && settlement.Status != "failed" && settlement.Status != "released") {
-		return false, ErrInvalid
-	}
-	if settlement.Status != "released" {
-		if err := validateUsageEvent(settlement.Event); err != nil {
-			return false, err
-		}
+	if err := validateSettlement(id, settlement); err != nil {
+		return false, err
 	}
 	applied := false
 	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var keyID, accountID, status string
-		var accountGeneration int64
-		var updated int64
-		if err := tx.QueryRowContext(ctx, `SELECT api_key_id,account_id,account_generation,status,updated_at
- FROM usage_reservations WHERE id=?`, id).Scan(&keyID, &accountID, &accountGeneration, &status, &updated); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
-			return err
-		}
-		if status != "reserved" {
-			return nil
-		}
-		event := settlement.Event
-		var deleted, discard bool
-		if settlement.Status != "released" {
-			if (event.APIKeyID != "" && event.APIKeyID != keyID) ||
-				(event.AccountID != "" && accountID != "" && event.AccountID != accountID) ||
-				(event.AccountGeneration != 0 && event.AccountGeneration != accountGeneration) {
-				return fmt.Errorf("reservation ownership: %w", ErrInvalid)
-			}
-			event.AccountGeneration = accountGeneration
-			event.ReservationID, event.APIKeyID = id, keyID
-			if keyID == domain.WarmupKeyID {
-				event.APIKeyID, event.RequestKind = "", "warmup"
-			}
-			if event.AccountID == "" {
-				event.AccountID = accountID
-			}
-			if err := priceUsageEventTx(ctx, tx, &event); err != nil {
-				return err
-			}
-			var policyErr error
-			deleted, discard, policyErr = usageDeletionPolicyTx(ctx, tx, event.AccountID, event.AccountGeneration)
-			if policyErr != nil {
-				return policyErr
-			}
-			if deleted {
-				event.AccountID = ""
-			}
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT limit_id,limit_type,reserved_delta,expected_reset_at
- FROM usage_reservation_items WHERE reservation_id=?`, id)
-		if err != nil {
-			return err
-		}
-		type item struct {
-			id              int64
-			typ             domain.LimitType
-			reserved, reset int64
-		}
-		items := make([]item, 0)
-		for rows.Next() {
-			var i item
-			if err := rows.Scan(&i.id, &i.typ, &i.reserved, &i.reset); err != nil {
-				rows.Close()
-				return err
-			}
-			items = append(items, i)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, i := range items {
-			actual := int64(0)
-			if settlement.Status != "released" {
-				actual = event.Usage.ForLimit(i.typ)
-			}
-			delta := actual - i.reserved
-			if delta != 0 {
-				if _, err := tx.ExecContext(ctx, `UPDATE api_key_limits
- SET current_value=current_value+? WHERE id=? AND reset_at=? AND current_value+?>=0`,
-					delta, i.id, i.reset, delta); err != nil {
-					return err
-				}
-			}
-			if _, err := tx.ExecContext(ctx, `UPDATE usage_reservation_items SET actual_delta=?
- WHERE reservation_id=? AND limit_id=?`, actual, id, i.id); err != nil {
-				return err
-			}
-		}
-		var input, output, cached, cost any
-		if settlement.Status != "released" {
-			input, output = event.Usage.InputTokens, event.Usage.OutputTokens
-			cached, cost = event.Usage.CachedInputTokens, event.Usage.CostMicrodollars
-			if !discard {
-				inserted, err := insertUsageTx(ctx, tx, event, deleted)
-				if err != nil {
-					return err
-				}
-				if !inserted {
-					return fmt.Errorf("request ID already accounted: %w", ErrConflict)
-				}
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE usage_reservations SET status=?,input_tokens=?,
-	 output_tokens=?,cached_input_tokens=?,cost_microdollars=?,updated_at=?,needs_reconciliation=0
-	 WHERE id=? AND status='reserved'`,
-			settlement.Status, input, output, cached, cost, time.Now().UTC().UnixMilli(), id); err != nil {
-			return err
-		}
-		if settlement.Status != "released" {
-			if _, err := tx.ExecContext(ctx, `UPDATE api_keys SET last_used_at=max(coalesce(last_used_at,0),?) WHERE id=?`,
-				millis(event.RequestedAt), keyID); err != nil {
-				return err
-			}
-		}
-		applied = true
-		return nil
+		var err error
+		applied, err = settleUsageTx(ctx, tx, id, settlement)
+		return err
 	})
 	return applied, err
+}
+
+func validateSettlement(id string, settlement domain.UsageSettlement) error {
+	if id == "" || (settlement.Status != "finalized" && settlement.Status != "failed" && settlement.Status != "released") {
+		return ErrInvalid
+	}
+	if settlement.Status != "released" {
+		return validateUsageEvent(settlement.Event)
+	}
+	return nil
+}
+
+// settleUsageTx applies one settlement exactly once; a reservation that is no
+// longer reserved is left unchanged and reported as not applied.
+func settleUsageTx(ctx context.Context, tx *sql.Tx, id string, settlement domain.UsageSettlement) (bool, error) {
+	var keyID, accountID, status string
+	var accountGeneration int64
+	if err := tx.QueryRowContext(ctx, `SELECT api_key_id,account_id,account_generation,status
+ FROM usage_reservations WHERE id=?`, id).Scan(&keyID, &accountID, &accountGeneration, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	if status != "reserved" {
+		return false, nil
+	}
+	event := settlement.Event
+	var deleted, discard bool
+	if settlement.Status != "released" {
+		if (event.APIKeyID != "" && event.APIKeyID != keyID) ||
+			(event.AccountID != "" && accountID != "" && event.AccountID != accountID) ||
+			(event.AccountGeneration != 0 && event.AccountGeneration != accountGeneration) {
+			return false, fmt.Errorf("reservation ownership: %w", ErrInvalid)
+		}
+		event.AccountGeneration = accountGeneration
+		event.ReservationID, event.APIKeyID = id, keyID
+		if keyID == domain.WarmupKeyID {
+			event.APIKeyID, event.RequestKind = "", "warmup"
+		}
+		if event.AccountID == "" {
+			event.AccountID = accountID
+		}
+		if err := priceUsageEventTx(ctx, tx, &event); err != nil {
+			return false, err
+		}
+		var policyErr error
+		deleted, discard, policyErr = usageDeletionPolicyTx(ctx, tx, event.AccountID, event.AccountGeneration)
+		if policyErr != nil {
+			return false, policyErr
+		}
+		if deleted {
+			event.AccountID = ""
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT limit_id,limit_type,reserved_delta,expected_reset_at
+ FROM usage_reservation_items WHERE reservation_id=?`, id)
+	if err != nil {
+		return false, err
+	}
+	type item struct {
+		id              int64
+		typ             domain.LimitType
+		reserved, reset int64
+	}
+	items := make([]item, 0)
+	for rows.Next() {
+		var i item
+		if err := rows.Scan(&i.id, &i.typ, &i.reserved, &i.reset); err != nil {
+			rows.Close()
+			return false, err
+		}
+		items = append(items, i)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return false, err
+	}
+	for _, i := range items {
+		actual := int64(0)
+		if settlement.Status != "released" {
+			actual = event.Usage.ForLimit(i.typ)
+		}
+		delta := actual - i.reserved
+		if delta != 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE api_key_limits
+ SET current_value=current_value+? WHERE id=? AND reset_at=? AND current_value+?>=0`,
+				delta, i.id, i.reset, delta); err != nil {
+				return false, err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE usage_reservation_items SET actual_delta=?
+ WHERE reservation_id=? AND limit_id=?`, actual, id, i.id); err != nil {
+			return false, err
+		}
+	}
+	var input, output, cached, cost any
+	if settlement.Status != "released" {
+		input, output = event.Usage.InputTokens, event.Usage.OutputTokens
+		cached, cost = event.Usage.CachedInputTokens, event.Usage.CostMicrodollars
+		if !discard {
+			inserted, err := insertUsageTx(ctx, tx, event, deleted)
+			if err != nil {
+				return false, err
+			}
+			if !inserted {
+				return false, fmt.Errorf("request ID already accounted: %w", ErrConflict)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE usage_reservations SET status=?,input_tokens=?,
+ output_tokens=?,cached_input_tokens=?,cost_microdollars=?,updated_at=?,needs_reconciliation=0
+ WHERE id=? AND status='reserved'`,
+		settlement.Status, input, output, cached, cost, time.Now().UTC().UnixMilli(), id); err != nil {
+		return false, err
+	}
+	if settlement.Status != "released" {
+		if _, err := tx.ExecContext(ctx, `UPDATE api_keys SET last_used_at=max(coalesce(last_used_at,0),?) WHERE id=?`,
+			millis(event.RequestedAt), keyID); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }

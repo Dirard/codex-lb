@@ -250,7 +250,9 @@ func (p *Proxy) catalogAccountsWithOmissions(request *responseRequest, candidate
 	return filterCatalogAccounts(p.Catalog, request, candidates, ownerID, true)
 }
 
-func (p *Proxy) remember(ctx context.Context, options ResponseOptions, request responseRequest, history responseContext, previous *domain.Continuation, account domain.Account, result ResponseResult, reservationID string, forwardTurn, successful bool) error {
+// continuationPlan builds the response owner and, for a successful turn, its
+// conversation aliases. Marshal and encryption run before the write job.
+func (p *Proxy) continuationPlan(options ResponseOptions, request responseRequest, history responseContext, previous *domain.Continuation, account domain.Account, result ResponseResult, forwardTurn, successful bool) (*domain.Continuation, []domain.Continuation, error) {
 	var response struct {
 		Output []json.RawMessage `json:"output"`
 	}
@@ -261,27 +263,23 @@ func (p *Proxy) remember(ctx context.Context, options ResponseOptions, request r
 	valid = valid && (request.Previous == "" || previous != nil && len(previous.ContextEncrypted) != 0)
 	items := append(slices.Clone(history.Items), request.Input...)
 	items = append(items, response.Output...)
-	owner := domain.Continuation{ResponseID: result.ResponseID, KeyID: options.KeyID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, ProviderID: account.Provider, Model: request.Model, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(p.config.ContinuationTTL), FilePinned: request.FilePinned || accountBoundItems(items)}
+	now := time.Now().UTC()
+	owner := domain.Continuation{ResponseID: result.ResponseID, KeyID: options.KeyID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, ProviderID: account.Provider, Model: request.Model, CreatedAt: now, ExpiresAt: now.Add(p.config.ContinuationTTL), FilePinned: request.FilePinned || accountBoundItems(items)}
 	owner.FilePinned = owner.FilePinned || previous != nil && previous.FilePinned
 	if valid {
 		plain, err := json.Marshal(responseContext{Items: items})
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		if len(plain) <= maxReplayBytes {
 			owner.ContextEncrypted, err = p.cipher.Encrypt(plain)
 			if err != nil {
-				return err
+				return nil, nil, err
 			}
 		}
 	}
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	if err := p.store.SaveContinuation(cleanup, owner, p.config.ContinuationBounds); err != nil {
-		return err
-	}
 	if !successful {
-		return nil // Retain partial response ownership without establishing new aliases.
+		return &owner, nil, nil // Retain partial response ownership without establishing new aliases.
 	}
-	return rememberConversationAliases(cleanup, p.store, owner, options.identity(), forwardTurn, reservationID, p.config.ContinuationBounds)
+	return &owner, conversationAliases(owner, options.identity(), forwardTurn), nil
 }

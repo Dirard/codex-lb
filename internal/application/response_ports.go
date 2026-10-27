@@ -19,6 +19,12 @@ type Continuations interface {
 	MarkContinuationQuotaRefused(context.Context, string, string, string, string) error
 }
 
+// ResponseFinalizer commits an attempt's settlement, account outcome and
+// ownership as one durable write before the client sees the terminal.
+type ResponseFinalizer interface {
+	FinalizeResponse(context.Context, domain.ResponseFinalization) (domain.ResponseFinalizationResult, error)
+}
+
 type ResponseTarget struct {
 	Account               domain.Account
 	KeyID                 string

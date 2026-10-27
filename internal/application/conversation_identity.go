@@ -123,21 +123,31 @@ func (resolved resolvedConversation) validateFileOwner(accountID string, generat
 	return nil
 }
 
-// rememberConversationAliases publishes only accounted ownership, keeping the
-// existing reservation fence across logical-thread and turn-state aliases.
-func rememberConversationAliases(ctx context.Context, store Continuations, owner domain.Continuation, identity conversationIdentity, forwardTurn bool, reservationID string, bounds domain.ContinuationBounds) error {
+// conversationAliases are the logical-thread and turn-state aliases of an
+// accounted owner; the store fences them by the reservation that settled it.
+func conversationAliases(owner domain.Continuation, identity conversationIdentity, forwardTurn bool) []domain.Continuation {
+	var aliases []domain.Continuation
 	if id := logicalSessionLookupID(identity.SessionID, identity.ThreadID); id != "" {
 		alias := owner
 		alias.ResponseID = id
-		if err := store.SaveSessionContinuation(ctx, alias, reservationID, bounds); err != nil {
-			return err
-		}
+		aliases = append(aliases, alias)
 	}
 	if strings.TrimSpace(identity.TurnState) != "" {
 		alias := owner
 		alias.ResponseID = turnStateLookupID(identity.TurnState)
 		alias.TurnStateForwardable = forwardTurn && !identity.SynthesizedTurnState
-		return store.SaveSessionContinuation(ctx, alias, reservationID, bounds)
+		aliases = append(aliases, alias)
+	}
+	return aliases
+}
+
+// rememberConversationAliases publishes only accounted ownership, keeping the
+// existing reservation fence across logical-thread and turn-state aliases.
+func rememberConversationAliases(ctx context.Context, store Continuations, owner domain.Continuation, identity conversationIdentity, forwardTurn bool, reservationID string, bounds domain.ContinuationBounds) error {
+	for _, alias := range conversationAliases(owner, identity, forwardTurn) {
+		if err := store.SaveSessionContinuation(ctx, alias, reservationID, bounds); err != nil {
+			return err
+		}
 	}
 	return nil
 }

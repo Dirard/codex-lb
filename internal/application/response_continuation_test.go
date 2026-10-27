@@ -87,16 +87,17 @@ func staleOwnerError(err error) bool {
 	return errors.As(err, &failure) && failure.Code == "previous_response_owner_unavailable"
 }
 
-func (s *continuationMarkProbe) MarkContinuationQuotaRefused(ctx context.Context, keyID, responseID, accountID, reservationID string) error {
-	if err := s.Store.MarkContinuationQuotaRefused(ctx, keyID, responseID, accountID, reservationID); err != nil {
-		return err
+func (s *continuationMarkProbe) FinalizeResponse(ctx context.Context, f domain.ResponseFinalization) (domain.ResponseFinalizationResult, error) {
+	result, err := s.Store.FinalizeResponse(ctx, f)
+	if err != nil || f.Outcome == nil || f.Outcome.QuotaMark == nil || result.OutcomeErr != nil {
+		return result, err
 	}
-	marked, err := s.Store.GetContinuation(ctx, keyID, responseID, time.Now())
+	marked, err := s.Store.GetContinuation(ctx, f.Outcome.QuotaMark.KeyID, f.Outcome.QuotaMark.ResponseID, time.Now())
 	if err != nil {
-		return err
+		return result, err
 	}
 	s.marked <- marked
-	return nil
+	return result, nil
 }
 
 func TestSessionAliasMovesOnlyAfterQuotaFailover(t *testing.T) {
