@@ -7,8 +7,10 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"codex-lb/internal/adapters/wirejson"
 	"codex-lb/internal/application"
 	"github.com/coder/websocket"
 )
@@ -150,17 +152,11 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "capability_routing_unavailable", Status: 503, Message: "Required capability cannot be selected while ordinary work is pending"})
 				continue
 			}
-			if json.Unmarshal(signal.Payload, &object) != nil {
-				releaseBody()
-				_ = sendWebSocketError(ctx, connection, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Invalid Responses WebSocket frame"})
-				continue
-			}
-			delete(object, "type")
-			object["stream"] = json.RawMessage("true")
-			body, err = json.Marshal(object)
+			body, err = websocketCreateBody(object, body, signal.Payload)
 			if err != nil {
 				releaseBody()
-				return
+				_ = sendWebSocketError(ctx, connection, err)
+				continue
 			}
 			select {
 			case messages <- createFrame{body: body, route: route, release: releaseBody}:
@@ -174,11 +170,22 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+	var turnActive atomic.Bool
+	pingerDone := make(chan struct{})
+	go func() {
+		defer close(pingerDone)
+		interval := p.websocketPingInterval
+		if interval <= 0 {
+			interval = downstreamPingInterval
+		}
+		pingWhileActive(ctx, connection, interval, &turnActive)
+	}()
 	var releaseActiveBody func()
 	defer func() {
 		cancel()
 		connection.CloseNow()
 		<-readerDone
+		<-pingerDone
 		if releaseActiveBody != nil {
 			releaseActiveBody()
 		}
@@ -235,7 +242,9 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				activeInterrupts = queue
 				activeMu.Unlock()
 			}
+			turnActive.Store(true)
 			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body)
+			turnActive.Store(false)
 			releaseActiveBody()
 			releaseActiveBody = nil
 			cancelCall()
@@ -252,6 +261,54 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			idle.Reset(120 * time.Second)
 		}
 	}
+}
+
+const (
+	downstreamPingInterval = 30 * time.Second
+	downstreamPingTimeout  = 10 * time.Second
+)
+
+// pingWhileActive sends a protocol ping every interval while active is set so
+// idle-timing intermediaries keep a long silent turn open. A ping is transport
+// traffic, not an application event, and its outcome is ignored. It is never
+// cancelled by turn completion (a cancelled control-frame write would close the
+// client connection); it is bounded by its own timeout and ends when the
+// connection handler closes the connection. The caller reads the connection
+// concurrently, so pongs are processed.
+func pingWhileActive(ctx context.Context, connection *websocket.Conn, interval time.Duration, active *atomic.Bool) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !active.Load() {
+				continue
+			}
+			pingCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), downstreamPingTimeout)
+			_ = connection.Ping(pingCtx)
+			stop()
+		}
+	}
+}
+
+// websocketCreateBody turns a prepared response.create frame into a streaming
+// Responses body. frame is the already decoded original frame; it is reused
+// only when preparation returned the original bytes, otherwise the prepared
+// payload is decoded into a fresh object so fields removed by preparation
+// cannot reappear. Values are re-assembled verbatim.
+func websocketCreateBody(frame map[string]json.RawMessage, original, prepared json.RawMessage) (json.RawMessage, error) {
+	object := frame
+	if len(prepared) != len(original) || len(prepared) != 0 && &prepared[0] != &original[0] {
+		object = nil
+		if json.Unmarshal(prepared, &object) != nil || object == nil {
+			return nil, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Invalid Responses WebSocket frame"}
+		}
+	}
+	delete(object, "type")
+	object["stream"] = json.RawMessage("true")
+	return wirejson.EncodeObject(object), nil
 }
 
 func sendWebSocketError(ctx context.Context, connection *websocket.Conn, err error) error {

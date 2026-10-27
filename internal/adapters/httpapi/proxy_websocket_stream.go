@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	"codex-lb/internal/application"
 	"github.com/coder/websocket"
 )
 
-// respondWebSocket keeps a waiting Codex connected without committing the response prelude.
+// respondWebSocket keeps a waiting Codex connected without committing the
+// response prelude. The application worker writes events directly through
+// websocketTurn, so emit returns only after the client accepted the frame;
+// the handler goroutine only sends native heartbeats after real silence.
 func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage) (bool, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	events := make(chan dispatchedEvent)
-	responseIDs := make(chan string)
+	turn := &websocketTurn{connection: connection, lastWrite: time.Now()}
 	done := make(chan proxyOutcome, 1)
 	workerDone := make(chan struct{})
 	defer func() { cancel(); <-workerDone }()
@@ -23,18 +26,7 @@ func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websock
 		if onResponseID != nil {
 			onResponseID(id)
 		}
-		if options.Codex {
-			select {
-			case responseIDs <- id:
-			case <-ctx.Done():
-			}
-		}
-	}
-	var ticks <-chan time.Time
-	if options.Codex {
-		ticker := time.NewTicker(p.websocketKeepaliveInterval)
-		defer ticker.Stop()
-		ticks = ticker.C
+		turn.setResponseID(id)
 	}
 	go func() {
 		defer close(workerDone)
@@ -46,59 +38,121 @@ func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websock
 			done <- outcome
 		}()
 		outcome.result, outcome.err = p.proxy.Respond(ctx, options, body, func(event application.ResponseEvent) error {
-			message := dispatchedEvent{event: event, ack: make(chan error, 1)}
-			select {
-			case events <- message:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			select {
-			case err := <-message.ack:
+			if err := ctx.Err(); err != nil {
 				return err
-			case <-ctx.Done():
-				return ctx.Err()
 			}
+			return turn.write(ctx, event.Data, terminalEvent(event.Type))
 		})
 	}()
-	write := func(data []byte) error {
-		writeCtx, stop := context.WithTimeout(ctx, 30*time.Second)
-		defer stop()
-		return connection.Write(writeCtx, websocket.MessageText, data)
+	return turn.wait(ctx, done, options.Codex, p.websocketKeepaliveInterval)
+}
+
+// websocketTurn is the single writer of one downstream WebSocket turn.
+type websocketTurn struct {
+	mu         sync.Mutex
+	connection *websocket.Conn
+	terminal   bool
+	failed     error
+	lastWrite  time.Time
+	responseID string
+}
+
+func (t *websocketTurn) setResponseID(id string) {
+	t.mu.Lock()
+	t.responseID = id
+	t.mu.Unlock()
+}
+
+func (t *websocketTurn) writeLocked(ctx context.Context, data []byte) error {
+	if t.failed != nil {
+		return t.failed
 	}
-	terminal, responseID := false, ""
-	for {
-		select {
-		case <-ctx.Done():
-			return terminal, ctx.Err()
-		case responseID = <-responseIDs:
-		case message := <-events:
-			err := write(message.event.Data)
-			message.ack <- err
-			if err != nil {
-				return terminal, err
-			}
-			terminal = terminal || terminalEvent(message.event.Type)
-		case outcome := <-done:
-			return terminal, outcome.err
-		case <-ticks:
-			if terminal {
-				continue
-			}
-			data := []byte(`{"type":"codex.keepalive"}`)
-			if responseID != "" {
-				var event struct {
-					Type     string `json:"type"`
-					Response struct {
-						ID     string `json:"id"`
-						Status string `json:"status"`
-					} `json:"response"`
+	writeCtx, stop := context.WithTimeout(ctx, downstreamWriteTimeout)
+	err := t.connection.Write(writeCtx, websocket.MessageText, data)
+	stop()
+	if err != nil {
+		t.failed = err
+		return err
+	}
+	t.lastWrite = time.Now()
+	return nil
+}
+
+func (t *websocketTurn) write(ctx context.Context, data []byte, terminal bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.writeLocked(ctx, data); err != nil {
+		return err
+	}
+	t.terminal = t.terminal || terminal
+	return nil
+}
+
+// heartbeat sends a native application heartbeat after interval without a
+// real write and returns the delay until the next check.
+func (t *websocketTurn) heartbeat(ctx context.Context, interval time.Duration) (time.Duration, error) {
+	if !t.mu.TryLock() {
+		return interval, nil // an event write is in progress
+	}
+	defer t.mu.Unlock()
+	if t.failed != nil {
+		return 0, t.failed
+	}
+	if t.terminal {
+		return interval, nil
+	}
+	if wait := interval - time.Since(t.lastWrite); wait > 0 {
+		return wait, nil
+	}
+	data := []byte(`{"type":"codex.keepalive"}`)
+	if t.responseID != "" {
+		data, _ = json.Marshal(nativeInProgress(t.responseID))
+	}
+	return interval, t.writeLocked(ctx, data)
+}
+
+func (t *websocketTurn) state() (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.terminal, t.failed
+}
+
+// wait runs the handler side of a turn until the worker returns, the turn is
+// cancelled or a heartbeat write fails.
+func (t *websocketTurn) wait(ctx context.Context, done <-chan proxyOutcome, codex bool, interval time.Duration) (bool, error) {
+	if codex {
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				terminal, _ := t.state()
+				return terminal, ctx.Err()
+			case outcome := <-done:
+				return t.outcome(outcome)
+			case <-timer.C:
+				wait, err := t.heartbeat(ctx, interval)
+				if err != nil {
+					terminal, _ := t.state()
+					return terminal, err
 				}
-				event.Type, event.Response.ID, event.Response.Status = "response.in_progress", responseID, "in_progress"
-				data, _ = json.Marshal(event)
-			}
-			if err := write(data); err != nil {
-				return terminal, err
+				timer.Reset(wait)
 			}
 		}
 	}
+	select {
+	case <-ctx.Done():
+		terminal, _ := t.state()
+		return terminal, ctx.Err()
+	case outcome := <-done:
+		return t.outcome(outcome)
+	}
+}
+
+func (t *websocketTurn) outcome(outcome proxyOutcome) (bool, error) {
+	terminal, failed := t.state()
+	if failed != nil {
+		return terminal, failed
+	}
+	return terminal, outcome.err
 }

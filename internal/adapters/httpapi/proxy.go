@@ -31,6 +31,9 @@ type ProxyHandler struct {
 	mux                        *http.ServeMux
 	QuotaHeaders               func(context.Context, string) (map[string]string, error)
 	websocketKeepaliveInterval time.Duration
+	// websocketPingInterval paces protocol pings during an active downstream
+	// WebSocket turn; zero means downstreamPingInterval.
+	websocketPingInterval time.Duration
 }
 
 func NewProxyHandler(store ProxyRepository, proxy *application.Proxy, trusted []netip.Prefix) *ProxyHandler {

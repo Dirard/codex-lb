@@ -24,6 +24,16 @@ func (p heartbeatProvider) Respond(ctx context.Context, target application.Respo
 
 func heartbeatFixture(t *testing.T, provider heartbeatProvider) (*httptest.Server, *sqlite.Store) {
 	t.Helper()
+	return heartbeatFixtureInterval(t, provider, 15*time.Millisecond)
+}
+
+func heartbeatFixtureInterval(t *testing.T, provider heartbeatProvider, interval time.Duration) (*httptest.Server, *sqlite.Store) {
+	t.Helper()
+	return heartbeatFixtureConfigured(t, provider, func(handler *ProxyHandler) { handler.websocketKeepaliveInterval = interval })
+}
+
+func heartbeatFixtureConfigured(t *testing.T, provider heartbeatProvider, configure func(*ProxyHandler)) (*httptest.Server, *sqlite.Store) {
+	t.Helper()
 	store, api := localKeyFixture(t)
 	ctx := context.Background()
 	for _, id := range []string{"heartbeat-a", "heartbeat-b"} {
@@ -44,7 +54,7 @@ func heartbeatFixture(t *testing.T, provider heartbeatProvider) (*httptest.Serve
 	}
 	proxy := application.NewProxy(store, provider, api.cipher, application.ProxyConfig{MaxStreams: 1, QueueTimeout: time.Second})
 	handler := NewProxyHandler(store, proxy, nil)
-	handler.websocketKeepaliveInterval = 15 * time.Millisecond
+	configure(handler)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return server, store
