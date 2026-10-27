@@ -8,10 +8,9 @@ import (
 	"strings"
 )
 
-func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req responsesWireRequest, catalog toolCatalog, emit func(Event) error) (Result, error) {
-	_ = catalog
+func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req responsesWireRequest, emit func(Event) error) (Result, error) {
 	if target.Capabilities.StreamTransport == TransportWebSocket {
-		return a.streamResponsesWebSocket(ctx, target, req, catalog, emit)
+		return a.streamResponsesWebSocket(ctx, target, req, emit)
 	}
 	body, err := passthroughBody(req, target.Capabilities)
 	if err != nil {

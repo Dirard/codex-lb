@@ -271,7 +271,8 @@ func validateRequestCapabilities(req responsesWireRequest, items []responsesItem
 	if req.ParallelToolCalls != nil && *req.ParallelToolCalls && !cap.ParallelToolCalls {
 		return unsupported("parallel tool calls are not supported by this provider")
 	}
-	if containsImageInput(items) && !cap.ImageInput {
+	// Image detection decodes every item's content; skip it when allowed.
+	if !cap.ImageInput && containsImageInput(items) {
 		return unsupported("image input is not supported by this provider")
 	}
 	if cap.Protocol == ProtocolResponses {

@@ -3,19 +3,15 @@ package upstream
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"codex-lb/internal/adapters/wirejson"
 )
 
-func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Target, req responsesWireRequest, catalog toolCatalog, emit func(Event) error) (Result, error) {
-	_ = catalog
-	body, err := passthroughBody(req, target.Capabilities)
-	if err != nil {
-		return Result{}, err
-	}
-	create, err := websocketResponseCreate(body)
+func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Target, req responsesWireRequest, emit func(Event) error) (Result, error) {
+	create, err := websocketCreateFrame(req, target.Capabilities)
 	if err != nil {
 		return Result{}, err
 	}
@@ -241,27 +237,24 @@ func interruptFailureEvent(responseID, code, message string) Event {
 	}{"response.interrupt.failed", responseID, map[string]string{"code": code, "message": message}})}
 }
 
-func websocketResponseCreate(body json.RawMessage) (json.RawMessage, error) {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(body, &object); err != nil {
-		return nil, &Error{Code: ErrorCodeInvalidConfiguration, Message: "Responses request was not a JSON object"}
+// websocketCreateFrame builds the response.create frame for req from the same
+// single parse the HTTP passthrough body uses, re-assembling validated values
+// verbatim.
+func websocketCreateFrame(req responsesWireRequest, cap Capabilities) (json.RawMessage, error) {
+	object, _, err := passthroughObject(req, cap)
+	if err != nil {
+		return nil, err
 	}
+	return websocketResponseCreate(object)
+}
+
+func websocketResponseCreate(object map[string]json.RawMessage) (json.RawMessage, error) {
 	var background bool
 	if raw, ok := object["background"]; ok && (json.Unmarshal(raw, &background) != nil || background) {
 		return nil, &Error{Code: ErrorCodeUnsupportedCapability, Message: "Background Responses are not supported over WebSocket"}
 	}
 	delete(object, "background")
 	delete(object, "stream")
-	object["type"] = mustJSON("response.create")
-	return mustJSON(object), nil
-}
-
-func websocketURL(httpEndpoint string) string {
-	if strings.HasPrefix(httpEndpoint, "https://") {
-		return "wss://" + strings.TrimPrefix(httpEndpoint, "https://")
-	}
-	if strings.HasPrefix(httpEndpoint, "http://") {
-		return "ws://" + strings.TrimPrefix(httpEndpoint, "http://")
-	}
-	return httpEndpoint
+	object["type"] = json.RawMessage(`"response.create"`)
+	return wirejson.EncodeObject(object), nil
 }

@@ -250,7 +250,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 			headers.Set("Authorization", "Bearer "+target.Credential)
 		}
 		copyAllowedTargetHeaders(headers, target.Headers)
-		connection, response, err := websocket.Dial(ctx, websocketURL(scope.Endpoint), &websocket.DialOptions{HTTPClient: client, HTTPHeader: headers})
+		connection, response, err := websocket.Dial(ctx, scope.Endpoint, &websocket.DialOptions{HTTPClient: client, HTTPHeader: headers})
 		if err != nil {
 			p.release(entry, false, "", true)
 			if response != nil && response.StatusCode >= 400 {
