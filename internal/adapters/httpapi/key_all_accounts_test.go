@@ -59,7 +59,7 @@ func TestKeyAllAccountsThroughAdminAndResponses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(store, vault, httpapi.Config{}, nil).Handler(public.Config.Handler, nil)
+	handler := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(public.Config.Handler, nil)
 	var cookie *http.Cookie
 	request := func(method, path string, body any, key string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -79,7 +79,7 @@ func TestKeyAllAccountsThroughAdminAndResponses(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	setup := request("POST", "/api/dashboard-auth/password/setup", map[string]string{"password": "synthetic-admin-password"}, "")
+	setup := request("POST", "/api/dashboard-auth/password/setup", map[string]string{"password": "synthetic-admin-password", "bootstrapToken": "synthetic-bootstrap-token-0123456789abcdef"}, "")
 	if setup.Code != 200 || len(setup.Result().Cookies()) != 1 {
 		t.Fatal("admin setup failed")
 	}

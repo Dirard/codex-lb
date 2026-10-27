@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"codex-lb/internal/adapters/credentials"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/application"
 )
@@ -28,6 +29,7 @@ type config struct {
 	reservation, settlement, afterReservation string
 	releaseReservation                        bool
 	selfUpdate                                bool
+	publicOrigin                              string
 	updater                                   application.RuntimeUpdater
 }
 
@@ -43,7 +45,8 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		flags.StringVar(&cfg.authHeader, "dashboard-auth-header", "X-Auth-Request-Email", "identity header supplied by a configured trusted reverse proxy")
 		flags.StringVar(&cfg.listen, "listen", "127.0.0.1:2455", "HTTP listen address; use a reverse proxy for TLS")
 		flags.DurationVar(&cfg.shutdownGrace, "shutdown-grace", 30*time.Second, "time allowed for active responses before cancellation")
-		flags.Func("unauthenticated-client", "socket CIDR permitted without a key only while API-key auth is disabled", func(raw string) error {
+		flags.StringVar(&cfg.publicOrigin, "public-origin", "", "HTTPS origin browsers use for the dashboard, e.g. https://lb.example.com; enables Secure cookies and HSTS")
+		flags.Func("unauthenticated-client", "client CIDR (resolved through trusted proxies) permitted without a key only while API-key auth is disabled", func(raw string) error {
 			prefix, err := netip.ParsePrefix(raw)
 			if err != nil {
 				return errors.New("unauthenticated-client must be a CIDR")
@@ -90,12 +93,15 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		return cfg, errors.New("data-dir must be a dedicated private directory")
 	}
 	if command == "serve" {
-		if err := httpapi.ValidateConfig(httpapi.Config{DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader, TrustedProxies: cfg.trusted, ConnectAddress: cfg.connectAddress}); err != nil {
+		if err := httpapi.ValidateConfig(cfg.apiConfig("")); err != nil {
 			return cfg, err
 		}
 		host, port, err := net.SplitHostPort(cfg.listen)
 		if err != nil || strings.TrimSpace(host) != host || port == "" || cfg.shutdownGrace < 0 || cfg.shutdownGrace > 30*time.Minute {
 			return cfg, errors.New("invalid listen address or shutdown-grace (expected 0s to 30m)")
+		}
+		if cfg.authMode == "disabled" && !loopbackListenHost(host) {
+			return cfg, errors.New("dashboard-auth-mode=disabled requires a loopback --listen address")
 		}
 	} else if command == "reconcile-usage" {
 		if cfg.reservation == "" && (cfg.settlement != "" || cfg.releaseReservation) || cfg.reservation != "" && (cfg.afterReservation != "" || cfg.releaseReservation == (cfg.settlement != "")) {
@@ -108,6 +114,26 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		return cfg, errors.New("import-legacy requires absolute --source and --source-key paths")
 	}
 	return cfg, nil
+}
+
+// apiConfig is the HTTP adapter configuration derived from command options.
+func (cfg config) apiConfig(version string) httpapi.Config {
+	return httpapi.Config{
+		TrustedProxies: cfg.trusted, BootstrapToken: cfg.bootstrapToken,
+		BootstrapTokenFile: credentials.NewBootstrapTokenFile(filepath.Join(cfg.dataDir, "dashboard-bootstrap-token")),
+		Version:            version, ConnectAddress: cfg.connectAddress,
+		DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader,
+		UnauthenticatedClientCIDRs: cfg.unauthenticatedClients,
+		PublicOrigin:               cfg.publicOrigin,
+	}
+}
+
+func loopbackListenHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }
 
 // listenError names the address and the operating-system reason (for example

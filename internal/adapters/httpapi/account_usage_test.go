@@ -90,7 +90,7 @@ func TestAccountUsageRoutesSnapshotAndConsume(t *testing.T) {
 	root.Handle("/api/", protected)
 	handler := root
 
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.Header.Set("Content-Type", "application/json")
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setupRec := httptest.NewRecorder()
@@ -219,7 +219,7 @@ func TestAccountUsageConsumeConflictAndUpstreamErrors(t *testing.T) {
 	server.registerAccountUsageRoutes(admin, usage)
 	protected := server.requireAdmin(admin)
 
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.Header.Set("Content-Type", "application/json")
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setupRec := httptest.NewRecorder()

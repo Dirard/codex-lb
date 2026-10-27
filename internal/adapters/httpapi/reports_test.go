@@ -28,7 +28,7 @@ func TestReportsRoutesAuthenticatedContentFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := New(store, vault, Config{}, nil)
+	server := New(store, vault, Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil)
 	mux := http.NewServeMux()
 	server.registerReportsRoutes(mux, store)
 	handler := server.requireAdmin(mux)
@@ -56,7 +56,7 @@ func TestReportsRoutesAuthenticatedContentFree(t *testing.T) {
 	if got := request("/api/reports", "").Code; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated report: %d", got)
 	}
-	token, err := server.auth.SetupPassword(ctx, "synthetic-test-password", time.Hour)
+	token, err := server.auth.SetupPassword(ctx, "test", "", "synthetic-test-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

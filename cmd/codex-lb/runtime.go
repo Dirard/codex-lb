@@ -115,7 +115,14 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		}
 		return modelPricing.ResolveCodex(ctx, model)
 	}
-	api := httpapi.New(data.store, data.vault, httpapi.Config{TrustedProxies: cfg.trusted, BootstrapToken: cfg.bootstrapToken, Version: version, ConnectAddress: cfg.connectAddress, DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader, UnauthenticatedClientCIDRs: cfg.unauthenticatedClients}, logger)
+	api := httpapi.New(data.store, data.vault, cfg.apiConfig(version), logger)
+	if err := api.Prepare(ctx); err != nil {
+		_ = accounts.Close()
+		_ = tokens.Close()
+		_ = adapter.Close()
+		data.close()
+		return nil, errors.New("cannot prepare dashboard authentication")
+	}
 	api.ConfigureRuntimeUpdater(cfg.updater)
 	api.ConfigureAccounts(accounts)
 	api.ConfigureFirewall(firewall)

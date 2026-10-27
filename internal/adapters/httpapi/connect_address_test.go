@@ -55,7 +55,7 @@ func TestRuntimeConnectAddressResolution(t *testing.T) {
 
 func TestRuntimeConnectAddressRequiresAdminAndIgnoresForwardedHost(t *testing.T) {
 	server, _, _ := newAccountsTestServer(t, &httpStubOAuth{})
-	token, err := server.auth.SetupPassword(context.Background(), "synthetic-connect-password", time.Hour)
+	token, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-connect-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

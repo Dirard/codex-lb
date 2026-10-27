@@ -102,7 +102,7 @@ func TestExternalSourceHTTPRouteEditDuringRequest(t *testing.T) {
 			adapter = provider.New(store, fixedTokenSource{}, vault, provider.Config{HTTPClient: upstream.Client()})
 			defer adapter.Close()
 
-			admin := httpapi.New(store, vault, httpapi.Config{}, nil).Handler(nil, nil)
+			admin := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(nil, nil)
 			var cookie *http.Cookie
 			adminRequest := func(method, path, body string) *httptest.ResponseRecorder {
 				r := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
@@ -115,7 +115,7 @@ func TestExternalSourceHTTPRouteEditDuringRequest(t *testing.T) {
 				admin.ServeHTTP(w, r)
 				return w
 			}
-			setup := adminRequest(http.MethodPost, "/api/dashboard-auth/password/setup", `{"password":"synthetic-route-password"}`)
+			setup := adminRequest(http.MethodPost, "/api/dashboard-auth/password/setup", `{"password":"synthetic-route-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`)
 			if setup.Code != 200 || len(setup.Result().Cookies()) == 0 {
 				t.Fatalf("admin setup: %d", setup.Code)
 			}

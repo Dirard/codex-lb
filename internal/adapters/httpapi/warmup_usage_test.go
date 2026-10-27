@@ -101,7 +101,7 @@ func TestManualProbePreservesWarmupAccounting(t *testing.T) {
 			if unauth.Code != 401 || calls.Load() != 0 {
 				t.Fatal("probe dispatched before admin authorization")
 			}
-			setup := httptest.NewRequest(http.MethodPost, "http://localhost/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-probe-password"}`))
+			setup := httptest.NewRequest(http.MethodPost, "http://localhost/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-probe-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 			setup.RemoteAddr = "127.0.0.1:5678"
 			setup.Header.Set("Content-Type", "application/json")
 			setupRec := httptest.NewRecorder()

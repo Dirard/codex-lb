@@ -80,8 +80,8 @@ func TestKeyReportsIsolationAuthorizationAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := New(store, vault, Config{}, nil)
-	cookie, err := server.auth.SetupPassword(ctx, "synthetic-password", time.Hour)
+	server := New(store, vault, Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil)
+	cookie, err := server.auth.SetupPassword(ctx, "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

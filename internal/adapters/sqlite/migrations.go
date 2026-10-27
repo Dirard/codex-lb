@@ -220,3 +220,16 @@ ALTER TABLE runtime_settings ADD COLUMN show_reset_credit_expiry_badge INTEGER N
 const schemaV26 = `ALTER TABLE runtime_settings ADD COLUMN warmup_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini';`
 
 const schemaV33 = `ALTER TABLE runtime_settings ADD COLUMN codex_client_version TEXT NOT NULL DEFAULT '0.156.0' CHECK(length(codex_client_version) BETWEEN 1 AND 64);`
+
+// schemaV34 makes dashboard sessions revocable (per session and by epoch) and
+// records consumed operator bootstrap tokens so they cannot be replayed.
+const schemaV34 = `
+ALTER TABLE admin_secret ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0 CHECK(session_epoch >= 0);
+CREATE TABLE dashboard_session_revocations (
+ session_hash TEXT PRIMARY KEY CHECK(length(session_hash) = 64), expires_at INTEGER NOT NULL
+);
+CREATE INDEX idx_dashboard_session_revocations_expiry ON dashboard_session_revocations(expires_at);
+CREATE TABLE dashboard_bootstrap_consumed (
+ token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64), consumed_at INTEGER NOT NULL
+);
+`

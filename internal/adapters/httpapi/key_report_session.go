@@ -22,7 +22,7 @@ func (s *Server) registerKeyReportSession(mux *http.ServeMux) {
 	auth := application.NewKeyReportAuth(s.store, s.cipher)
 	reports := application.NewReportsService(s.store, nil)
 	for _, suffix := range []string{"", "/{$}"} {
-		mux.HandleFunc("POST /api/key-reports/session"+suffix, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST /api/key-reports/session"+suffix, limitBody(authBodyLimit, func(w http.ResponseWriter, r *http.Request) {
 			key, err := authenticateBearerKey(r, s.store)
 			if err != nil || domain.IsInternalKey(key.ID) {
 				if err == nil {
@@ -43,8 +43,8 @@ func (s *Server) registerKeyReportSession(mux *http.ServeMux) {
 			}
 			s.sessionCookie(w, r, keyReportCookie, keyReportCookiePath, token, max(1, int(time.Until(expires).Seconds())))
 			writeJSON(w, http.StatusOK, keyReportSessionState{Authenticated: true})
-		})
-		mux.HandleFunc("GET /api/key-reports/session"+suffix, func(w http.ResponseWriter, r *http.Request) {
+		}))
+		mux.HandleFunc("GET /api/key-reports/session"+suffix, limitBody(authBodyLimit, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("Vary", "Cookie")
 			_, err := auth.Authenticate(r.Context(), keyReportToken(r))
 			if err != nil && !errors.Is(err, application.ErrAuthentication) {
@@ -52,11 +52,11 @@ func (s *Server) registerKeyReportSession(mux *http.ServeMux) {
 				return
 			}
 			writeJSON(w, http.StatusOK, keyReportSessionState{Authenticated: err == nil})
-		})
-		mux.HandleFunc("DELETE /api/key-reports/session"+suffix, func(w http.ResponseWriter, r *http.Request) {
+		}))
+		mux.HandleFunc("DELETE /api/key-reports/session"+suffix, limitBody(authBodyLimit, func(w http.ResponseWriter, r *http.Request) {
 			s.sessionCookie(w, r, keyReportCookie, keyReportCookiePath, "", -1)
 			writeJSON(w, http.StatusOK, keyReportSessionState{})
-		})
+		}))
 		mux.HandleFunc("GET /api/key-reports/reports"+suffix, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("Vary", "Cookie")
 			key, err := auth.Authenticate(r.Context(), keyReportToken(r))

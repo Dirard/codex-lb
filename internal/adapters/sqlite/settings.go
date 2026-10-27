@@ -271,8 +271,8 @@ func validateAdminSecret(v domain.AdminSecret) error {
 func (s *Store) LoadAdminSecret(ctx context.Context) (domain.AdminSecret, error) {
 	var v domain.AdminSecret
 	var step sql.NullInt64
-	err := s.readDB.QueryRowContext(ctx, `SELECT password_hash,totp_secret_encrypted,totp_last_verified_step
- FROM admin_secret WHERE id=1`).Scan(&v.PasswordHash, &v.TOTPSecretEncrypted, &step)
+	err := s.readDB.QueryRowContext(ctx, `SELECT password_hash,totp_secret_encrypted,totp_last_verified_step,session_epoch
+ FROM admin_secret WHERE id=1`).Scan(&v.PasswordHash, &v.TOTPSecretEncrypted, &step, &v.SessionEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, nil
 	}

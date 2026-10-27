@@ -265,4 +265,7 @@ type AdminSecret struct {
 	PasswordHash         string `json:"-"`
 	TOTPSecretEncrypted  []byte `json:"-"`
 	TOTPLastVerifiedStep *int64 `json:"-"`
+	// SessionEpoch is advanced only by "sign out everywhere"; sessions issued
+	// under an older epoch are rejected.
+	SessionEpoch int64 `json:"-"`
 }
