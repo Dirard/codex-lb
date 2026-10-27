@@ -17,23 +17,32 @@ func sessionLookupID(session string) string {
 	return fmt.Sprintf("session:%x", sha256.Sum256([]byte(session)))
 }
 
-func (p *Proxy) resolveOwner(ctx context.Context, options ResponseOptions, request responseRequest) (resolvedConversation, responseContext, error) {
+var errInvalidStoredContinuation = errors.New("invalid stored continuation")
+
+// resolveOwner resolves hard conversation owners. The owner's stored history is
+// returned unloaded: decryption and parsing are deferred until a replay or the
+// next continuation needs them.
+func (p *Proxy) resolveOwner(ctx context.Context, options ResponseOptions, request responseRequest) (resolvedConversation, *lazyHistory, error) {
 	resolved, err := resolveConversation(ctx, p.store, options.KeyID, request.Previous, options.identity(), time.Now())
 	if err != nil {
-		return resolved, responseContext{}, err
+		return resolved, nil, err
 	}
 	owner := resolved.Owner
-	var history responseContext
-	if request.Previous != "" && owner != nil && len(owner.ContextEncrypted) != 0 {
-		plain, err := p.cipher.Decrypt(owner.ContextEncrypted)
+	if request.Previous == "" || owner == nil || len(owner.ContextEncrypted) == 0 {
+		return resolved, nil, nil
+	}
+	encrypted := owner.ContextEncrypted
+	return resolved, &lazyHistory{load: func() (responseContext, error) {
+		var history responseContext
+		plain, err := p.cipher.Decrypt(encrypted)
 		if err != nil {
-			return resolved, history, err
+			return history, err
 		}
 		if len(plain) > maxReplayBytes || json.Unmarshal(plain, &history) != nil {
-			return resolved, history, errors.New("invalid stored continuation")
+			return responseContext{}, errInvalidStoredContinuation
 		}
-	}
-	return resolved, history, nil
+		return history, nil
+	}}, nil
 }
 
 func (p *Proxy) resolveFileOwner(ctx context.Context, keyID string, input json.RawMessage) (CodexResourceOwner, error) {
@@ -257,7 +266,7 @@ func (p *Proxy) catalogAccountsWithOmissions(request *responseRequest, candidate
 
 // continuationPlan builds the response owner and, for a successful turn, its
 // conversation aliases. Marshal and encryption run before the write job.
-func (p *Proxy) continuationPlan(options ResponseOptions, request responseRequest, history responseContext, previous *domain.Continuation, account domain.Account, result ResponseResult, forwardTurn, successful bool) (*domain.Continuation, []domain.Continuation, error) {
+func (p *Proxy) continuationPlan(options ResponseOptions, request responseRequest, history responseContext, historyComplete bool, previous *domain.Continuation, account domain.Account, result ResponseResult, forwardTurn, successful bool) (*domain.Continuation, []domain.Continuation, error) {
 	var response struct {
 		Output []json.RawMessage `json:"output"`
 	}
@@ -265,7 +274,8 @@ func (p *Proxy) continuationPlan(options ResponseOptions, request responseReques
 	// A same-owner follow-up can still work in the provider's live session after
 	// local history was evicted. Its new tail must not become a supposedly full
 	// conversation for a later cross-account replay.
-	valid = valid && (request.Previous == "" || previous != nil && len(previous.ContextEncrypted) != 0)
+	// An unreadable stored history makes the new tail just as incomplete.
+	valid = valid && historyComplete && (request.Previous == "" || previous != nil && len(previous.ContextEncrypted) != 0)
 	items := append(slices.Clone(history.Items), request.Input...)
 	items = append(items, response.Output...)
 	now := time.Now().UTC()

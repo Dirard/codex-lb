@@ -176,10 +176,13 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 	}
 	defer release()
 	queueMS := time.Since(started).Milliseconds()
-	resolved, history, err := p.resolveOwner(ctx, options, request)
+	resolved, storedHistory, err := p.resolveOwner(ctx, options, request)
 	if err != nil {
 		return ResponseResult{}, err
 	}
+	defer storedHistory.join()
+	var history responseContext
+	var historyErr error
 	owner := resolved.Owner
 	fileOwner, err := p.resolveFileOwner(ctx, key.ID, request.Object["input"])
 	if err != nil {
@@ -211,6 +214,10 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 	var price pricing.Price
 	var accountLease *accountLease
 	if owner != nil && owner.QuotaRefused {
+		// The replay below is built before dispatch and needs the history now.
+		if history, err = storedHistory.get(); err != nil {
+			return ResponseResult{}, err
+		}
 		request.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
 	}
 	if fileOwnerID != "" && owner == nil {
@@ -353,6 +360,7 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		if options.OnDispatch != nil {
 			options.OnDispatch()
 		}
+		storedHistory.start() // Decrypt and parse beside the upstream call.
 		result, callErr := p.dispatch(ctx, target, wire, consumer)
 		if options.OnResponseID != nil {
 			options.OnResponseID("")
@@ -395,7 +403,11 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		var replayWire json.RawMessage
 		var plannedErr error
 		if settleErr == nil && capabilityErr == nil && settled {
-			if !hydrated && owner != nil && request.Previous != "" && len(owner.ContextEncrypted) > 0 && !owner.FilePinned && safeZero && missingPreviousResponse(result, callErr) {
+			lostCache := !hydrated && owner != nil && request.Previous != "" && len(owner.ContextEncrypted) > 0 && !owner.FilePinned && safeZero && missingPreviousResponse(result, callErr)
+			if lostCache {
+				history, historyErr = storedHistory.get()
+			}
+			if lostCache && historyErr == nil {
 				replayRequest := request
 				replayRequest.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
 				if plannedErr = request.loadInput(); plannedErr == nil {
@@ -408,8 +420,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 				}
 			}
 			if plannedErr == nil && sameAccountReplay == nil && !quota && result.ResponseID != "" && (callErr == nil || output.visible) {
+				history, historyErr = storedHistory.get()
 				if plannedErr = request.loadInput(); plannedErr == nil {
-					plan.Continuation, plan.Aliases, plannedErr = p.continuationPlan(options, request, history, owner, account, result, target.TurnState != "", callErr == nil && !result.Failed)
+					plan.Continuation, plan.Aliases, plannedErr = p.continuationPlan(options, request, history, historyErr == nil, owner, account, result, target.TurnState != "", callErr == nil && !result.Failed)
 				}
 			}
 		}
@@ -474,6 +487,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 				return result, err
 			}
 			return result, replayUnavailable()
+		}
+		if history, historyErr = storedHistory.get(); historyErr != nil {
+			return result, replayUnavailable() // Unreadable history cannot be replayed elsewhere.
 		}
 		hydrated = true
 		request.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
