@@ -96,14 +96,14 @@ The writer connection SHALL set `journal_size_limit` to 64 MiB. A dedicated main
 
 ### Requirement: Reports and request logs use bounded queries
 
-Admin report responses SHALL be identical to the previous per-day evaluation for every filter, time zone and window while using a number of database statements independent of the number of days. Request-log pages SHALL be ordered through an index on `(requested_at, request_id)`, and the request-log API SHALL accept an optional keyset cursor `beforeRequestedAt` with `beforeRequestId` that returns rows strictly after the cursor in the existing descending order, while offset paging remains supported. Open reservations SHALL use a partial index on reserved rows.
+Admin report responses SHALL be identical to the previous per-day evaluation for every filter, time zone and window while using a number of database statements independent of the number of days. Request-log pages SHALL be ordered through an index on `(requested_at, request_id)`, and the request-log API SHALL accept an optional opaque keyset `cursor`, returned as `nextCursor` when more rows exist, that returns rows strictly after the last returned row in the existing descending order, while offset paging remains supported and the total, conversation aggregate and filter options ignore the cursor. Open reservations SHALL use a partial index on reserved rows.
 
 #### Scenario: Daylight-saving week
 - **WHEN** a report window spans a daylight-saving transition in the selected time zone
 - **THEN** daily rows and medians equal the previous per-day results
 
 #### Scenario: Keyset page
-- **WHEN** a client passes the last row of a page as the cursor
+- **WHEN** a client passes a page's `nextCursor` as `cursor`
 - **THEN** the response equals the next offset page without scanning the skipped rows
 
 ### Requirement: Storage bookkeeping is atomic and bounded

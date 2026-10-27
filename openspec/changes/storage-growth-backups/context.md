@@ -102,15 +102,40 @@ request events and settlements; reserved budgets of requests in flight at
 
 ## Measurements
 
-Synthetic installation (`BenchmarkStorageGrowth`): 500 accounts, 50 keys,
-300 000 request events over 30 days, one day of legacy one-minute quota
-history (1.44 M rows), i9-14900K, NVMe.
+Synthetic installation (`go test ./internal/adapters/sqlite -run '^$' -bench
+BenchmarkStorageGrowth -benchtime=3x`): 500 accounts, 50 keys, 300 000 request
+events over 30 days, i9-14900K, NVMe. "Legacy" history is one day of
+one-minute rows (1.44 M rows, the shape written before this change); "steady"
+is the new shape (five-minute buckets for a day, hourly for six more days).
 
 | Operation | Before | After |
 |---|---|---|
-| RecentAccountQuotaHistory, 500 accounts | error (>100 000 rows) | see tasks 7.1 |
-| DashboardOverview 7d, 500 accounts | error | see tasks 7.1 |
-| QueryReports 7d / 30d | 0.85 s / 3.10 s | see tasks 7.1 |
-| ListConversations | 1.39 s | unchanged |
-| Request logs offset 0 / 250 000 | 1.6 ms / 146 ms | see tasks 7.1 |
-| Request-log options | 201 ms | unchanged |
+| RecentAccountQuotaHistory, 500 accounts, legacy | error (>100 000 rows) | 0.36 s |
+| RecentAccountQuotaHistory, 500 accounts, steady | error | 93 ms |
+| Seven-day demand, 500 accounts, steady | 5.2 s (window function) | 0.16 s |
+| DashboardOverview 7d, 500 accounts, legacy / steady | error | 1.23 s / 0.64 s |
+| QueryReports 7d / 30d | 0.85 s / 3.10 s | 0.24 s / 0.75 s |
+| ListConversations | 1.39 s | 0.38 s |
+| Request logs, page after 250 000 rows (offset / cursor) | 146 ms / – | 17 ms / 2.0 ms |
+| Request-log options | 201 ms | 190 ms (unchanged) |
+
+The remaining overview time at 500 accounts is mostly the dashboard traffic
+aggregate (≈0.43 s over 7 days of events), which this change does not alter.
+
+Growth of quota history per account (two windows): 2 880 rows/day before;
+576 rows/day for the newest day and 48 rows/day after thinning, removed after
+45 days by default.
+
+## Migrations
+
+| Version | Content |
+|---|---|
+| 34 | covering series index `idx_account_quota_history_identity_time` |
+| 35 | `backup_settings` (interval_hours 24, keep_count 3) |
+| 36 | drop `idx_usage_reservations_status_age`; partial `idx_usage_reservations_open`, `idx_usage_reservations_released` |
+| 37 | `idx_usage_events_time_id(requested_at,request_id)` replaces `idx_usage_events_time` |
+| 38 | `error_archive_stats`, `codex_resource_owner_stats` with triggers and backfill |
+
+All are additive or index-only and run in the existing single migration
+transaction. Index builds on large existing tables run once at the first start
+of the new binary.

@@ -268,7 +268,7 @@ Tests:
    requirements: R19
 
 ### 5. Report and log query speed
-report filter --one pass per measure grouped by local day (DST-aware day expression), raw events and hourly rollups aggregated separately and merged--> identical report --keyset or indexed offset page--> request logs
+report filter --read folded hours, folded conversations and one time-ordered pass over raw events in one read transaction--> per-day, median, breakdown and summary accumulators --derive the response--> identical report --keyset or indexed offset page--> request logs
 
 Requirements:
 
@@ -276,17 +276,19 @@ Requirements:
 `QueryReports` SHALL return the same response as before for every filter, time zone and window, using a bounded number of statements independent of the number of days.
 
   R22:
-Request-log pages SHALL be ordered through an index on `(requested_at, request_id)` and SHALL accept an optional keyset cursor (`beforeRequestedAt`, `beforeRequestId`) that returns the rows strictly after the cursor in the existing order; offset paging remains supported.
+Request-log pages SHALL be ordered through an index on `(requested_at, request_id)` and SHALL accept an optional opaque keyset cursor (`cursor`, returned as `nextCursor`) that returns the rows strictly after the last returned row in the existing order; offset paging remains supported and total, conversation aggregate and filter options ignore the cursor.
 
   R23:
 Open reservations SHALL be indexed by a partial index on `(needs_reconciliation, id) WHERE status='reserved'` and settled releases by `(updated_at) WHERE status='released'`, replacing `idx_usage_reservations_status_age`.
 
 Files And Functions:
- - existing: internal/adapters/sqlite/reports_aggregate.go#QueryReports
+ - existing: internal/adapters/sqlite/reports_aggregate.go#QueryReports - single pass (reportPass)
+ - planned: internal/adapters/sqlite/reports_reference_test.go - former per-day implementation as test reference
  - existing: internal/adapters/sqlite/reports_logs.go#ListRequestLogs, #requestLogWhere
- - existing: internal/application/reports.go - cursor parameters
- - existing: internal/adapters/httpapi/reports.go - cursor query parameters
- - existing: internal/adapters/sqlite/migrations.go - schemaV35 indexes
+ - existing: internal/domain/reports.go#RequestLogCursor
+ - existing: internal/application/reports.go - cursor parameter
+ - existing: internal/adapters/httpapi/reports.go - `cursor` query parameter
+ - existing: internal/adapters/sqlite/migrations.go - schemaV36 (reservations), schemaV37 (request logs)
 
 Tests:
  - description: new QueryReports equals the previous implementation on mixed raw/rollup data across UTC, DST and half-hour zones
@@ -320,6 +322,14 @@ Files And Functions:
  - existing: internal/adapters/sqlite/codex_resource_owners.go#SaveCodexResourceOwner
  - existing: internal/adapters/sqlite/store.go#Open
 
+Data:
+migrations added at the end of the registry (numbers to be aligned at merge):
+- schemaV34: covering quota-history series index
+- schemaV35: backup_settings
+- schemaV36: reservation partial indexes (open, released), drop status/age index
+- schemaV37: usage_events (requested_at, request_id), drop single-column time index
+- schemaV38: archive and resource-owner counters with triggers
+
 Tables:
 backup_settings
  - id: INTEGER # always 1
@@ -341,19 +351,19 @@ Tests:
 
 ## Implementation checklist
 
-1. [ ] OpenSpec change `storage-growth-backups` (proposal, tasks, context with backup/restore runbook, go-runtime delta); strict validation.
-2. [ ] Quota history bucket coalescing and bounded read; remove the 100 000-row failure; regression test at 250 accounts; benchmark before/after (R1–R3).
-3. [ ] Migration schemaV34: `backup_settings`, archive/owner counters with triggers and backfill (R8, R26).
-4. [ ] Snapshot writer and verifier in the SQLite adapter; identity check split from `ValidateRuntime` (R4, R5).
-5. [ ] Backups directory adapter, `BackupService` with guard, single flight, rotation, status and scheduler (R6–R9); docstrings name the workflow steps.
-6. [ ] Admin API with same-origin download guard (R10, R11); runtime wiring of the scheduler.
-7. [ ] CLI `backup` subcommand (R12).
-8. [ ] Dashboard backup card, translations and tests (R13).
-9. [ ] Retention loop with budget, quota-history default and thinning, reservation/automation/warm-up pruning (R14–R18).
-10. [ ] WAL size limit, checkpoints and optimize (R19, R20).
-11. [ ] Migration schemaV35 indexes; one-pass reports with equivalence test; keyset log cursor (R21–R23).
-12. [ ] Correctness fixes (R24–R27).
-13. [ ] go vet, golangci-lint, go test, go test -race for touched packages, web lint/typecheck/vitest; record numbers in the decision log.
+1. [x] OpenSpec change `storage-growth-backups` (proposal, tasks, context with backup/restore runbook, go-runtime delta); strict validation.
+2. [x] Quota history bucket coalescing and bounded read; remove the 100 000-row failure; regression test at 250 accounts; benchmark before/after (R1–R3).
+3. [x] Migration schemaV34: `backup_settings`, archive/owner counters with triggers and backfill (R8, R26).
+4. [x] Snapshot writer and verifier in the SQLite adapter; identity check split from `ValidateRuntime` (R4, R5).
+5. [x] Backups directory adapter, `BackupService` with guard, single flight, rotation, status and scheduler (R6–R9); docstrings name the workflow steps.
+6. [x] Admin API with same-origin download guard (R10, R11); runtime wiring of the scheduler.
+7. [x] CLI `backup` subcommand (R12).
+8. [x] Dashboard backup card, translations and tests (R13).
+9. [x] Retention loop with budget, quota-history default and thinning, reservation/automation/warm-up pruning (R14–R18).
+10. [x] WAL size limit, checkpoints and optimize (R19, R20).
+11. [x] Migration schemaV35 indexes; one-pass reports with equivalence test; keyset log cursor (R21–R23).
+12. [x] Correctness fixes (R24–R27).
+13. [x] go vet, golangci-lint, go test, go test -race for touched packages, web lint/typecheck/vitest; record numbers in the decision log.
 
 ## Open questions
 
@@ -370,4 +380,8 @@ None blocking. Non-blocking assumptions are recorded in the decision log (defaul
 - 2026-10-28: The CLI reads through SQLite's own locking instead of the service's inode `flock`, so cron works while the service runs; it never migrates or writes the source.
 - 2026-10-28: Quota history gets a 45-day default (the existing floor; every consumer reads ≤ 30 days). Request events stay opt-in: they are the per-request financial evidence for key ledgers and reconciliation, and folding preserves only aggregates. Operators who need bounded growth set request-log retention explicitly; the backup card shows database size so growth is visible.
 - 2026-10-28: Reservation pruning deletes only rows nothing can reference again and never the maximum rowid, because reservation rowids are the monotonic fence for outcomes, continuations and affinity versions. Finalized reservations whose usage events are retained stay (foreign key); they are removed together with their events when request-log retention prunes them.
-- 2026-10-28: `wal_autocheckpoint` on the writer is left unchanged (owned by the hot-path slice); the maintenance connection adds PASSIVE/TRUNCATE checkpoints and the size limit truncates the file after resets.
+- 2026-10-28: `wal_autocheckpoint` on the writer is left unchanged (owned by the hot-path slice); the maintenance connection adds PASSIVE/TRUNCATE checkpoints and the size limit truncates the file after resets. TRUNCATE runs only when PASSIVE reports every frame checkpointed and the WAL exceeds 1 MiB, with a 1 s busy timeout, so the writer is never held longer than that.
+- 2026-10-28: Reports are computed in Go from one time-ordered raw-event pass plus folded rollups instead of per-day SQL: in modernc SQLite sorting/grouping dominates (one-pass window medians were slower than per-day medians), while a streaming scan costs about 1 µs per row. Costs use the same Kahan-Babuska-Neumaier summation as SQLite's `sum()`, and the former implementation is kept as a test reference; the equivalence test compares responses exactly. Latency samples are released after each day to bound memory on long windows.
+- 2026-10-28: Request-log keyset cursors are opaque (`requested_at` milliseconds and internal `request_id`) because the displayed request id can be a legacy id that is not the ordering key. The dashboard keeps offset paging; the cursor is available to API clients and a later dashboard change.
+- 2026-10-28: DB-23 is limited to `filepath.Abs` in `Open`; moving reads off the writer in `ledger.go`, `keys.go` and `account_policy.go` belongs to the hot-path slice. DB-18 for `sticky_thread`/`codex_session` affinity TTLs is deferred because `affinity.go` belongs to the hot-path slice.
+- 2026-10-28: Measured results are recorded in `openspec/changes/storage-growth-backups/context.md#measurements`.

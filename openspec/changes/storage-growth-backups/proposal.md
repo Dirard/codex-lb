@@ -8,7 +8,7 @@ A long-running installation on a small VPS outgrows its SQLite file and loses it
 - Add verified online backups: `VACUUM INTO` through a dedicated read-only connection, fsync, `quick_check` plus schema and key-identity verification, atomic publication in `<data-dir>/backups/`, rotation, a persisted schedule (default every 24 h, keep 3, interval 0 disables), a free-space guard, administrator API (list, create, schedule, same-origin download), `codex-lb backup` for cron, and a dashboard card. The encryption key is never included; listings say so.
 - Run retention in bounded batches through the batch writer until the backlog is cleared or a 20 s budget is spent; default quota-history retention to 45 days with hourly thinning after one day; prune settled reservations, old automation cycles and old warm-up attempts without breaking rowid fences or slot claims. Request events stay opt-in.
 - Limit the WAL to 64 MiB after checkpoints, checkpoint passively every minute and truncate when idle; run `PRAGMA optimize` daily and on close.
-- Compute daily report rows in one grouped pass per measure, add a keyset cursor and `(requested_at, request_id)` index for request logs, and replace the reservation status index with partial indexes.
+- Compute the admin report from one ordered pass over raw events plus folded rollups instead of per-day statements, add an opaque keyset cursor and a `(requested_at, request_id)` index for request logs, and replace the reservation status index with partial indexes.
 - Fix non-atomic automation deletion, a skipped release after downward repricing, O(N) archive/owner bounds and relative `Open` paths.
 
 ## Capabilities
@@ -20,6 +20,6 @@ A long-running installation on a small VPS outgrows its SQLite file and loses it
 ## Impact
 
 - Code: `internal/adapters/sqlite` (accounts, trends, retention, backup, maintenance, reports, logs, automations, archives, owners, ledger release line, store), new `internal/adapters/backups`, `internal/application` (backups, reports), `internal/adapters/httpapi` (backups routes, report cursor), `cmd/codex-lb` (backup subcommand, scheduler and maintenance wiring), `web/src/features/settings` (backup card).
-- Schema: migrations 34 (backup settings, archive/owner counters with triggers and backfill) and 35 (request-log and reservation indexes). Additive; an older binary needs the pre-upgrade backup to roll back.
-- API: new `/api/backups*` routes; optional `beforeRequestedAt`/`beforeRequestId` on request logs; settings report the 45-day effective quota-history default. No new environment variables; no dependency changes.
+- Schema: migrations 34 (covering quota-history index), 35 (backup settings), 36 (reservation partial indexes), 37 (request-log index) and 38 (archive/owner counters with triggers and backfill). Additive or index-only; an older binary needs the pre-upgrade backup to roll back.
+- API: new `/api/backups*` routes; optional `cursor`/`nextCursor` on request logs; settings report the 45-day effective quota-history default; `codex-lb backup` subcommand. No new environment variables; no dependency changes.
 - Behavior: existing installations start deleting quota history older than 45 days and create a first backup about five minutes after start.
