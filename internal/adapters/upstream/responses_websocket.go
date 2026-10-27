@@ -86,10 +86,8 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 		return finish(false)
 	}
 
-	for eventCount := 1; ; eventCount++ {
-		if eventCount > maxSSEEvents {
-			return result, &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream event count exceeds bounded limit"}
-		}
+	received := 0
+	for {
 		var frame websocketFrame
 		select {
 		case id := <-interrupts:
@@ -143,6 +141,9 @@ func (a *HTTPAdapter) streamResponsesWebSocket(ctx context.Context, target Targe
 		}
 		if len(data) > maxSSEEventBytes {
 			return result, &Error{Code: ErrorCodeInvalidStream, Message: "upstream WebSocket event exceeds bounded size"}
+		}
+		if received += len(data); received > maxStreamBytes {
+			return result, streamTooLarge()
 		}
 		// conn.Read returns a fresh buffer per frame; events forward it without copying.
 		header, err := decodeEventHeader(data)

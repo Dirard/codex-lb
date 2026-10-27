@@ -66,12 +66,7 @@ func (a *HTTPAdapter) streamChat(ctx context.Context, target Target, req respons
 	}
 
 	doneSeen := false
-	eventCount := 0
 	err = readSSE(response.Body, func(eventName string, data []byte) error {
-		eventCount++
-		if eventCount > maxSSEEvents {
-			return &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream event count exceeds bounded limit"}
-		}
 		if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 			doneSeen = true
 			return io.EOF

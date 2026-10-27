@@ -25,12 +25,7 @@ func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req re
 
 	var terminal Result
 	terminalSeen := false
-	eventCount := 0
 	err = readSSE(response.Body, func(eventName string, data []byte) error {
-		eventCount++
-		if eventCount > maxSSEEvents {
-			return &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream event count exceeds bounded limit"}
-		}
 		if len(bytes.TrimSpace(data)) == 0 {
 			return nil
 		}

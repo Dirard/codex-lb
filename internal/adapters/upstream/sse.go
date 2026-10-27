@@ -9,8 +9,15 @@ import (
 
 const (
 	maxSSEEventBytes = 16 << 20
-	maxSSEEvents     = 100000
+	// maxStreamBytes bounds the total event payload of one upstream response.
+	// Streams are bounded by size and the overall response deadline, not by
+	// an event count that a long healthy response can exceed.
+	maxStreamBytes = 256 << 20
 )
+
+func streamTooLarge() error {
+	return &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream stream exceeds bounded size"}
+}
 
 // ReadSSE shares the bounded parser with native provider endpoints. A callback
 // error stops reading immediately, including an endpoint's terminal sentinel.
@@ -26,7 +33,7 @@ func readSSE(reader io.Reader, handle func(event string, data []byte) error) err
 	scanner.Buffer(make([]byte, 8<<10), maxSSEEventBytes)
 	var data []byte
 	eventName, lastName := "", ""
-	size := 0
+	size, total := 0, 0
 	dispatch := func() error {
 		if len(data) == 0 && eventName == "" {
 			return nil
@@ -45,6 +52,9 @@ func readSSE(reader io.Reader, handle func(event string, data []byte) error) err
 		size += len(line) + 1
 		if size > maxSSEEventBytes {
 			return &Error{Code: ErrorCodeInvalidStream, Message: "upstream SSE event exceeds bounded size"}
+		}
+		if total += len(line) + 1; total > maxStreamBytes {
+			return streamTooLarge()
 		}
 		{
 			trimmed := line

@@ -240,12 +240,8 @@ func (a *Adapter) nativeChatStream(ctx context.Context, source domain.ModelSourc
 	}
 	result := application.NativeAPIResult{Status: response.StatusCode}
 	usageSeen, finishSeen, doneSeen := false, false, false
-	eventCount := 0
+	// upstream.ReadSSE bounds each event and the whole stream by size.
 	err = upstream.ReadSSE(response.Body, func(eventName string, payload []byte) error {
-		eventCount++
-		if eventCount > 100000 {
-			return providerFailure("stream_incomplete", 502, true)
-		}
 		if len(bytes.TrimSpace(payload)) == 0 {
 			return nil
 		}
