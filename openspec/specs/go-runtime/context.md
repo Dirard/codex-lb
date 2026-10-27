@@ -39,10 +39,13 @@ an existing installation as a side effect of building or testing.
 
 ## Administrator and proxy access
 
-The dashboard retains password/TOTP access. Initial direct-loopback setup does
-not require a bootstrap token; remote setup uses
-`CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN`. Trusted identity headers require explicitly
-configured trusted socket peers. CSRF protection remains enabled, including
+The dashboard retains password/TOTP access. First-run setup always requires a
+one-time bootstrap token: `CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN` (32+ characters)
+or the file `dashboard-bootstrap-token` the server writes to its data directory.
+No socket peer or `Host` value is treated as local; keyless proxy access needs an
+explicit `--unauthenticated-client` network (see change
+`harden-dashboard-trust-and-update-integrity`). Trusted identity headers require
+explicitly configured trusted socket peers. CSRF protection remains enabled, including
 under the explicitly selected installation authentication modes.
 
 The persisted proxy IP allowlist applies to proxy operations, not to the
@@ -138,7 +141,7 @@ No password or administrator cookie is issued. The report cookie cannot authoriz
 generation, bearer APIs or admin endpoints. CSRF protection applies to login and
 logout, and the proxy allowlist still protects login and report data. Status and
 logout remain available when the IP policy changes. Serve remote installations
-over HTTPS; Secure cookies follow the existing trusted-proxy policy. This page
+over HTTPS; Secure cookies follow the trusted-proxy policy or `--public-origin`. This page
 does not replace deployment TLS or administrator authentication.
 
 ## Routing and accounting
