@@ -239,7 +239,27 @@ type responseContext struct {
 	Items []json.RawMessage `json:"items"`
 }
 
+// accountBoundItems reports whether any item references account-owned state
+// or is not valid JSON.
 func accountBoundItems(items []json.RawMessage) bool {
+	for _, raw := range items {
+		if accountBoundItem(raw) {
+			return true
+		}
+	}
+	return false
+}
+
+// accountBoundItem skips the generic decode for valid JSON without a marker.
+func accountBoundItem(raw json.RawMessage) bool {
+	if !mayContainMarker(raw, accountBoundMarkers) && json.Valid(raw) {
+		return false
+	}
+	return accountBoundDecoded(raw)
+}
+
+// accountBoundDecoded is the exact walk the prefilter must agree with.
+func accountBoundDecoded(raw json.RawMessage) bool {
 	var visit func(any) bool
 	visit = func(value any) bool {
 		switch value := value.(type) {
@@ -272,13 +292,15 @@ func accountBoundItems(items []json.RawMessage) bool {
 		}
 		return false
 	}
-	for _, raw := range items {
-		var value any
-		if json.Unmarshal(raw, &value) != nil || visit(value) {
-			return true
-		}
+	// Numbers never bind an item; decoding them as json.Number keeps an
+	// out-of-range literal from looking like unreadable input.
+	if !json.Valid(raw) {
+		return true
 	}
-	return false
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	return decoder.Decode(&value) != nil || visit(value)
 }
 
 // replayBody carries complete, answered tool history, never old provider state.

@@ -279,8 +279,10 @@ func (p *Proxy) continuationPlan(options ResponseOptions, request responseReques
 	items := append(slices.Clone(history.Items), request.Input...)
 	items = append(items, response.Output...)
 	now := time.Now().UTC()
-	owner := domain.Continuation{ResponseID: result.ResponseID, KeyID: options.KeyID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, ProviderID: account.Provider, Model: request.Model, CreatedAt: now, ExpiresAt: now.Add(p.config.ContinuationTTL), FilePinned: request.FilePinned || accountBoundItems(items)}
-	owner.FilePinned = owner.FilePinned || previous != nil && previous.FilePinned
+	// The history is the previous owner's stored items and the input was checked
+	// at parse time; only the new output needs a scan.
+	filePinned := request.FilePinned || previous != nil && previous.FilePinned || accountBoundItems(response.Output)
+	owner := domain.Continuation{ResponseID: result.ResponseID, KeyID: options.KeyID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, ProviderID: account.Provider, Model: request.Model, CreatedAt: now, ExpiresAt: now.Add(p.config.ContinuationTTL), FilePinned: filePinned}
 	if valid {
 		plain, err := json.Marshal(responseContext{Items: items})
 		if err != nil {

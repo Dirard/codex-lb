@@ -444,7 +444,15 @@ func decodeExactObject(body json.RawMessage, target any) error {
 	return json.Unmarshal(body, target)
 }
 
+// collectFileIDs returns the distinct file_id and file_ids string values.
 func collectFileIDs(value json.RawMessage) []string {
+	if !mayContainMarker(value, fileIDMarkers) {
+		return nil // Without the keys the decoded walk finds nothing, valid or not.
+	}
+	return collectFileIDsDecoded(value)
+}
+
+func collectFileIDsDecoded(value json.RawMessage) []string {
 	var parsed any
 	if json.Unmarshal(value, &parsed) != nil {
 		return nil
