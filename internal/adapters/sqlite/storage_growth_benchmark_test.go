@@ -130,3 +130,47 @@ func BenchmarkStorageGrowth(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkStorageGrowthSteadyHistory measures the dashboard history reads on
+// history in its steady shape: one row per five-minute bucket for the last day
+// and one per hour for the six days before (bucket coalescing plus thinning).
+func BenchmarkStorageGrowthSteadyHistory(b *testing.B) {
+	s, now := openGrowthBenchStore(b)
+	ctx := context.Background()
+	at := millis(now)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM account_quota_history`); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `WITH RECURSIVE m(j) AS (SELECT 0 UNION ALL SELECT j+1 FROM m WHERE j<431)
+INSERT INTO account_quota_history(account_id,window,observed_at,used_percent,reset_at,window_minutes)
+SELECT a.id,w.w,CASE WHEN j<288 THEN ?-j*300000 ELSE ?-86400000-(j-288)*3600000 END,(431-j)/30*1.0,
+ ?+86400000,CASE w.w WHEN 'primary' THEN 300 ELSE 10080 END
+ FROM accounts a,(SELECT 'primary' AS w UNION ALL SELECT 'secondary') w,m`, at, at, at); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("RecentAccountQuotaHistory_500_accounts", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := s.RecentAccountQuotaHistory(ctx, now.Add(-30*24*time.Hour), now); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("PositiveQuotaDeltas_500_accounts", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := s.PositiveQuotaDeltas(ctx, now.Add(-7*24*time.Hour), now); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	service := application.NewReportsService(s, func() time.Time { return now })
+	b.Run("DashboardOverview_7d_500_accounts", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := service.DashboardOverview(ctx, "7d", s); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

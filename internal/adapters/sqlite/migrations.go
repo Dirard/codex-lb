@@ -220,3 +220,12 @@ ALTER TABLE runtime_settings ADD COLUMN show_reset_credit_expiry_badge INTEGER N
 const schemaV26 = `ALTER TABLE runtime_settings ADD COLUMN warmup_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini';`
 
 const schemaV33 = `ALTER TABLE runtime_settings ADD COLUMN codex_client_version TEXT NOT NULL DEFAULT '0.156.0' CHECK(length(codex_client_version) BETWEEN 1 AND 64);`
+
+// schemaV34 makes the quota-history series index covering, so projection and
+// demand reads walk one series in index order without table lookups (DB-3).
+// The name is kept because reads pin it with INDEXED BY.
+const schemaV34 = `
+DROP INDEX idx_account_quota_history_identity_time;
+CREATE INDEX idx_account_quota_history_identity_time ON account_quota_history
+ (account_id,window,observed_at DESC,id DESC,used_percent,reset_at,window_minutes);
+`

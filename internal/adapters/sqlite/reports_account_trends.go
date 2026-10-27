@@ -3,7 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"slices"
 	"time"
 
 	"codex-lb/internal/domain"
@@ -68,29 +68,42 @@ func (s *Store) PruneAccountQuotaHistory(ctx context.Context, cutoff time.Time, 
 	return int(n), err
 }
 
-// RecentAccountQuotaHistory retains the EWMA tail and every observation in the
-// six-hour pace horizon, so frequent polling cannot truncate the burn sample.
+// recentQuotaHistoryQuery walks each current series once through its index,
+// newest first, down to the older of the pace-horizon start and the 64th newest
+// observation of the lookback. No step scans or sorts the whole history.
+const recentQuotaHistoryQuery = `SELECT h.account_id,h.window,h.observed_at,h.used_percent,h.reset_at,h.window_minutes
+ FROM account_quotas s CROSS JOIN account_quota_history h INDEXED BY idx_account_quota_history_identity_time
+ ON h.account_id=s.account_id AND h.window=s.window
+ WHERE h.observed_at<=? AND h.observed_at>=min(?,coalesce((SELECT t.observed_at FROM account_quota_history t
+ WHERE t.account_id=s.account_id AND t.window=s.window AND t.observed_at>=? AND t.observed_at<=?
+ ORDER BY t.observed_at DESC,t.id DESC LIMIT 1 OFFSET ?),?))
+ ORDER BY s.account_id,s.window,h.observed_at DESC,h.id DESC`
+
+// quotaPaceHorizon and quotaPaceTail bound the projection history per series:
+// the six-hour burn horizon plus the newest observations for the EWMA tail.
+const (
+	quotaPaceHorizon = 6 * time.Hour
+	quotaPaceTail    = 64
+)
+
+// RecentAccountQuotaHistory reads the projection input per current account
+// window: every observation in the six-hour pace horizon plus the 64 newest
+// observations of the lookback, oldest first within each series. The result
+// grows with the number of series and the history resolution, never fails on
+// installation size, and reads only the rows it returns.
 func (s *Store) RecentAccountQuotaHistory(ctx context.Context, since, until time.Time) ([]domain.AccountQuota, error) {
 	if !since.Before(until) || until.Sub(since) > 32*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	rows, err := s.readDB.QueryContext(ctx, `WITH ranked AS (
- SELECT account_id,window,observed_at,used_percent,reset_at,window_minutes,id,
- row_number() OVER (PARTITION BY account_id,window ORDER BY observed_at DESC,id DESC) AS position
- FROM account_quota_history WHERE observed_at>=? AND observed_at<=?
- ) SELECT account_id,window,observed_at,used_percent,reset_at,window_minutes
- FROM ranked WHERE position<=64 OR observed_at>=?
- ORDER BY account_id,window,observed_at,id LIMIT 100001`, millis(since), millis(until), millis(until.Add(-6*time.Hour)))
+	horizon := max(millis(since), millis(until.Add(-quotaPaceHorizon)))
+	rows, err := s.readDB.QueryContext(ctx, recentQuotaHistoryQuery,
+		millis(until), horizon, millis(since), millis(until), quotaPaceTail-1, millis(since))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := []domain.AccountQuota{}
 	for rows.Next() {
-		// ponytail: fail explicitly above 100k samples; page per account if real installations outgrow this bound.
-		if len(result) == 100000 {
-			return nil, fmt.Errorf("quota projection history exceeds 100000 observations")
-		}
 		var quota domain.AccountQuota
 		var observed int64
 		var reset, minutes sql.NullInt64
@@ -105,5 +118,17 @@ func (s *Store) RecentAccountQuotaHistory(ctx context.Context, since, until time
 		}
 		result = append(result, quota)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Rows arrive newest first per series; consumers expect chronological order.
+	for start := 0; start < len(result); {
+		end := start
+		for end < len(result) && result[end].AccountID == result[start].AccountID && result[end].Window == result[start].Window {
+			end++
+		}
+		slices.Reverse(result[start:end])
+		start = end
+	}
+	return result, nil
 }

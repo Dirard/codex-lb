@@ -8,41 +8,50 @@ import (
 )
 
 // PositiveQuotaDeltas aggregates seven-day demand, including the last sample
-// before the boundary without treating a reset/drop as new consumption.
+// before the boundary without treating a reset/drop as new consumption. Only
+// current windows that can be a weekly pace window are read, series by series
+// in index order, so the cost is linear in retained weekly samples.
 func (s *Store) PositiveQuotaDeltas(ctx context.Context, since, until time.Time) (map[string]map[string]float64, error) {
 	if !since.Before(until) || until.Sub(since) > 7*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	rows, err := s.readDB.QueryContext(ctx, `WITH baseline AS (
- SELECT (SELECT h.id FROM account_quota_history h WHERE h.account_id=q.account_id
- AND h.window=q.window AND h.observed_at<? ORDER BY h.observed_at DESC,h.id DESC LIMIT 1) AS id
- FROM account_quotas q
- ), samples AS (
- SELECT id,account_id,window,observed_at,used_percent FROM account_quota_history
- WHERE observed_at>=? AND observed_at<=?
- UNION ALL
- SELECT h.id,h.account_id,h.window,h.observed_at,h.used_percent
- FROM baseline b JOIN account_quota_history h ON h.id=b.id
- ), deltas AS (
- SELECT account_id,window,observed_at,used_percent-lag(used_percent) OVER
- (PARTITION BY account_id,window ORDER BY observed_at,id) AS delta FROM samples
- ) SELECT account_id,window,sum(CASE WHEN observed_at>=? AND delta>0 THEN delta ELSE 0 END)
- FROM deltas GROUP BY account_id,window`, millis(since), millis(since), millis(until), millis(since))
+	rows, err := s.readDB.QueryContext(ctx, `SELECT h.account_id,h.window,h.observed_at,h.used_percent
+ FROM account_quotas s CROSS JOIN account_quota_history h INDEXED BY idx_account_quota_history_identity_time
+ ON h.account_id=s.account_id AND h.window=s.window
+ WHERE (s.window<>'primary' OR s.window_minutes>=10080) AND h.observed_at<=?
+ AND h.observed_at>=coalesce((SELECT b.observed_at FROM account_quota_history b
+ WHERE b.account_id=s.account_id AND b.window=s.window AND b.observed_at<?
+ ORDER BY b.observed_at DESC,b.id DESC LIMIT 1),?)
+ ORDER BY s.account_id,s.window,h.observed_at DESC,h.id DESC`, millis(until), millis(since), millis(since))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := make(map[string]map[string]float64)
+	sinceMS := millis(since)
+	// Rows arrive newest first per series: each row's delta is its successor's
+	// value minus its own, attributed to the successor's observation time.
+	var account, window string
+	var nextUsed float64
+	var nextAt int64
+	started := false
 	for rows.Next() {
-		var account, window string
-		var demand float64
-		if err := rows.Scan(&account, &window, &demand); err != nil {
+		var rowAccount, rowWindow string
+		var at int64
+		var used float64
+		if err := rows.Scan(&rowAccount, &rowWindow, &at, &used); err != nil {
 			return nil, err
 		}
-		if result[account] == nil {
-			result[account] = make(map[string]float64)
+		if !started || rowAccount != account || rowWindow != window {
+			account, window, started = rowAccount, rowWindow, true
+			if result[account] == nil {
+				result[account] = make(map[string]float64)
+			}
+			result[account][window] += 0
+		} else if nextAt >= sinceMS && nextUsed > used {
+			result[account][window] += nextUsed - used
 		}
-		result[account][window] = demand
+		nextUsed, nextAt = used, at
 	}
 	return result, rows.Err()
 }
