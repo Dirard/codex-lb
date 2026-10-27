@@ -115,7 +115,6 @@ const RateLimitResetCreditItemSchema = z.object({
   title: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   redeemedAt: z.iso.datetime({ offset: true }).nullable().optional(),
-  redeemStartedAt: z.iso.datetime({ offset: true }).nullable().optional(),
 });
 
 export const RateLimitResetCreditsSnapshotSchema = z.object({

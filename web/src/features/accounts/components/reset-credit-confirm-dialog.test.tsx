@@ -53,7 +53,6 @@ function snapshotResponse() {
         title: "Banked rate-limit reset",
         description: "Redeems a reset of the soonest rate-limit window.",
         redeemedAt: null,
-        redeemStartedAt: null,
       },
     ],
   });
@@ -290,7 +289,6 @@ describe("ResetCreditConfirmDialog", () => {
               title: "Persistent banked reset",
               description: "Redeems a reset credit without an upstream expiry.",
               redeemedAt: null,
-              redeemStartedAt: null,
             },
           ],
         }),
