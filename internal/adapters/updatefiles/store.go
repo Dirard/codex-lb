@@ -78,15 +78,20 @@ func (s *Store) path(digest string) string {
 	return filepath.Join(s.root, "versions", digest, "codex-lb")
 }
 
-// Initialize preserves an installed managed version across restarts. A manually
-// installed newer bootstrap release is adopted without rolling user data back.
+// Initialize preserves an installed managed version across restarts. A
+// manually replaced bootstrap executable — newer or older — is adopted, so an
+// operator's binary replacement (upgrade or emergency downgrade) takes effect;
+// user data is never rolled back.
 func (s *Store) Initialize(ctx context.Context, executable string, descriptor domain.RuntimeDescriptor) (domain.RuntimeInstallState, error) {
 	state, err := s.Load(ctx)
 	if err == nil {
 		// Re-running the same bootstrap must not undo an explicit rollback.
-		// Only an actually replaced newer bootstrap represents a manual upgrade.
-		if !domain.NewerRuntimeVersion(descriptor.Version, state.Current.Descriptor.Version) ||
-			MatchesExecutable(ctx, executable, state.BootstrapSHA256) {
+		if MatchesExecutable(ctx, executable, state.BootstrapSHA256) {
+			return state, nil
+		}
+		// State written before the bootstrap digest was recorded cannot tell a
+		// replaced executable from the original; keep adopting only newer ones.
+		if state.BootstrapSHA256 == "" && !domain.NewerRuntimeVersion(descriptor.Version, state.Current.Descriptor.Version) {
 			return state, nil
 		}
 	}
