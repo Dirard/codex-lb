@@ -66,7 +66,7 @@ func New(filesystem fs.FS) http.Handler {
 }
 
 func reservedPath(name string) bool {
-	for _, prefix := range []string{"/api", "/v1", "/backend-api", "/health"} {
+	for _, prefix := range []string{"/api", "/v1", "/backend-api", "/health", "/metrics", "/debug"} {
 		if name == prefix || strings.HasPrefix(name, prefix+"/") {
 			return true
 		}

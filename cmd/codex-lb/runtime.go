@@ -14,6 +14,7 @@ import (
 	"codex-lb/internal/adapters/chatgpt"
 	"codex-lb/internal/adapters/hostinfo"
 	"codex-lb/internal/adapters/httpapi"
+	"codex-lb/internal/adapters/metrics"
 	"codex-lb/internal/adapters/provider"
 	"codex-lb/internal/adapters/sqlite"
 	"codex-lb/internal/adapters/streambuffer"
@@ -42,9 +43,18 @@ type runtime struct {
 	stopBackground context.CancelFunc
 	background     sync.WaitGroup
 	onServing      func()
+	metrics        *metrics.Registry
+	reporter       *backgroundReporter
+	metricsServer  *http.Server
+	metricsAddress string
+	metricsMu      sync.Mutex
+	capacity       domain.CapacityPlan
+	started        time.Time
+	nextRetention  time.Time // owned by the maintenance loop
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
+	openedAt := time.Now()
 	capacity := planCapacity(cfg, detectHost())
 	applyCapacity(capacity, logger)
 	data, err := openDataWithOptions(ctx, cfg.dataDir, sqlite.Options{ReadConnections: capacity.SQLiteReaders})
@@ -127,7 +137,10 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	api.ConfigureModelCatalog(catalog)
 	api.ConfigureModelPricing(data.store)
 	usageClient := chatgpt.NewUsageClient(chatgpt.UsageConfig{HTTPClient: &oauthClient})
+	registry := metrics.NewRegistry()
+	reporter := newBackgroundReporter(logger, registry)
 	usage := application.NewAccountUsageService(data.store, tokens, usageClient, data.store, time.Now)
+	usage.ConfigureBackground(application.BackgroundSchedule{InitialDelay: startupJitter(10*time.Second, 20*time.Second), Report: reporter.report})
 	usage.ConfigureQuotaRecovery(data.store)
 	api.ConfigureUsage(usage)
 	warmups := application.NewWarmupService(data.store, adapter, data.store, proxy, usage, time.Now)
@@ -139,12 +152,16 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	limitWarmup.ConfigureCatalog(catalog)
 	usage.ConfigureLimitWarmups(limitWarmup)
 	automations := application.NewAutomationsService(data.store, data.store, warmups, time.Now)
+	automations.ConfigureBackground(application.BackgroundSchedule{InitialDelay: startupJitter(5*time.Second, 10*time.Second), Report: reporter.report})
+	catalog.ConfigureBackground(application.BackgroundSchedule{InitialDelay: startupJitter(30*time.Second, 30*time.Second), Report: reporter.report})
 	api.ConfigureAutomations(automations)
 	baseCtx, cancel := context.WithCancel(context.Background())
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	r := &runtime{data: data, accounts: accounts, tokens: tokens, provider: adapter,
 		proxy: proxy, transport: transport, cancel: cancel, config: cfg, logger: logger,
-		usage: usage, catalog: catalog, automations: automations, backgroundCtx: backgroundCtx, stopBackground: stopBackground}
+		usage: usage, catalog: catalog, automations: automations, backgroundCtx: backgroundCtx, stopBackground: stopBackground,
+		metrics: registry, capacity: capacity, started: openedAt}
+	r.reporter = reporter
 	proxyMux := http.NewServeMux()
 	keyUsage := httpapi.NewKeyUsageHandler(data.store)
 	keyUsage.RegisterPublicRoutes(proxyMux)
@@ -176,13 +193,15 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	}})
 	responses.QuotaHeaders = keyUsage.QuotaHeaders
 	responses.RegisterRoutes(proxyMux)
+	r.registerGauges(responses)
 	handler := api.Handler(proxyMux, webui.Handler())
 	mux := http.NewServeMux()
 	for _, path := range []string{"/health", "/health/live", "/health/startup", "/health/ready"} {
 		mux.HandleFunc("GET "+path, r.health)
 	}
 	mux.Handle("/", handler)
-	r.server = &http.Server{Addr: cfg.listen, Handler: r.requests.track(mux),
+	r.server = &http.Server{Addr: cfg.listen, Handler: accessLog(r.requests.track(mux), logger, registry, cfg.trusted),
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 		BaseContext:       func(net.Listener) context.Context { return baseCtx },
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 64 << 10,
@@ -202,7 +221,10 @@ func (r *runtime) serve(ctx context.Context) error {
 
 func (r *runtime) serveListener(ctx context.Context, listener net.Listener) error {
 	r.background.Add(4)
-	go func() { defer r.background.Done(); r.maintainReports(r.backgroundCtx) }()
+	go func() {
+		defer r.background.Done()
+		application.RunPeriodic(r.backgroundCtx, "maintenance", application.BackgroundSchedule{Report: r.reporter.report}, time.Minute, nil, r.maintainReports)
+	}()
 	go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
 	go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
 	go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
@@ -213,13 +235,20 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 		}
 		served <- r.server.Serve(listener)
 	}()
-	r.logger.Info("codex-lb ready", "address", listener.Addr().String(), "version", version)
+	if err := r.startMetrics(); err != nil {
+		r.logger.Warn("metrics listener disabled", "address", r.config.metricsListen, "reason", err.Error())
+	}
+	r.logger.Info("codex-lb ready", "address", listener.Addr().String(), "version", version,
+		"dashboard_auth_mode", r.config.authMode, "trusted_proxies", len(r.config.trusted), "metrics_listen", r.config.metricsListen,
+		"max_generations", r.capacity.MaxGenerations, "startup_ms", time.Since(r.started).Milliseconds())
 	var serveErr error
 	select {
 	case <-ctx.Done():
 	case serveErr = <-served:
 	}
-	r.logger.Info("draining active requests")
+	drainStarted := time.Now()
+	activeAtDrain, queuedAtDrain := r.proxy.AdmissionUsage()
+	r.logger.Info("draining active requests", "active_generations", activeAtDrain, "queued_generations", queuedAtDrain)
 	r.requests.beginDrain()
 	r.proxy.BeginDrain()
 	r.stopBackground()
@@ -228,11 +257,14 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 	grace, stopGrace := context.WithTimeout(context.Background(), r.config.shutdownGrace)
 	shutdown := make(chan struct{})
 	go func() { _ = r.server.Shutdown(grace); close(shutdown) }()
+	graceExpired := false
 	select {
 	case <-joined:
 	case <-grace.Done():
+		graceExpired = true
 	}
 	stopGrace()
+	r.stopMetrics()
 	r.cancel()
 	_ = r.server.Close() // Also interrupts incomplete request-body reads.
 	<-shutdown
@@ -246,6 +278,11 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 		// Do not close SQLite beneath a still-running finalizer. The command exits
 		// nonzero; durable reservations remain for explicit reconciliation.
 		return errors.New("request cleanup did not finish; unresolved accounting retained for reconciliation")
+	}
+	if graceExpired {
+		r.logger.Warn("drain complete; requests still running at the grace deadline were cancelled", "duration_ms", time.Since(drainStarted).Milliseconds(), "shutdown_grace", r.config.shutdownGrace.String())
+	} else {
+		r.logger.Info("drain complete", "duration_ms", time.Since(drainStarted).Milliseconds())
 	}
 	if err := r.close(); err != nil {
 		return errors.New("runtime storage did not close cleanly")

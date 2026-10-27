@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -31,6 +32,8 @@ type config struct {
 	selfUpdate                                bool
 	memoryLimit                               int64 // 0 derive from host, <0 leave unset
 	maxGenerations, maxClientWebSockets       int
+	logLevel                                  slog.Level
+	metricsListen                             string
 	updater                                   application.RuntimeUpdater
 }
 
@@ -54,6 +57,10 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 			cfg.memoryLimit = limit
 			return nil
 		})
+		flags.Func("log-level", "debug, info, warn or error; successful requests are logged at debug", func(raw string) error {
+			return cfg.logLevel.UnmarshalText([]byte(strings.TrimSpace(raw)))
+		})
+		flags.StringVar(&cfg.metricsListen, "metrics-listen", "", "optional address for Prometheus /metrics and /debug/pprof, e.g. 127.0.0.1:9464; unauthenticated, keep it on loopback")
 		flags.Func("max-generations", "concurrent generation bound; default derived from detected memory (512 on a 1 GB host)", positiveIntFlag("max-generations", &cfg.maxGenerations))
 		flags.Func("max-client-websockets", "client WebSocket bound; default derived from detected memory and descriptor limit (4096 on a 1 GB host)", positiveIntFlag("max-client-websockets", &cfg.maxClientWebSockets))
 		flags.Func("unauthenticated-client", "socket CIDR permitted without a key only while API-key auth is disabled", func(raw string) error {
@@ -109,6 +116,11 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		host, port, err := net.SplitHostPort(cfg.listen)
 		if err != nil || strings.TrimSpace(host) != host || port == "" || cfg.shutdownGrace < 0 || cfg.shutdownGrace > 30*time.Minute {
 			return cfg, errors.New("invalid listen address or shutdown-grace (expected 0s to 30m)")
+		}
+		if cfg.metricsListen != "" {
+			if _, port, err := net.SplitHostPort(cfg.metricsListen); err != nil || port == "" {
+				return cfg, errors.New("invalid metrics-listen address")
+			}
 		}
 	} else if command == "reconcile-usage" {
 		if cfg.reservation == "" && (cfg.settlement != "" || cfg.releaseReservation) || cfg.reservation != "" && (cfg.afterReservation != "" || cfg.releaseReservation == (cfg.settlement != "")) {
