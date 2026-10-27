@@ -52,7 +52,6 @@ func (a *HTTPAdapter) streamChat(ctx context.Context, target Target, req respons
 		toolCalls: make(map[int]*chatToolCallState), outputIndexes: make(map[string]int),
 	}
 	req.Raw, req.Input, req.Tools = nil, nil, nil
-	items = nil
 	response, rejected, err := a.beginStream(ctx, target, endpoint(target.BaseURL, "chat/completions"), body)
 	if err != nil {
 		return rejected, state.fail(wrapContext(ctx, err))

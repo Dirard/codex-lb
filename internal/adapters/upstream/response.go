@@ -107,9 +107,7 @@ func toolCallResponseItem(call ChatToolCall, catalog toolCatalog, itemID string)
 		}
 		input := call.Function.Arguments
 		var text string
-		if json.Unmarshal(object[custom.ArgumentField], &text) != nil || text == "" {
-			input = call.Function.Arguments
-		} else {
+		if json.Unmarshal(object[custom.ArgumentField], &text) == nil && text != "" {
 			input = text
 		}
 		return mustJSON(map[string]any{
