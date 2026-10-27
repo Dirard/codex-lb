@@ -314,6 +314,9 @@ func (a *Adapter) nativeChatStream(ctx context.Context, source domain.ModelSourc
 		}
 		return result, wrapUpstreamFailure(err)
 	}
+	if doneSeen {
+		upstream.FinishStreamBody(response)
+	}
 	if !doneSeen && !(source.ProviderConfig.AllowNoSSEDone && finishSeen) {
 		return result, providerFailure("stream_incomplete", 502, true)
 	}

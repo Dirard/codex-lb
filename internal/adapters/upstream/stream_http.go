@@ -6,7 +6,27 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+const (
+	streamDrainBytes   = 64 << 10
+	streamDrainTimeout = 100 * time.Millisecond
+)
+
+// FinishStreamBody closes an upstream stream body after its protocol terminal
+// (Responses terminal event or Chat [DONE]). An HTTP/1.x keep-alive connection
+// is reusable only when its body was read to the end, so a short tail is
+// drained within a strict size and time bound; HTTP/2 closes just the stream.
+// The drain never changes the already determined stream result.
+func FinishStreamBody(response *http.Response) {
+	if response.ProtoMajor == 1 {
+		timer := time.AfterFunc(streamDrainTimeout, func() { _ = response.Body.Close() })
+		_, _ = io.CopyN(io.Discard, response.Body, streamDrainBytes)
+		timer.Stop()
+	}
+	_ = response.Body.Close()
+}
 
 func (a *HTTPAdapter) beginStream(ctx context.Context, target Target, endpoint string, body []byte) (*http.Response, Result, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))

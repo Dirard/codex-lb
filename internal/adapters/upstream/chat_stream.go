@@ -90,6 +90,9 @@ func (a *HTTPAdapter) streamChat(ctx context.Context, target Target, req respons
 	if err != nil && !(doneSeen && errors.Is(err, io.EOF)) {
 		return state.result(), state.fail(wrapContext(ctx, err))
 	}
+	if doneSeen {
+		FinishStreamBody(response)
+	}
 	if !doneSeen && target.Capabilities.AllowNoSSEDone && state.finishReason != "" {
 		doneSeen = true
 	}

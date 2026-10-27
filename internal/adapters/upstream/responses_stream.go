@@ -76,6 +76,9 @@ func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req re
 	if err != nil && !errors.Is(err, errResponsesTerminalReached) {
 		return terminal, wrapContext(ctx, err)
 	}
+	if terminalSeen {
+		FinishStreamBody(response)
+	}
 	if !terminalSeen {
 		return Result{}, &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream stream disconnected before a terminal event"}
 	}
