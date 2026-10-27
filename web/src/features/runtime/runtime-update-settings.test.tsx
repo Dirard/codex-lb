@@ -58,6 +58,31 @@ describe("RuntimeUpdateSettings", () => {
     expect(screen.getByRole("button", { name: "Roll back to go-v0.9.0" })).toBeDisabled();
   });
 
+  it("requires the dashboard password before applying an update", async () => {
+    const user = userEvent.setup();
+    const posted: unknown[] = [];
+    useAuthStore.setState({ authMode: "standard", passwordRequired: true });
+    server.use(
+      http.get("/api/runtime/updates", () => HttpResponse.json(updateStatus)),
+      http.post("/api/runtime/updates/apply", async ({ request }) => {
+        posted.push(await request.json());
+        return HttpResponse.json({ ...updateStatus, phase: "downloading", targetVersion: "go-v1.1.0" }, { status: 202 });
+      }),
+    );
+    try {
+      renderWithProviders(<RuntimeUpdateSettings canWrite />);
+      await user.click(await screen.findByRole("button", { name: "Update to go-v1.1.0" }));
+      const dialog = screen.getByRole("alertdialog");
+      const confirm = within(dialog).getByRole("button", { name: "Update" });
+      expect(confirm).toBeDisabled();
+      await user.type(within(dialog).getByLabelText("Dashboard password"), "synthetic-password");
+      await user.click(confirm);
+      await waitFor(() => expect(posted).toEqual([{ version: "go-v1.1.0", currentPassword: "synthetic-password" }]));
+    } finally {
+      useAuthStore.setState({ passwordRequired: false });
+    }
+  });
+
   it("confirms rollback and states that application data stays in place", async () => {
     const user = userEvent.setup();
     const posted: unknown[] = [];

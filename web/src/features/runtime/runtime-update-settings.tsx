@@ -6,6 +6,8 @@ import { useTranslation } from "react-i18next";
 import { AlertMessage } from "@/components/alert-message";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { usePasswordConfirmationRequired } from "@/features/auth/hooks/use-password-confirmation";
 import { ApiError } from "@/lib/api-client";
 import {
   applyRuntimeUpdate,
@@ -18,7 +20,7 @@ import { getErrorMessageOrNull } from "@/utils/errors";
 const UPDATE_QUERY_KEY = ["runtime", "updates"] as const;
 const TERMINAL_PHASES = new Set(["idle", "succeeded", "failed"]);
 
-type UpdateAction = { kind: "check" } | { kind: "apply" | "rollback"; version: string };
+type UpdateAction = { kind: "check" } | { kind: "apply" | "rollback"; version: string; currentPassword?: string };
 
 function isBusy(phase: string | undefined): boolean {
   return !!phase && !TERMINAL_PHASES.has(phase);
@@ -33,6 +35,8 @@ export function RuntimeUpdateSettings({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient();
   const [observingOperation, setObservingOperation] = useState(false);
   const [confirmation, setConfirmation] = useState<Extract<UpdateAction, { version: string }> | null>(null);
+  const [password, setPassword] = useState("");
+  const passwordRequired = usePasswordConfirmationRequired();
   const statusQuery = useQuery({
     queryKey: UPDATE_QUERY_KEY,
     queryFn: async () => {
@@ -52,8 +56,8 @@ export function RuntimeUpdateSettings({ canWrite }: { canWrite: boolean }) {
       setObservingOperation(true);
       switch (action.kind) {
         case "check": return checkRuntimeUpdates();
-        case "apply": return applyRuntimeUpdate(action.version);
-        case "rollback": return rollbackRuntimeUpdate(action.version);
+        case "apply": return applyRuntimeUpdate(action.version, action.currentPassword);
+        case "rollback": return rollbackRuntimeUpdate(action.version, action.currentPassword);
       }
     },
     onSuccess: (status) => {
@@ -161,21 +165,35 @@ export function RuntimeUpdateSettings({ canWrite }: { canWrite: boolean }) {
 
       <ConfirmDialog
         open={confirmation !== null}
-        onOpenChange={(open) => { if (!open) setConfirmation(null); }}
+        onOpenChange={(open) => { if (!open) { setConfirmation(null); setPassword(""); } }}
         title={confirmation?.kind === "rollback"
           ? t("settings.runtime.confirmRollback", { version: confirmation.version })
           : t("settings.runtime.confirmUpdate", { version: confirmation?.version ?? "" })}
         description={t("settings.runtime.restartWarning")}
         confirmLabel={confirmation?.kind === "rollback" ? t("settings.runtime.rollback") : t("settings.runtime.update")}
-        confirmDisabled={disabled}
+        confirmDisabled={disabled || (passwordRequired && !password)}
         onConfirm={() => {
           if (!confirmation) return;
-          actionMutation.mutate(confirmation);
+          actionMutation.mutate(passwordRequired ? { ...confirmation, currentPassword: password } : confirmation);
           setConfirmation(null);
+          setPassword("");
         }}
       >
         {confirmation?.kind === "rollback" ? (
           <p className="text-sm text-muted-foreground">{t("settings.runtime.rollbackDataWarning")}</p>
+        ) : null}
+        {passwordRequired ? (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">{t("settings.runtime.passwordPrompt")}</p>
+            <Input
+              type="password"
+              autoComplete="current-password"
+              aria-label={t("common.passwordConfirm.label")}
+              placeholder={t("common.passwordConfirm.label")}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </div>
         ) : null}
       </ConfirmDialog>
     </section>

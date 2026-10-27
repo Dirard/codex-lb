@@ -137,10 +137,12 @@ export function probeAccount(accountId: string, payload?: unknown) {
   );
 }
 
-export function exportAccountAuth(accountId: string) {
+// currentPassword re-confirms the dashboard password for this sensitive action.
+export function exportAccountAuth({ accountId, currentPassword }: { accountId: string; currentPassword?: string }) {
   return post(
     `${ACCOUNTS_BASE_PATH}/${encodeURIComponent(accountId)}/export/auth`,
     AccountAuthExportResponseSchema,
+    currentPassword === undefined ? undefined : { body: { currentPassword } },
   );
 }
 

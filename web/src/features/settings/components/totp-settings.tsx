@@ -19,15 +19,13 @@ import {
 } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot } from "@/components/ui/input-otp";
-import { Switch } from "@/components/ui/switch";
 import {
   confirmTotpSetup,
   disableTotp,
   startTotpSetup,
 } from "@/features/auth/api";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
-import { buildSettingsUpdateRequest } from "@/features/settings/payload";
-import type { DashboardSettings, SettingsUpdateRequest } from "@/features/settings/schemas";
+import type { DashboardSettings } from "@/features/settings/schemas";
 import { getErrorMessage } from "@/utils/errors";
 
 // NOTE: validation message is intentionally a translation key resolved at render time;
@@ -42,10 +40,9 @@ type TotpDialog = "setup" | "disable" | null;
 export type TotpSettingsProps = {
   settings: DashboardSettings;
   disabled?: boolean;
-  onSave: (payload: SettingsUpdateRequest) => Promise<void>;
 };
 
-export function TotpSettings({ settings, disabled = false, onSave }: TotpSettingsProps) {
+export function TotpSettings({ settings, disabled = false }: TotpSettingsProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const refreshSession = useAuthStore((state) => state.refreshSession);
@@ -164,20 +161,13 @@ export function TotpSettings({ settings, disabled = false, onSave }: TotpSetting
           </div>
         </div>
 
-        {/* Require on login toggle */}
-        <div className="flex items-center justify-between rounded-lg border p-3">
-          <div>
+        {/* A configured second factor is always required; there is no opt-out. */}
+        {settings.totpConfigured ? (
+          <div className="rounded-lg border p-3" data-testid="totp-required-on-login">
             <p className="text-sm font-medium">{t("settings.totp.requireLogin.label")}</p>
             <p className="text-xs text-muted-foreground">{t("settings.totp.requireLogin.description")}</p>
           </div>
-          <Switch
-            checked={settings.totpRequiredOnLogin}
-            disabled={lock}
-            onCheckedChange={(checked) =>
-              void onSave(buildSettingsUpdateRequest(settings, { totpRequiredOnLogin: checked }))
-            }
-          />
-        </div>
+        ) : null}
       </div>
 
       {/* Setup dialog */}

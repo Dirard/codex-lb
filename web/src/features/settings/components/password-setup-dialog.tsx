@@ -19,6 +19,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { setupPassword } from "@/features/auth/api";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
+import { bootstrapTokenMessageKey } from "@/features/auth/bootstrap-token-message";
 import { PasswordSetupRequestSchema } from "@/features/auth/schemas";
 import { getErrorMessage } from "@/utils/errors";
 
@@ -38,7 +39,7 @@ export function PasswordSetupDialog({
   const { t } = useTranslation();
   const bootstrapRequired = useAuthStore((s) => s.bootstrapRequired);
   const bootstrapTokenRequired = useAuthStore((s) => s.bootstrapTokenRequired);
-  const bootstrapTokenConfigured = useAuthStore((s) => s.bootstrapTokenConfigured);
+  const bootstrapTokenSource = useAuthStore((s) => s.bootstrapTokenSource);
   const passwordManagementEnabled = useAuthStore((s) => s.passwordManagementEnabled);
   const refreshSession = useAuthStore((s) => s.refreshSession);
 
@@ -91,10 +92,8 @@ export function PasswordSetupDialog({
           <DialogDescription>{t("settings.password.setupDialog.description")}</DialogDescription>
         </DialogHeader>
         {needsBootstrapToken ? (
-          <AlertMessage variant="error">
-            {bootstrapTokenConfigured
-              ? t("settings.password.setupDialog.bootstrapTokenConfigured")
-              : t("settings.password.setupDialog.bootstrapTokenMissing")}
+          <AlertMessage variant={bootstrapTokenSource ? "warning" : "error"}>
+            {t(bootstrapTokenMessageKey(bootstrapTokenSource))}
           </AlertMessage>
         ) : null}
         {rootError ? <AlertMessage variant="error">{rootError}</AlertMessage> : null}

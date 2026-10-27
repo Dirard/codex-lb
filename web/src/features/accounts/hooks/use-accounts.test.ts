@@ -108,7 +108,7 @@ describe("useAccounts", () => {
     const firstAccountId = result.current.accountsQuery.data?.[0]?.accountId;
     expect(firstAccountId).toBeTruthy();
 
-    await result.current.exportAuthMutation.mutateAsync(firstAccountId as string);
+    await result.current.exportAuthMutation.mutateAsync({ accountId: firstAccountId as string, currentPassword: "synthetic-password" });
 
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["accounts", "list"] });
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["accounts", "trends"] });
