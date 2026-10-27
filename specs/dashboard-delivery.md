@@ -223,28 +223,35 @@ vitest config --parallel files after removing leaked timers--> ≈20 s suite; pa
 Requirements:
 
   R18:
-`oauth-dialog.tsx` SHALL use the shared `CopyButton` (timer cleanup); vitest SHALL run test files in parallel.
+The OAuth dialog copy button SHALL cancel its pending "Copied" reset timer on unmount; vitest SHALL run test files in parallel.
 
   R19:
 `react-doctor`, `bun2nix`, `@playwright/test` and `shadcn` SHALL be removed (the used `shadcn/tailwind.css` is vendored); `typecheck`/`build` SHALL invoke TS 7 explicitly while TS 6 remains only for `typescript-eslint`; `bun.lock` is updated with bun 1.3.14 and `npm --prefix web run install:deps` passes with `--frozen-lockfile`.
 
+Tests:
+ - description: unmounting after a copy clears the reset timer
+   requirements: R18
+ - description: three consecutive parallel runs and a coverage run pass without unhandled errors
+   requirements: R18, R19
+
 Files And Functions:
- - existing: web/src/features/accounts/components/oauth-dialog.tsx
+ - existing: web/src/features/accounts/components/oauth-dialog.tsx#CopyButton - timer held in a ref and cleared on unmount
  - existing: web/vite.config.ts - `fileParallelism`, stale excludes, `vendor-ui`
  - existing: web/package.json, web/bun.lock, web/src/index.css
  - planned: web/src/styles/shadcn-tailwind.css
 
 ## Implementation checklist
 
-1. [ ] Solution spec and OpenSpec change `optimize-dashboard-delivery` (R16).
-2. [ ] Build-time precompression and Go variant negotiation with ETag/Range/Vary; fonts hashed (R1–R6).
-3. [ ] `compressJSON` for the admin mux (R7, R8).
-4. [ ] Lazy locales, SVG donut and sparkline (R9, R10).
-5. [ ] `GET /api/dashboard/status`, status bar, projections cadence (R11, R12).
-6. [ ] tokens/s and client-side duplicate e-mails (R13, R14).
-7. [ ] Remove dead fields/UI/mocks, align MSW, Go route test (R15, R17).
-8. [ ] Copy-button timer, parallel vitest, dependency and TS cleanup (R18, R19).
-9. [ ] Measurements before/after, screenshots, full gate run.
+1. [x] Solution spec and OpenSpec change `optimize-dashboard-delivery` (R16).
+2. [x] Build-time precompression and Go variant negotiation with ETag/Range/Vary; fonts hashed (R1–R6).
+3. [x] `compressJSON` for the admin mux (R7, R8).
+4. [x] Lazy locales, SVG donut and sparkline (R9, R10).
+5. [x] `GET /api/dashboard/status`, status bar, projections cadence (R11, R12).
+6. [x] tokens/s and client-side duplicate e-mails (R13, R14).
+7. [x] Remove dead fields/UI/mocks, align MSW, Go route test (R15, R17).
+8. [x] Copy-button timer, parallel vitest, dependency and TS cleanup (R18, R19).
+9. [x] Measurements before/after, screenshots, full gate run.
+10. [ ] After review: sync the OpenSpec delta into `openspec/specs/frontend-architecture/spec.md` and archive `optimize-dashboard-delivery`.
 
 ## Open questions
 
@@ -260,3 +267,7 @@ None blocking. Non-blocking assumptions are recorded in the decision log.
 - `lastSyncAt` gets a dedicated cheap endpoint rather than an extra field on `/api/accounts`, which is itself a heavy per-account read polled by the header.
 - TS 7 stays the typecheck compiler (1.6 s vs 8.9 s); TS 6 cannot be removed because `typescript-eslint` needs the JS compiler API.
 - bun stays the installer (`bun.lock`, `packageManager`), npm only runs scripts; replacing the lockfile is out of scope for this slice.
+- The OAuth dialog keeps its own copy button (ghost style, blur after pointer activation, covered by tests) and only gains timer cleanup; switching to the shared `CopyButton` would change both behaviors.
+- `additionalQuotaPolicies` (settings) is left in place: removing it changes how routing settings list per-quota overrides and needs its own decision on the Go source of quota keys.
+- Measured (headless Chromium against the built binary, empty database, first `/dashboard` load): 1921 KB → 357 KB with brotli / 395 KB gzip-only; 46 → 42 requests; the recharts chunk is no longer requested. Seeded admin JSON: overview 12.9 KB → 2.6 KB, request logs 16.3 KB → 1.8 KB on the wire. Vitest 190.5 s → 20 s.
+- Deferred audit items outside this slice: WEB-14 (dashboard view memoization), WEB-16 (routing-settings split), WEB-26 (model-prices i18n), WEB-28 (pre-paint theme script), WEB-29 (header accounts polling), WEB-30 (date picker), WEB-31 (unused request-log parameters).
