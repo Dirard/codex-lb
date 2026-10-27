@@ -2,7 +2,7 @@
 name: "project-conventions"
 description: |
   Project code conventions reference.
-  Covers typing, structure, DI, testing, and anti-pattern rules for module implementation.
+  Covers Go layering, contracts, concurrency, security, testing and migration rules.
 metadata:
   author: codex-lb
   version: "1.0.0"
@@ -14,7 +14,7 @@ Project conventions that must be reviewed before editing code.
 
 ## When to Activate
 
-- Before editing `app/` code (auto-activated via PreToolUse guard)
+- Before editing Go code under `cmd/` or `internal/`
 - When implementing a new module or feature
 - When refactoring or changing structure
 

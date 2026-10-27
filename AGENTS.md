@@ -1,149 +1,47 @@
 # AGENTS
 
-## Go implementation
+codex-lb is a single static Go binary (module `codex-lb`) with SQLite storage and an embedded React dashboard (`web/`). The retired Python/Rust runtime lives only in Git history.
 
-- The active implementation is Go at the repository root. The administrator approved retiring `legacy/`; the old implementation is retained in Git history, not required by this checkout.
-- Follow `openspec/specs/go-runtime/` and the administrator's selected feature scope. Historical rewrite decisions are in `openspec/changes/archive/2026-09-27-rewrite-codex-lb-in-go/`.
-- Clean architecture: `internal/domain` contains transport/storage-independent rules; `internal/application` owns use cases and needed ports; `internal/adapters` contains concrete storage, HTTP and upstream implementations; `cmd/codex-lb` wires them.
-- Prefer the Go standard library, explicit typed contracts, request-scoped contexts, bounded I/O and short SQLite transactions. Do not hold locks or transactions across upstream network I/O. Do not create interfaces without an actual architecture or testing boundary.
-- Place Go tests beside the implementation and run `go test ./...`, `go test -race ./...`, and `go vet ./...`. Use local deterministic upstream stubs; real provider traffic, service updates, publication and commits require separate authorization.
-- Keep secrets out of logs, fixtures, assets and commits. Credentials remain encrypted at rest. Preserve legacy API-key/ledger semantics during migration and reject unsafe account/provider continuation.
-- Python, Alembic and Uvicorn references below are historical upstream guidance, not instructions to restore an old runtime. General security, spec, testing and preservation rules remain applicable.
+## Architecture
 
-## Environment
+- `internal/domain` — transport/storage-independent rules (stdlib only).
+- `internal/application` — use cases; each owns the ports it needs. No adapter or `net/http` imports.
+- `internal/adapters/*` — SQLite, HTTP API, upstream/provider, ChatGPT OAuth, releases/self-update, embedded web UI.
+- `cmd/codex-lb` — configuration and wiring. Environment variables are parsed here.
+- Prefer the standard library, typed contracts, request-scoped contexts, bounded I/O and short SQLite transactions. Never hold a lock or transaction across upstream network I/O. Do not add interfaces without a real architecture or testing boundary.
+- Detailed coding rules: `.agents/skills/project-conventions/conventions.md`.
 
-- Go: installed toolchain (`go version`); the module declares its required version.
-- GitHub auth for git/API is available via env vars: `GITHUB_USER`, `GITHUB_TOKEN` (PAT). Do not hardcode or commit tokens.
-- For authenticated git over HTTPS in automation, use: `https://x-access-token:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git`
+## Gates
 
-## Code Conventions
+| Command | Runs |
+|---|---|
+| `make check` | `go vet`, `golangci-lint` (`.golangci.yml`), `go test`, `go test -race`, `govulncheck`, `openspec validate --specs` |
+| `make web-check` | dashboard lint, typecheck and vitest |
+| `make web-deps build` | dashboard build embedded into `bin/codex-lb` |
+| `make test-web-contract` | dashboard API contract tests against the built binary |
 
-The `/project-conventions` skill is auto-activated on code edits (PreToolUse guard).
+CI (`.github/workflows/ci.yml`) runs the same gates on every pull request and on `main`. A change is ready only when CI is green.
 
-| Convention | Location | When |
-|-----------|----------|------|
-| Code Conventions (Full) | `/project-conventions` skill | On code edit (auto-enforced) |
-| Git Workflow | `.agents/conventions/git-workflow.md` | Commit / PR |
+Tests sit beside the implementation and use deterministic loopback upstream stubs and temporary data directories. Real provider traffic (ChatGPT, Z.AI, OpenAI) and changes to a running installation need explicit operator approval.
 
-## Workflow (OpenSpec-first)
+## Specifications
 
-This repo uses **OpenSpec as the primary workflow and SSOT** for change-driven development.
+- `openspec/specs/go-runtime/` is the normative product contract (`spec.md` holds testable requirements only; `context.md` holds rationale, examples and operating notes). Other folders in `openspec/specs/` are legacy references unless `go-runtime` cites them. `openspec/legacy/` is non-normative history.
+- Behavior, API, schema, CLI, dashboard-visible, routing and compatibility changes need an OpenSpec change in `openspec/changes/<kebab-name>/` (proposal, tasks, spec delta) before coding. Validate with `make spec-validate`; archive to `openspec/changes/archive/YYYY-MM-DD-<name>/` after verification and sync the delta into `openspec/specs/`.
+- Implementation planning for non-trivial work lives in solution specs under `specs/` (lifecycle: `specs/spec-lifecycle/workflow.md`). A solution spec plans the slice and its checklist; the OpenSpec change records the normative behavior. Keep both in sync with the code.
 
-### How to work (default)
+## Invariants reviewers check
 
-1) Find the relevant spec(s) in `openspec/specs/**` and treat them as source-of-truth.
-2) If the work changes behavior, requirements, contracts, or schema: create an OpenSpec change in `openspec/changes/**` first (proposal -> tasks).
-3) Implement the tasks; keep code + specs in sync (update `spec.md` as needed).
-4) Validate specs locally: `openspec validate --specs`
-5) When done: verify + archive the change (do not archive unverified changes).
+- Proxy failover and retries: file-pinned or provider-state-bound requests never cross accounts; failover requires an explicit upstream quota refusal before anything was visible to the client; excluded accounts leave the selection loop; an attempt that may have executed is never replayed.
+- Money: API-key reservations are taken before dispatch and settled exactly once before account-health writes; unknown usage stays reserved for reconciliation; idle disconnects are account-neutral.
+- Concurrency: every spawned goroutine is cancelled and joined on all paths; partial failures keep finalization; fan-out is bounded; tests cover partial failure, not only success.
+- Migrations: append-only, atomic, upgrade every earlier version, backfill rows affected by new columns, `PRAGMA user_version` equals the migration count.
+- Security: credentials encrypted at rest; no tokens, keys, bodies or provider error bodies in logs; trusted forwarding only from configured proxies.
+- Bug fixes include a regression test on the externally failing path (route, WebSocket, CLI, migration, dashboard).
 
-### Source of Truth
+## Git and releases
 
-- **Specs/Design/Tasks (SSOT)**: `openspec/`
-  - Active changes: `openspec/changes/<change>/`
-  - Main specs: `openspec/specs/<capability>/spec.md`
-  - Archived changes: `openspec/changes/archive/YYYY-MM-DD-<change>/`
-
-## Documentation & Release Notes
-
-- **OpenSpec is the SSOT for feature/behavior documentation.** User-facing rendering lives under `docs/` (the published docs pages), and each spec-governed page MUST link back to the owning `openspec/specs/<capability>/` entry. Do not create `docs/` content that has no OpenSpec counterpart, and do not add feature docs as new README sections. Keep normative requirements in `openspec/specs/<capability>/spec.md` and free-form rationale in the capability's `context.md` (or change-level context under `openspec/changes/<change>/context.md`).
-- **Do not edit `CHANGELOG.md` directly.** Leave changelog updates to the release process; record change notes in OpenSpec artifacts instead.
-
-### Documentation Model (Spec + Context)
-
-- `spec.md` is the **normative SSOT** and should contain only testable requirements.
-- Use `openspec/specs/<capability>/context.md` for **free-form context** (purpose, rationale, examples, ops notes).
-- If context grows, split into `overview.md`, `rationale.md`, `examples.md`, or `ops.md` within the same capability folder.
-- Change-level notes live in `openspec/changes/<change>/context.md` or `notes.md`, then **sync stable context** back into the main context docs.
-
-Prompting cue (use when writing docs):
-"Keep `spec.md` strictly for requirements. Add/update `context.md` with purpose, decisions, constraints, failure modes, and at least one concrete example."
-
-### Commands (recommended)
-
-- Start a change: `/opsx:new <kebab-case>`
-- Create artifacts (step): `/opsx:continue <change>`
-- Create artifacts (fast): `/opsx:ff <change>`
-- Implement tasks: `/opsx:apply <change>`
-- Verify before archive: `/opsx:verify <change>`
-- Sync delta specs → main specs: `/opsx:sync <change>`
-- Archive: `/opsx:archive <change>`
-
-## Contributing & Merge Gates
-
-When authoring or merging a PR (as a human contributor, a collaborator,
-or an AI assistant acting on behalf of either), the binding workflow is
-in [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md). The sections
-an AI assistant most often needs are:
-
-- [Merge gates](.github/CONTRIBUTING.md#merge-gates) — CI green +
-  actionable CodeRabbit findings addressed + `mergeable=CLEAN` +
-  OpenSpec change folder for behavior changes + `Fixes #N` /
-  `Closes #N` for issue cover + the five simplicity rules
-  (PRINCIPLES.md P1-P5; see
-  [Simplicity gates](.github/CONTRIBUTING.md#simplicity-gates)).
-- [Collaborator rules](.github/CONTRIBUTING.md#collaborator-rules) —
-  no self-merge by default; large PRs get split (≈1-concern per PR,
-  ~800 net lines / scoped capability ceiling).
-- [Bus factor escape hatch](.github/CONTRIBUTING.md#bus-factor-escape-hatch)
-  — self-merge allowed after **14 days** with all gates met and a
-  comment invoking the clause.
-
-An assistant preparing a merge MUST verify the gates against the
-actual GitHub state (status check rollup, current-head CodeRabbit review
-threads, `mergeable` field) rather than asserting them from local history.
-Local `uv run pytest` / `uv run ruff` / `codex review --base origin/main`
-are encouraged but not substitutes for the cloud gates.
-
-## PR Readiness / Review Trapdoors
-
-These rules encode recurring review blockers observed across codex-lb PRs.
-
-- OpenSpec is a hard gate for behavior, API, schema, CLI,
-  dashboard-visible, proxy-routing, operator-contract, and compatibility
-  changes. Create or update `openspec/changes/<slug>/` before coding, keep
-  `spec.md` normative with MUST/SHALL-style requirements, put rationale and
-  examples in `context.md` or change notes, and run strict OpenSpec validation
-  before calling the PR ready. Code/tests alone are not enough when OpenSpec is
-  required.
-- CodeRabbit review state must come from current-head GitHub evidence.
-  Unresolved, non-outdated actionable review threads block readiness until
-  their findings are fixed or explicitly addressed or dismissed in-thread;
-  a top-level summary does not override active thread evidence.
-- Proxy failover and retry patches must prove account ownership and settlement
-  invariants. File-pinned requests must not cross accounts; API-key reservations
-  must settle before error-health writes; excluded accounts must actually leave
-  the selection loop; idle disconnects must not mark otherwise healthy accounts
-  unhealthy; security/trusted-access routing must degrade only along the
-  documented path.
-- Async, fan-out, and session-lifecycle patches must prove task ownership and
-  cleanup. Do not share one `AsyncSession` across concurrent tasks; cancel or
-  await spawned tasks on failure; preserve finalization/settlement paths after
-  partial errors; bound fan-out; and test partial-failure behavior, not only
-  the all-success path.
-- Database migrations must prove Alembic graph and data hygiene. New revisions
-  must sit on the current intended parent with a single-head upgrade path, have
-  downgrade/upgrade coverage where the project expects it, and include
-  historical-row backfills or compatibility handling when new fields affect
-  existing data.
-- Issue-resolving PRs must name the exact `Fixes #N` / `Closes #N`, or state
-  that they are partial. Keep PRs one concern wide. Revive stale work by making
-  a focused branch on current `main`; do not drag an old broad/conflicted branch
-  forward unless the maintainer explicitly wants that shape.
-- Bug fixes need regression coverage at the externally failing product path:
-  route, bridge, websocket, CLI, schema, dashboard UI, or migration path as
-  applicable. Helper-only tests are not enough when the failing surface is
-  elsewhere.
-- Compatibility work must verify canonical and equivalent paths, trailing slash
-  behavior, external error envelopes, env-var semantics, and response-schema
-  contracts. Update OpenSpec/context and tests together so docs cannot promise
-  behavior the code does not implement.
-- Simplicity gates are a merge gate (`PRINCIPLES.md` +
-  [CONTRIBUTING.md Simplicity gates](.github/CONTRIBUTING.md#simplicity-gates)).
-  New features must default off or work zero-config; new `CODEX_LB_*` settings
-  need a why-not-a-default justification in the PR body; README top-level
-  sections, `.env.example`, and dashboard core-nav items are budgeted per
-  `.github/simplicity-budgets.toml` and exceptions need the maintainer-applied
-  `simplicity-budget-approved` label; feature documentation goes to `docs/` +
-  openspec (never new README sections); dashboard-visible PRs include
-  before/after screenshots.
+- Branch from `main` (`feat/`, `fix/`, `chore/`, `perf/`, `docs/`), Conventional Commit messages and PR titles, one concern per PR. Reference issues with `Fixes #N` / `Closes #N`.
+- GitHub credentials come from `GITHUB_USER` / `GITHUB_TOKEN`; never commit tokens. HTTPS automation URL: `https://x-access-token:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git`.
+- Release: write `openspec/specs/go-runtime/releases/go-vX.Y.Z.md` (first line `# <title>`; sections «Обновление» and «Проверки и ограничения»; state schema/protocol changes), merge to `main`, then push the tag `go-vX.Y.Z`. `.github/workflows/release.yml` runs the gates, builds reproducible archives with `scripts/release.sh` and publishes them with `SHA256SUMS`. `make release VERSION=go-vX.Y.Z` builds the same archives locally without publishing. Publishing never updates a running installation.
+- Do not edit `CHANGELOG.md`-style files; release notes live in the files above.
