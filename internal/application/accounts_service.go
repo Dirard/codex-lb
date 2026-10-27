@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -216,7 +217,7 @@ func (s *AccountsService) ImportAccount(ctx context.Context, raw []byte) (Accoun
 func (s *AccountsService) persistImportedAccount(ctx context.Context, account domain.Account, credential domain.AccountCredential) (domain.Account, error) {
 	existing, err := s.accounts.GetAccount(ctx, account.ID)
 	switch {
-	case err == domain.ErrNotFound:
+	case errors.Is(err, domain.ErrNotFound):
 		settings, settingsErr := s.settings.LoadSettings(ctx)
 		if settingsErr != nil {
 			return account, settingsErr

@@ -18,7 +18,7 @@ type callbackListener struct {
 }
 
 func ListenCallback(address string, callback application.OAuthCallback) (io.Closer, error) {
-	listener, err := net.Listen("tcp", address)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", address)
 	if err != nil {
 		return nil, err
 	}

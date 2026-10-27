@@ -223,15 +223,6 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 	return choices, nil
 }
 
-func (p *Proxy) selectAccount(ctx context.Context, keyID string, request *responseRequest, settings domain.RuntimeSettings, route CapabilityRoute, owner *domain.Continuation, previous domain.Account, excluded map[string]bool) (domain.Account, pricing.Price, error) {
-	choices, err := p.accountCandidates(ctx, keyID, request, settings, route, owner, previous, excluded)
-	if err != nil {
-		return domain.Account{}, pricing.Price{}, err
-	}
-	selected, err := p.chooseAccount(choices, settings)
-	return selected.account, selected.price, err
-}
-
 func (p *Proxy) selectAccountAdmitted(ctx context.Context, keyID string, request *responseRequest, settings domain.RuntimeSettings, route CapabilityRoute, owner *domain.Continuation, previous domain.Account, excluded map[string]bool, confirmedOwner, streamWork bool, preferredAccountID ...string) (domain.Account, pricing.Price, *accountLease, error) {
 	choices, err := p.accountCandidates(ctx, keyID, request, settings, route, owner, previous, excluded)
 	if err != nil {

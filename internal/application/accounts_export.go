@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"codex-lb/internal/domain"
 )
@@ -124,8 +123,4 @@ func authExportFilename(account domain.Account) string {
 		safe = account.ID
 	}
 	return fmt.Sprintf("opencode-auth-%s.json", safe)
-}
-
-func exportTimeFormat(value time.Time) string {
-	return value.Format("2006-01-02T15:04:05.000000") + "Z"
 }

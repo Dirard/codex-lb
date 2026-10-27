@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 
 	"codex-lb/internal/domain"
 )
@@ -54,7 +55,7 @@ func (s *WarmupService) ProbeAccount(ctx context.Context, accountID, model strin
 	statusCode := 200
 	if probeErr != nil {
 		statusCode = 502
-		if probeErr == errWarmupIneligible {
+		if errors.Is(probeErr, errWarmupIneligible) {
 			statusCode = 409
 		}
 	}
@@ -65,7 +66,7 @@ func (s *WarmupService) ProbeAccount(ctx context.Context, accountID, model strin
 	}
 	result.PrimaryAfter = s.quotaWindow(ctx, accountID, "primary")
 	result.SecondaryAfter = s.quotaWindow(ctx, accountID, "secondary")
-	if probeErr != nil && probeErr != errWarmupIneligible && probeErr != errWarmupQuotaRefused {
+	if probeErr != nil && !errors.Is(probeErr, errWarmupIneligible) && !errors.Is(probeErr, errWarmupQuotaRefused) {
 		return result, probeErr
 	}
 	return result, nil

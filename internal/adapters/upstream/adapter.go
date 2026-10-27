@@ -258,7 +258,10 @@ func rejectedHTTPResult(status int, body []byte, protocol Protocol) (Result, err
 			return result, err
 		}
 	}
-	err.(*Error).RejectedBeforeExecution = true
+	var rejected *Error
+	if errors.As(err, &rejected) {
+		rejected.RejectedBeforeExecution = true
+	}
 	return result, err
 }
 
@@ -375,8 +378,4 @@ func wrapContext(ctx context.Context, err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: %w", ctx.Err(), err)
-}
-
-func isContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

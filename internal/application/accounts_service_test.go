@@ -241,7 +241,6 @@ type stubOAuthClient struct {
 	mu            sync.Mutex
 	lastState     string
 	lastChallenge string
-	authURL       string
 	codeTokens    OAuthTokens
 	codeErr       error
 	exchanges     int

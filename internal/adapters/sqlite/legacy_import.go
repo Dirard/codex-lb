@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/url"
 	"os"
@@ -210,7 +209,7 @@ func openImmutableLegacy(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec("PRAGMA query_only=ON"); err != nil {
+	if _, err := db.ExecContext(context.Background(), "PRAGMA query_only=ON"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -273,7 +272,7 @@ func preserveLegacySidecar(source, target, expectedHash string) error {
 		_ = tmp.Close()
 		return err
 	}
-	var h hash.Hash = sha256.New()
+	h := sha256.New()
 	_, copyErr := io.Copy(io.MultiWriter(tmp, h), in)
 	if copyErr == nil {
 		copyErr = tmp.Sync()

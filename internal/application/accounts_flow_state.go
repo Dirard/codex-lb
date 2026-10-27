@@ -124,9 +124,3 @@ func (s *AccountsService) stopCallbackServerLocked() {
 	s.flows.callbackServer = nil
 	_ = server.Close()
 }
-
-func (s *AccountsService) pruneExpiredPublic() {
-	s.flows.mu.Lock()
-	defer s.flows.mu.Unlock()
-	s.pruneExpiredLocked(s.now())
-}

@@ -79,10 +79,9 @@ func TestAutomationRunClaimIsIdempotentAndStaleSafe(t *testing.T) {
 	if err != nil || len(claimed) != 0 {
 		t.Fatalf("fresh running reclaimed = %+v err %v", claimed, err)
 	}
-	staleBefore := time.Unix(2500, 0)
 	// The claim above stamped started_at=now; a claim expires once it is older
 	// than the stale threshold, so push the watermark past it.
-	staleBefore = time.Now().UTC().Add(time.Hour)
+	staleBefore := time.Now().UTC().Add(time.Hour)
 	abandoned, err := store.AbandonStaleAutomationRuns(ctx, staleBefore)
 	if err != nil || abandoned != 1 {
 		t.Fatalf("stale abandon = %d err %v", abandoned, err)

@@ -59,7 +59,7 @@ func (s viewUsageStub) ConsumeResetCredit(context.Context, string, string, strin
 }
 
 func TestListAccountsIncludesQuotaCapacityAndTelemetryFields(t *testing.T) {
-	server, store, handler := newAccountsTestServer(t, &httpStubOAuth{})
+	server, store, _ := newAccountsTestServer(t, &httpStubOAuth{})
 	settings, err := store.LoadSettings(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -70,8 +70,6 @@ func TestListAccountsIncludesQuotaCapacityAndTelemetryFields(t *testing.T) {
 	}
 	usage := application.NewAccountUsageService(store, cipherTokenSource{cipher: server.cipher}, viewUsageStub{}, &noPins{}, time.Now)
 	server.ConfigureUsage(usage)
-	// listAccounts lives in registerAdmin; exercise the full production mux.
-	handler = server.Handler(nil, nil)
 
 	known := domain.Account{ID: "acct_plus", Kind: domain.AccountChatGPT, Provider: "openai", ChatGPTAccountID: "cg1", Email: "plus@example.test", PlanType: "plus", RoutingPolicy: "normal", Status: domain.AccountQuotaExceeded, CreatedAt: time.Now().UTC()}
 	unknown := domain.Account{ID: "acct_custom", Kind: domain.AccountChatGPT, Provider: "openai", ChatGPTAccountID: "cg2", Email: "custom@example.test", PlanType: "custom-plan", RoutingPolicy: "normal", Status: domain.AccountActive, CreatedAt: time.Now().UTC()}
@@ -110,7 +108,8 @@ func TestListAccountsIncludesQuotaCapacityAndTelemetryFields(t *testing.T) {
 	}
 	// Point the server at the stub-backed service for the snapshot view.
 	server.ConfigureUsage(usageStubService)
-	handler = server.Handler(nil, nil)
+	// listAccounts lives in registerAdmin; exercise the full production mux.
+	handler := server.Handler(nil, nil)
 
 	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
 	setup.Header.Set("Content-Type", "application/json")
