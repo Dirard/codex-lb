@@ -41,7 +41,13 @@ func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websock
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return turn.write(ctx, event.Data, terminalEvent(event.Type))
+			// A failed client write ends the turn: the error is returned and the
+			// turn context is cancelled.
+			err := turn.write(ctx, event.Data, terminalEvent(event.Type))
+			if err != nil {
+				cancel()
+			}
+			return err
 		})
 	}()
 	return turn.wait(ctx, done, options.Codex, p.websocketKeepaliveInterval)
@@ -126,8 +132,7 @@ func (t *websocketTurn) wait(ctx context.Context, done <-chan proxyOutcome, code
 		for {
 			select {
 			case <-ctx.Done():
-				terminal, _ := t.state()
-				return terminal, ctx.Err()
+				return t.cancelled(ctx)
 			case outcome := <-done:
 				return t.outcome(outcome)
 			case <-timer.C:
@@ -142,11 +147,20 @@ func (t *websocketTurn) wait(ctx context.Context, done <-chan proxyOutcome, code
 	}
 	select {
 	case <-ctx.Done():
-		terminal, _ := t.state()
-		return terminal, ctx.Err()
+		return t.cancelled(ctx)
 	case outcome := <-done:
 		return t.outcome(outcome)
 	}
+}
+
+// cancelled reports a cancelled turn, preferring the client write error that
+// caused the cancellation.
+func (t *websocketTurn) cancelled(ctx context.Context) (bool, error) {
+	terminal, failed := t.state()
+	if failed != nil {
+		return terminal, failed
+	}
+	return terminal, ctx.Err()
 }
 
 func (t *websocketTurn) outcome(outcome proxyOutcome) (bool, error) {

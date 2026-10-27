@@ -54,7 +54,13 @@ func (p *ProxyHandler) stream(w http.ResponseWriter, r *http.Request, options ap
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return out.event(event)
+			// A failed client write ends the attempt, as before: the error is
+			// returned and the request context is cancelled.
+			err := out.event(event)
+			if err != nil {
+				cancel()
+			}
+			return err
 		})
 	}()
 	// The heartbeat is due only after real silence; it never runs before
