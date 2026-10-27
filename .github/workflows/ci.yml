@@ -16,6 +16,7 @@ env:
   GOLANGCI_LINT_VERSION: v2.5.0
   GOVULNCHECK_VERSION: v1.6.0
   OPENSPEC_TELEMETRY: "0"
+  CODEX_LB_REQUIRE_EMBEDDED_UI: "1"
 
 jobs:
   go:
@@ -27,6 +28,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The runtime tests check the embedded dashboard, as shipped in releases.
+      - name: Build dashboard assets
+        run: |
+          npm --prefix web run install:deps
+          npm --prefix web run build
       - run: go vet ./...
       - name: golangci-lint
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@"${GOLANGCI_LINT_VERSION}" run ./...

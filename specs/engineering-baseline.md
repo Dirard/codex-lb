@@ -172,3 +172,4 @@ None blocking.
 - 2026-10-28: Legacy OpenSpec material is relocated, not deleted, so links from archived Go changes remain resolvable by path search and history stays browsable without `git log`.
 - 2026-10-28: Solution specs in `specs/` plan implementation slices; OpenSpec `openspec/specs/` stays the normative product contract. `AGENTS.md` documents this split.
 - 2026-10-28: `-race` stays in CI despite ~9 minutes because the proxy relies on concurrent ownership and settlement invariants.
+- 2026-10-28: The CI Go job builds the dashboard first: `TestRuntimeServesEmbeddedUIAndDrains` verifies the embedded UI exactly as released, so a clean checkout compiles (R6) but that runtime test needs built assets.
