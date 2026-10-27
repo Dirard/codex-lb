@@ -25,6 +25,7 @@ var (
 
 const applicationID = 0x434c4247 // CLBG
 const readPoolSize = 8
+const walSizeLimit = 64 << 20
 
 var memoryDBSequence atomic.Int64
 
@@ -33,6 +34,7 @@ var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, sche
 type Store struct {
 	db                  *sql.DB
 	filePath            string // absolute database file; empty for in-memory stores
+	maintenance         *sql.DB
 	readDB              *sql.DB
 	writer              *batchWriter
 	accountAdmissionEnv accountAdmissionEnvironment
@@ -115,13 +117,43 @@ func Open(path string) (*Store, error) {
 		_ = errors.Join(readDB.Close(), db.Close())
 		return nil, err
 	}
+	maintenanceDSN, err := maintenanceDSN(writerDSN)
+	if err != nil {
+		_ = errors.Join(readDB.Close(), db.Close())
+		return nil, err
+	}
+	maintenanceConnector, err := sqlite.NewConnector(maintenanceDSN)
+	if err != nil {
+		_ = errors.Join(readDB.Close(), db.Close())
+		return nil, err
+	}
+	// Checkpoints run outside the writer connection: PASSIVE never blocks it and
+	// TRUNCATE gives up after the short busy timeout.
+	store.maintenance = sql.OpenDB(maintenanceConnector)
+	store.maintenance.SetMaxOpenConns(1)
+	store.maintenance.SetConnMaxLifetime(0)
 	store.writer = newBatchWriter(db)
 	return store, nil
 }
 
+// Close finishes accepted writes, refreshes planner statistics and closes every
+// connection; an optimize failure does not prevent closing.
 func (s *Store) Close() error {
 	s.writer.close()
-	return errors.Join(s.readDB.Close(), s.db.Close())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, _ = s.db.ExecContext(ctx, "PRAGMA optimize")
+	cancel()
+	return errors.Join(s.maintenance.Close(), s.readDB.Close(), s.db.Close())
+}
+
+func maintenanceDSN(writerDSN string) (string, error) {
+	base, query, _ := strings.Cut(writerDSN, "?")
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return "", err
+	}
+	values.Set("_busy_timeout", "1000")
+	return base + "?" + values.Encode(), nil
 }
 
 // databaseFilePath returns the filesystem path of a file URI, or "" for an
@@ -158,6 +190,12 @@ func sqliteDSN(path string, readonly bool) (string, error) {
 	values.Set("_synchronous", "2")
 	if readonly {
 		values.Set("_query_only", "1")
+	} else {
+		// A checkpoint that resets the WAL truncates it to this size, so one
+		// large transaction or a long reader cannot grow the file forever.
+		values.Add("_pragma", fmt.Sprintf("journal_size_limit(%d)", walSizeLimit))
+		// PRAGMA optimize then samples at most this many rows per index.
+		values.Add("_pragma", "analysis_limit(400)")
 	}
 	if base == "file::memory:" {
 		base = "file::memory:"

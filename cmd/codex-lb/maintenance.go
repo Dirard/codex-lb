@@ -22,6 +22,7 @@ func (r *runtime) maintainReports(ctx context.Context) {
 	defer ticker.Stop()
 	retention := application.NewRetentionService(r.data.store, time.Now)
 	var nextRetention time.Time
+	nextOptimize := time.Now().Add(time.Hour)
 	for {
 		cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
 		if _, err := r.data.store.CleanupDeletedAccounts(cleanup, 1000); err != nil && ctx.Err() == nil {
@@ -31,6 +32,7 @@ func (r *runtime) maintainReports(ctx context.Context) {
 		if now := time.Now(); !now.Before(nextRetention) {
 			nextRetention = now.Add(r.maintainReportRetention(ctx, retention))
 		}
+		r.maintainDatabaseFiles(ctx, &nextOptimize)
 		select {
 		case <-ctx.Done():
 			return
@@ -59,6 +61,24 @@ func (r *runtime) maintainReportRetention(ctx context.Context, retention *applic
 		return retentionBacklogInterval
 	}
 	return retentionInterval
+}
+
+// maintainDatabaseFiles checkpoints the WAL every cycle (truncating it when
+// idle) and refreshes planner statistics once a day.
+func (r *runtime) maintainDatabaseFiles(ctx context.Context, nextOptimize *time.Time) {
+	checkpoint, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if _, err := r.data.store.CheckpointWAL(checkpoint); err != nil && ctx.Err() == nil {
+		r.logger.Warn("WAL checkpoint did not complete; will retry next interval")
+	}
+	cancel()
+	if now := time.Now(); !now.Before(*nextOptimize) {
+		*nextOptimize = now.Add(24 * time.Hour)
+		optimize, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := r.data.store.Optimize(optimize); err != nil && ctx.Err() == nil {
+			r.logger.Warn("planner statistics refresh did not complete; will retry tomorrow")
+		}
+		cancel()
+	}
 }
 
 // Scheduled backups wait a few minutes after start so a restart loop does not
