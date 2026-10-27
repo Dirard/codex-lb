@@ -17,6 +17,7 @@ import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import { shouldExpandAdvancedSettings } from "@/features/settings/advanced-settings-deeplink";
 import { AdvancedSettingsGroup } from "@/features/settings/components/advanced-settings-group";
 import { AppearanceSettings } from "@/features/settings/components/appearance-settings";
+import { BackupSettings } from "@/features/settings/components/backup-settings";
 import { CodexClientSettings } from "@/features/settings/components/codex-client-settings";
 import { DataRetentionSettings } from "@/features/settings/components/data-retention-settings";
 import { ImportSettings } from "@/features/settings/components/import-settings";
@@ -130,6 +131,7 @@ export function SettingsPage() {
           <div className="space-y-4">
             <AppearanceSettings />
             <RuntimeUpdateSettings canWrite={canWrite} />
+            <BackupSettings canWrite={canWrite} />
             <ImportSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
             <ResetCreditSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
             {canWrite ? <PasswordSettings disabled={busy} /> : null}

@@ -760,6 +760,17 @@ export const handlers = [
     });
   }),
 
+  http.get("/api/backups", () => {
+    return HttpResponse.json({
+      schedule: { intervalHours: 24, keep: 3 },
+      backups: [],
+      lastAttempt: null,
+      running: false,
+      encryptionKeyIncluded: false,
+      storage: { databaseBytes: 4096, walBytes: 0, backupBytes: 0, freeBytes: 1073741824, totalBytes: 4294967296 },
+    });
+  }),
+
   http.get("/api/runtime/updates", () => {
     return HttpResponse.json({
       currentVersion: "go-v1.19.0",
