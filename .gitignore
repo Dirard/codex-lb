@@ -18,7 +18,9 @@ data/
 # Go/frontend build output and preserved legacy development environments.
 /bin/
 /dist/
-/internal/adapters/webui/dist/
+# Built dashboard assets; the tracked .gitkeep lets a clean checkout compile.
+/internal/adapters/webui/dist/*
+!/internal/adapters/webui/dist/.gitkeep
 /coverage/
 *.test
 coverage.out
@@ -32,6 +34,7 @@ __pycache__/
 .hypothesis/
 
 # Agent/editor local state is not part of the server distribution.
+.agents/scheduled_tasks.lock
 .agents/logs/
 .agents/log/
 .agents/hooks/state/

@@ -1,9 +1,10 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react-swc";
 import tailwindcss from "@tailwindcss/vite";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
 const proxyTarget = process.env.API_PROXY_TARGET || "http://localhost:2455";
@@ -33,8 +34,20 @@ function manualChunks(id: string): string | undefined {
   return undefined;
 }
 
+// emptyOutDir removes the tracked placeholder that lets `//go:embed all:dist`
+// compile in a checkout without built assets; restore it after every build.
+function keepGoEmbedPlaceholder(): Plugin {
+  return {
+    name: "keep-go-embed-placeholder",
+    apply: "build",
+    closeBundle() {
+      writeFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../internal/adapters/webui/dist/.gitkeep"), "");
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), keepGoEmbedPlaceholder()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
