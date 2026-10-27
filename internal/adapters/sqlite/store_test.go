@@ -373,3 +373,22 @@ func TestRejectLegacyDatabaseWithoutMutation(t *testing.T) {
 		t.Fatalf("legacy schema modified: %d, %v", tables, err)
 	}
 }
+
+func TestOpenWithOptionsSizesTheReadPool(t *testing.T) {
+	store, err := OpenWithOptions("file:"+filepath.Join(t.TempDir(), "sized.sqlite3"), Options{ReadConnections: 13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if got := store.readDB.Stats().MaxOpenConnections; got != 13 {
+		t.Fatalf("read pool = %d, want 13", got)
+	}
+	defaulted, err := Open("file:" + filepath.Join(t.TempDir(), "default.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer defaulted.Close()
+	if got := defaulted.readDB.Stats().MaxOpenConnections; got != defaultReadConnections {
+		t.Fatalf("default read pool = %d", got)
+	}
+}

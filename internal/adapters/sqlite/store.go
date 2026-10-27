@@ -23,7 +23,13 @@ var (
 )
 
 const applicationID = 0x434c4247 // CLBG
-const readPoolSize = 8
+// defaultReadConnections is used when the caller does not size the pool from the host.
+const defaultReadConnections = 8
+
+// Options sizes the store for the host it runs on; zero values use defaults.
+type Options struct {
+	ReadConnections int
+}
 
 var memoryDBSequence atomic.Int64
 
@@ -39,7 +45,14 @@ type Store struct {
 
 // Open accepts a new Go database or one previously created by this adapter.
 // A legacy/foreign SQLite file is rejected before any schema writes.
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return OpenWithOptions(path, Options{}) }
+
+// OpenWithOptions is Open with an explicitly sized reader pool.
+func OpenWithOptions(path string, options Options) (*Store, error) {
+	readPoolSize := options.ReadConnections
+	if readPoolSize <= 0 {
+		readPoolSize = defaultReadConnections
+	}
 	if path == "" {
 		return nil, fmt.Errorf("sqlite path: %w", ErrInvalid)
 	}

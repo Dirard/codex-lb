@@ -115,7 +115,7 @@ func TestUsageTotalsReadCommittedDataWithoutWaitingForWriter(t *testing.T) {
 func TestEveryReadConnectionIsBoundedReadOnlyAndConfigured(t *testing.T) {
 	ctx := context.Background()
 	store, _ := testStore(t)
-	connections := make([]*sql.Conn, readPoolSize)
+	connections := make([]*sql.Conn, defaultReadConnections)
 	defer func() {
 		for _, conn := range connections {
 			if conn != nil {

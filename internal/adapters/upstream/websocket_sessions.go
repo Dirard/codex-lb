@@ -57,8 +57,20 @@ type websocketSessions struct {
 	entries   map[websocketKey][]*websocketSession
 	responses map[websocketResponseKey]*websocketSession
 	lanes     int
+	maxLanes  int // live session bound; 0 uses defaultWebSocketSessions
 	closed    bool
 	readers   sync.WaitGroup
+}
+
+// defaultWebSocketSessions is the measured 1 GB-host bound used when the
+// runtime does not size the pool from the host.
+const defaultWebSocketSessions = 512
+
+func (p *websocketSessions) sessionLimit() int {
+	if p.maxLanes > 0 {
+		return p.maxLanes
+	}
+	return defaultWebSocketSessions
 }
 
 func (p *websocketSessions) acquire(ctx context.Context, target Target, previous string, client *http.Client) (*websocketSession, Result, error) {
@@ -117,7 +129,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 				}
 			}
 			if entry == nil {
-				if p.lanes >= 512 {
+				if p.lanes >= p.sessionLimit() {
 					var oldest *websocketSession
 					for _, lanes := range p.entries {
 						for _, candidate := range lanes {
