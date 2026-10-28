@@ -550,3 +550,10 @@ Rollout switch `CODEX_LB_USAGE_ROLLUPS=off|shadow|on` (shadow: read raw and veri
 - D6: a verifier mismatch logs `usage_rollup_mismatch`, counts it and rebuilds; queries use the raw path meanwhile.
 - D7: long-range legacy rollups (phase 3) are decided later.
 - No `CODEX_LB_USAGE_ROLLUPS` switch: the automatic raw fallback and the verifier make it unnecessary (simplicity gate: no new setting without a reason a default cannot serve).
+
+## Implementation decisions (PR 1, part A)
+
+- Codec: `histQuantile(h, q)` gives any quantile (p50, p95, …) by linear interpolation between the representative values around rank `q·(n−1)`; for `q=0.5` that is the median rank rule, and `median` is implemented through it. Bound: within `q/64` of the same interpolation over exact values (values < 32 exact), plus 0.005 rounding for daily medians and 0.01 more for the stored TPS floor. Property-tested in `rollup_hist_test.go`.
+- Layout 1 has a fourth histogram, `total_hist` (total request latency, sampled when `total_latency_ms>0`), on `usage_rollup_total_hour` and `usage_rollup_cube_hour`, folded and journaled like the other three. No current response shows it; the key page's total-latency p50/p95 will, without a layout change.
+- Migration 42 adds `idx_usage_rollup_error_key ON usage_rollup_error_hour(api_key_dim,bucket_epoch)` for per-key error breakdowns.
+- The delete trigger has no `WHEN` clause: its journal insert and `folded_rows` decrement are conditioned on `OLD.rowid<=folded_rowid`, and the cursor is lowered on every delete that leaves `folded_rowid > max(rowid)`. With the `WHEN` of §2.1, deleting an unfolded maximum row after the folded maximum had already been deleted left the cursor above the remaining maximum, and the next insert reused a folded rowid (covered by `TestUsageRollupDeleteTriggerKeepsInsertsAboveTheCursor`).
