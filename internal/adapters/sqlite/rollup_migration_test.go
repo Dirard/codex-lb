@@ -26,27 +26,28 @@ func syntheticUsageEvents() int {
 }
 
 // insertSyntheticUsageEvents adds n events from first on, about 3.5 s apart
-// with jitter, shaped like production: keys pinned mostly to one account,
-// model and user agent, about 60 concurrent conversations, warmups, errors,
-// NULL dimensions and negative queue latencies.
+// with jitter, shaped like production: about 60 concurrent conversations of
+// ~25 requests, each on one key; keys pinned mostly to one account, model and
+// user agent; warmups, errors, NULL dimensions and negative queue latencies.
 func insertSyntheticUsageEvents(ctx context.Context, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, first, n int, start time.Time) error {
 	_, err := db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT ? UNION ALL SELECT i+1 FROM n WHERE i<?),
- g AS (SELECT i,(i*2654435761)%4294967296 AS h FROM n)
+ h AS (SELECT i,(i*2654435761)%4294967296 AS h,(i/1500)*60+((i*2654435761)%4294967296)%60 AS c FROM n),
+ g AS (SELECT i,h,c,CASE WHEN h%13=0 THEN h%28 ELSE c%28 END AS k FROM h)
 INSERT INTO usage_events(request_id,api_key_id,account_id,model,status,error_code,request_kind,requested_at,
  conversation_id,useragent_group,reasoning_effort,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,
  reasoning_tokens_known,cost_microdollars,queue_latency_ms,total_latency_ms,latency_first_token_ms)
-SELECT printf('synthetic-%07d',i),'key-'||(h%28),
- CASE WHEN h%200=7 THEN NULL WHEN h%10=0 THEN 'acct-'||((h/10)%9) ELSE 'acct-'||((h%28)%9) END,
- CASE WHEN (h/7)%5=0 THEN 'model-'||((h/35)%5) ELSE 'model-'||((h%28)%5) END,
+SELECT printf('synthetic-%07d',i),'key-'||k,
+ CASE WHEN h%200=7 THEN NULL WHEN h%10=0 THEN 'acct-'||((h/10)%9) ELSE 'acct-'||(k%9) END,
+ CASE WHEN (h/7)%10=0 THEN 'model-'||((h/35)%5) ELSE 'model-'||(k%5) END,
  CASE h%50 WHEN 0 THEN 'error' WHEN 1 THEN 'cancelled' WHEN 2 THEN 'quota' ELSE 'success' END,
  CASE h%50 WHEN 0 THEN 'upstream_error' WHEN 2 THEN 'rate_limited' ELSE '' END,
  CASE WHEN h%300=0 THEN 'warmup' ELSE 'normal' END,
  ?+i*3500+h%3000,
- CASE WHEN h%13=0 THEN NULL ELSE 'conv-'||((i/1500)*60+h%60) END,
- CASE WHEN h%97=0 THEN NULL ELSE 'ua-'||((h%28)%3) END,
- CASE (h/3)%4 WHEN 0 THEN NULL WHEN 1 THEN 'low' WHEN 2 THEN 'medium' ELSE 'high' END,
+ CASE WHEN h%13=0 THEN NULL ELSE 'conv-'||c END,
+ CASE WHEN h%97=0 THEN NULL ELSE 'ua-'||(k%3) END,
+ CASE (CASE WHEN (h/3)%10=0 THEN h/5 ELSE c END)%4 WHEN 0 THEN NULL WHEN 1 THEN 'low' WHEN 2 THEN 'medium' ELSE 'high' END,
  500+h%20000,50+(h/11)%2000,(h/13)%15000,(h/17)%500,(h/19)%2,100+(h/23)%200000,
  (h/29)%80-2,500+(h/31)%60000,CASE WHEN (h/37)%6=0 THEN NULL ELSE 50+(h/41)%4000 END FROM g`,
 		first, first+n-1, millis(start))

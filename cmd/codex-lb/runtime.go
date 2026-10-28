@@ -45,6 +45,7 @@ type runtime struct {
 	usage          *application.AccountUsageService
 	catalog        *application.ModelCatalogService
 	automations    *application.AutomationsService
+	rollups        *application.UsageRollupService
 	backups        *application.BackupService
 	backgroundCtx  context.Context
 	stopBackground context.CancelFunc
@@ -209,13 +210,18 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		data.close()
 		return nil, err
 	}
+	rollups := application.NewUsageRollupService(data.store, time.Now, logger)
+	rollups.Checkpoint = func(ctx context.Context) error {
+		_, err := data.store.CheckpointWAL(ctx)
+		return err
+	}
 	backupService := application.NewBackupService(sqlite.NewSnapshotter(data.store, data.vault), data.store, backupFiles, time.Now)
 	api.ConfigureBackups(backupService)
 	baseCtx, cancel := context.WithCancel(context.Background())
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	r := &runtime{data: data, accounts: accounts, tokens: tokens, provider: adapter,
 		proxy: proxy, transport: transport, cancel: cancel, config: cfg, logger: logger,
-		usage: usage, catalog: catalog, automations: automations, backups: backupService,
+		usage: usage, catalog: catalog, automations: automations, rollups: rollups, backups: backupService,
 		backgroundCtx: backgroundCtx, stopBackground: stopBackground,
 		metrics: registry, capacity: capacity, started: openedAt, backupFiles: backupFiles,
 		retireStart: make(chan struct{}), retired: make(chan struct{})}
@@ -296,7 +302,7 @@ func (r *runtime) startBackground() {
 			return
 		default:
 		}
-		r.background.Add(7)
+		r.background.Add(8)
 		go func() {
 			defer r.background.Done()
 			// A retiring worker may still write a requested backup's temp file.
@@ -312,6 +318,13 @@ func (r *runtime) startBackground() {
 		go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
 		go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
 		go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
+		// Usage rollups fold inserts of every worker, so the folder does not
+		// wait for a retiring one.
+		go func() {
+			defer r.background.Done()
+			r.rollups.RunPeriodic(r.backgroundCtx, application.BackgroundSchedule{
+				InitialDelay: startupJitter(2*time.Second, 3*time.Second), Report: r.reporter.report})
+		}()
 		go func() {
 			defer r.background.Done()
 			// Repricing writes in long chunk series; let a retiring worker

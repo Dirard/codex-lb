@@ -258,3 +258,32 @@ func rollupTPSSample(output, generation int64) int64 {
 func (l rollupLatency) medians() (ttft, queue, tps float64) {
 	return l.ttft.median(1), l.queue.median(1), l.tps.median(rollupTPSScale)
 }
+
+func (l rollupLatency) merge(other rollupLatency, sign int64) rollupLatency {
+	return rollupLatency{l.ttft.merge(other.ttft, sign), l.queue.merge(other.queue, sign),
+		l.tps.merge(other.tps, sign), l.total.merge(other.total, sign)}
+}
+
+func (l rollupLatency) negative() bool {
+	return l.ttft.negative() || l.queue.negative() || l.tps.negative() || l.total.negative()
+}
+
+// encode returns the ttft_hist, queue_hist, tps_hist and total_hist values.
+func (l rollupLatency) encode() (ttft, queue, tps, total []byte) {
+	return l.ttft.encode(), l.queue.encode(), l.tps.encode(), l.total.encode()
+}
+
+// decodeRollupLatency reads the four histogram columns of a rollup row.
+func decodeRollupLatency(ttft, queue, tps, total []byte) (rollupLatency, error) {
+	var l rollupLatency
+	var err error
+	for _, column := range []struct {
+		data []byte
+		hist *rollupHist
+	}{{ttft, &l.ttft}, {queue, &l.queue}, {tps, &l.tps}, {total, &l.total}} {
+		if *column.hist, err = decodeRollupHist(column.data); err != nil {
+			return l, err
+		}
+	}
+	return l, nil
+}

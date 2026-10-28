@@ -68,6 +68,8 @@ type Store struct {
 	accountAdmissionEnv accountAdmissionEnvironment
 	affinityStartupTTL  int
 	instanceID          string
+	// rollupFailpoint, set only by tests, fails a chosen usage rollup write.
+	rollupFailpoint func() error
 }
 
 // Open accepts a new Go database or one previously created by this adapter.
