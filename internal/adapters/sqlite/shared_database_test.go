@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -409,27 +410,7 @@ func TestMarkInterruptedReservationsSparesLiveOwners(t *testing.T) {
  VALUES('unowned','key','acct','gpt-test','reserved',0,0)`); err != nil {
 		t.Fatal(err)
 	}
-	state := func() map[string]string {
-		t.Helper()
-		rows, err := first.readDB.QueryContext(ctx, `SELECT id,owner_instance,needs_reconciliation FROM usage_reservations`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rows.Close()
-		out := map[string]string{}
-		for rows.Next() {
-			var id, owner string
-			var flagged int
-			if err := rows.Scan(&id, &owner, &flagged); err != nil {
-				t.Fatal(err)
-			}
-			out[id] = fmt.Sprintf("%s/%d", owner, flagged)
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
+	state := func() map[string]string { return reservationOwners(t, first) }
 	owned := state()
 	if owned["first"] != first.InstanceID()+"/0" || owned["second"] != "worker-b/0" || owned["second-warmup"] != "worker-b/0" || owned["unowned"] != "/0" {
 		t.Fatalf("reservation owners: %v", owned)
@@ -446,6 +427,88 @@ func TestMarkInterruptedReservationsSparesLiveOwners(t *testing.T) {
 	}
 	if all := state(); all["first"] != first.InstanceID()+"/1" {
 		t.Fatalf("unscoped mark spared a reservation: %v", all)
+	}
+}
+
+// reservationOwners maps each reservation id to "owner/needs_reconciliation".
+func reservationOwners(t *testing.T, store *Store) map[string]string {
+	t.Helper()
+	rows, err := store.readDB.QueryContext(context.Background(), `SELECT id,owner_instance,needs_reconciliation FROM usage_reservations`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, owner string
+		var flagged int
+		if err := rows.Scan(&id, &owner, &flagged); err != nil {
+			t.Fatal(err)
+		}
+		out[id] = fmt.Sprintf("%s/%d", owner, flagged)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Marking named exited workers flags only their open reservations: a worker
+// that is not named (one started after the exit, the caller, or a release that
+// recorded no owner) and settled or already flagged rows stay as they are.
+func TestMarkInstanceReservationsInterruptedFlagsOnlyNamedWorkers(t *testing.T) {
+	ctx := context.Background()
+	first, path := testStore(t)
+	second := openPeerStore(t, path, Options{InstanceID: "worker-b"})
+	exited := openPeerStore(t, path, Options{InstanceID: "worker-c"})
+	saveTestAccount(t, first, "acct")
+	if err := first.SaveAPIKey(ctx, testKey("key", nil), fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		store *Store
+		id    string
+	}{{first, "first"}, {second, "second"}, {exited, "exited"}, {exited, "exited-settled"}} {
+		if _, err := item.store.ReserveUsage(ctx, domain.ReservationRequest{ID: item.id, APIKeyID: "key",
+			AccountID: "acct", Model: "gpt-test", Now: fixedTime}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := exited.ReserveWarmupUsage(ctx, "exited-warmup", "acct", "gpt-test", 0, false, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exited.SettleUsage(ctx, "exited-settled", domain.UsageSettlement{Status: "finalized", Event: domain.UsageEvent{
+		RequestID: "event-settled", APIKeyID: "key", AccountID: "acct", Model: "gpt-test", RequestKind: "normal",
+		Status: "success", RequestedAt: fixedTime}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.db.ExecContext(ctx, `INSERT INTO usage_reservations(id,api_key_id,account_id,model,status,created_at,updated_at)
+ VALUES('unowned','key','acct','gpt-test','reserved',0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	before := reservationOwners(t, first)
+	for _, instances := range [][]string{nil, {}, {""}, {"worker-gone"}} {
+		if count, err := first.MarkInstanceReservationsInterrupted(ctx, instances); err != nil || count != 0 {
+			t.Fatalf("mark %q = %d, %v", instances, count, err)
+		}
+	}
+	if after := reservationOwners(t, first); !maps.Equal(after, before) {
+		t.Fatalf("marking no known worker changed %v to %v", before, after)
+	}
+	if count, err := first.MarkInstanceReservationsInterrupted(ctx, []string{"", "worker-c"}); err != nil || count != 2 {
+		t.Fatalf("mark exited worker = %d, %v", count, err)
+	}
+	want := map[string]string{"first": first.InstanceID() + "/0", "second": "worker-b/0", "exited": "worker-c/1",
+		"exited-warmup": "worker-c/1", "exited-settled": "worker-c/0", "unowned": "/0"}
+	if got := reservationOwners(t, first); !maps.Equal(got, want) {
+		t.Fatalf("after marking the exited worker: %v, want %v", got, want)
+	}
+	if count, err := first.MarkInstanceReservationsInterrupted(ctx, []string{"worker-c", "worker-b"}); err != nil || count != 1 {
+		t.Fatalf("mark again = %d, %v", count, err)
+	}
+	want["second"] = "worker-b/1"
+	if got := reservationOwners(t, first); !maps.Equal(got, want) {
+		t.Fatalf("after marking both peers: %v, want %v", got, want)
 	}
 }
 
