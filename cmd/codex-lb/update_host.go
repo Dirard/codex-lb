@@ -294,8 +294,13 @@ func (h *updateHost) childExited(child *updateChild, err error) {
 	}
 }
 
+// workerReadyTimeout bounds a worker's start, which includes its migrations:
+// 33 → 41 on a 1.3 GB production database took 8 s, so a large or slow disk
+// keeps a wide margin before a migrating worker would be given up.
+const workerReadyTimeout = 10 * time.Minute
+
 func (h *updateHost) awaitReady(ctx context.Context, child *updateChild, version string) error {
-	ready, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ready, cancel := context.WithTimeout(ctx, workerReadyTimeout)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

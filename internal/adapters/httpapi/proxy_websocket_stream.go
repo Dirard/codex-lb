@@ -15,9 +15,11 @@ import (
 // response prelude. The application worker writes events directly through
 // websocketTurn, so emit returns only after the client accepted the frame;
 // the handler goroutine only sends native heartbeats after real silence.
-func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage) (bool, error) {
+// onTerminal runs once, before the terminal frame is written: a client frame
+// that follows the terminal then always finds the turn finalizing.
+func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage, onTerminal func()) (bool, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	turn := &websocketTurn{connection: connection, lastWrite: time.Now()}
+	turn := &websocketTurn{connection: connection, lastWrite: time.Now(), onTerminal: onTerminal}
 	done := make(chan proxyOutcome, 1)
 	workerDone := make(chan struct{})
 	defer func() { cancel(); <-workerDone }()
@@ -61,6 +63,8 @@ type websocketTurn struct {
 	failed     error
 	lastWrite  time.Time
 	responseID string
+	onTerminal func()
+	terminalAt sync.Once
 }
 
 func (t *websocketTurn) setResponseID(id string) {
@@ -85,6 +89,9 @@ func (t *websocketTurn) writeLocked(ctx context.Context, data []byte) error {
 }
 
 func (t *websocketTurn) write(ctx context.Context, data []byte, terminal bool) error {
+	if terminal && t.onTerminal != nil {
+		t.terminalAt.Do(t.onTerminal)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err := t.writeLocked(ctx, data); err != nil {
