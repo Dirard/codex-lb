@@ -49,6 +49,13 @@ func seedRollupEquivalence(t *testing.T, s *Store, random *rand.Rand) {
 			t.Fatal(err)
 		}
 	}
+	for i, account := range []string{"acct-0", "", "acct-2"} {
+		if _, err := s.db.Exec(`INSERT INTO usage_reservations(id,api_key_id,account_id,model,status,created_at,updated_at,
+ needs_reconciliation) VALUES(?,'key-0',?,'model-pending','reserved',?,?,1)`, fmt.Sprintf("pending-%d", i), account,
+			millis(rollupSpringBase.Add(time.Duration(i)*72*time.Hour)), millis(rollupSpringBase)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	setRollupWatermark(t, s, rollupSpringBase.Add(3*24*time.Hour+30*time.Minute))
 	insertRollupFixtureAt(t, s, random, 0, 2200, rollupSpringBase, 22*24*time.Hour)
 	insertRollupFixtureAt(t, s, random, 2200, 2200, rollupAutumnBase, 34*24*time.Hour)
@@ -79,9 +86,11 @@ func seedRollupEquivalence(t *testing.T, s *Store, random *rand.Rand) {
 
 // rollupReadCase is one analytics read through both paths.
 type rollupReadCase struct {
-	name   string
+	name string
+	// raw marks a filter the rollups always hand to the raw path.
+	raw    bool
 	rollup func(ctx context.Context, r *rollupRead) (any, error)
-	raw    func(ctx context.Context, tx *sql.Tx) (any, error)
+	oracle func(ctx context.Context, tx *sql.Tx) (any, error)
 }
 
 // assertRollupReadsMatchRaw evaluates every case through the rollup and the
@@ -102,11 +111,16 @@ func assertRollupReadsMatchRaw(t *testing.T, s *Store, state string, cases []rol
 	declined := 0
 	for _, c := range cases {
 		got, err := c.rollup(ctx, reader)
-		if errors.Is(err, errRollupDeclined) {
-			declined++
+		if declines := errors.Is(err, errRollupDeclined); declines || c.raw {
+			if !declines {
+				t.Fatalf("%s %s: the rollups served a raw-only read", state, c.name)
+			}
+			if !c.raw {
+				declined++
+			}
 			continue
 		}
-		want, wantErr := c.raw(ctx, tx)
+		want, wantErr := c.oracle(ctx, tx)
 		if (err == nil) != (wantErr == nil) || err != nil && !errors.Is(err, wantErr) && err.Error() != wantErr.Error() {
 			t.Fatalf("%s %s: rollup error %v, raw error %v", state, c.name, err, wantErr)
 		}
@@ -154,7 +168,7 @@ func rollupReportCases(t *testing.T) []rollupReadCase {
 					rollup: func(ctx context.Context, r *rollupRead) (any, error) {
 						return r.queryReports(ctx, filter)
 					},
-					raw: func(ctx context.Context, tx *sql.Tx) (any, error) { return queryReportsRaw(ctx, tx, filter) },
+					oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return queryReportsRaw(ctx, tx, filter) },
 				})
 			}
 		}
@@ -168,6 +182,60 @@ func rollupEquivalenceCases(t *testing.T, random *rand.Rand) []rollupReadCase {
 	cases := rollupReportCases(t)
 	cases = append(cases, rollupDashboardCases(random)...)
 	cases = append(cases, rollupKeyCases(random)...)
+	cases = append(cases, rollupRequestLogCases(random)...)
+	return cases
+}
+
+// rollupRequestLogCases are request-log facets and totals without bounds,
+// for timeframes and every filter the log cube serves; search and
+// conversation filters are declined.
+func rollupRequestLogCases(random *rand.Rand) []rollupReadCase {
+	var cases []rollupReadCase
+	at := func() *time.Time { value := rollupRandomInstant(random); return &value }
+	filters := []domain.RequestLogFilter{
+		{},
+		{AccountIDs: []string{"acct-0", ""}},
+		{AccountIDs: []string{"\x1fodd"}, Statuses: []string{"error", "cancelled"}},
+		{APIKeyIDs: []string{"key-1", "\x1fk"}},
+		{Models: []string{"model-1"}, ReasoningEfforts: []string{"low", ""}},
+		{ModelOptions: []string{"model-0:::high", "model-2", "model-1:::", ":::x"}},
+		{ModelOptions: []string{":::x"}},
+		{Statuses: []string{"success"}},
+		{Search: "conv"},
+		{ConversationID: "conv-a"},
+	}
+	for i, filter := range filters {
+		for _, bounds := range []int{0, 1, 2, 3} {
+			filter := filter
+			switch bounds {
+			case 1:
+				since := at()
+				filter.Since = since
+			case 2:
+				until := at()
+				since := until.Add(-24 * time.Hour)
+				filter.Since, filter.Until = &since, until
+			case 3:
+				filter.Until = at()
+			}
+			if i > 0 && bounds == 3 {
+				continue
+			}
+			options := filter
+			options.Statuses = nil
+			cases = append(cases, rollupReadCase{
+				name:   fmt.Sprintf("request-log options %d/%d", i, bounds),
+				raw:    !requestLogCubeEligible(filter),
+				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.requestLogOptions(ctx, options) },
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return requestLogOptionsRaw(ctx, tx, options) },
+			}, rollupReadCase{
+				name:   fmt.Sprintf("request-log total %d/%d", i, bounds),
+				raw:    !requestLogCubeEligible(filter),
+				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.requestLogTotal(ctx, filter) },
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return requestLogTotalRaw(ctx, tx, filter) },
+			})
+		}
+	}
 	return cases
 }
 
@@ -182,13 +250,13 @@ func rollupKeyCases(random *rand.Rand) []rollupReadCase {
 			cases = append(cases, rollupReadCase{
 				name:   fmt.Sprintf("key usage %q %s", key, until),
 				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.keyUsage7Day(ctx, key, since, until) },
-				raw:    func(ctx context.Context, tx *sql.Tx) (any, error) { return keyUsage7DayRaw(ctx, tx, key, since, until) },
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return keyUsage7DayRaw(ctx, tx, key, since, until) },
 			}, rollupReadCase{
 				name: fmt.Sprintf("key trends %q %s", key, until),
 				rollup: func(ctx context.Context, r *rollupRead) (any, error) {
 					return r.keyTrendBuckets(ctx, key, since, until)
 				},
-				raw: func(ctx context.Context, tx *sql.Tx) (any, error) {
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) {
 					return keyTrendBucketsRaw(ctx, tx, key, since, until)
 				},
 			})
@@ -220,7 +288,7 @@ func rollupDashboardCases(random *rand.Rand) []rollupReadCase {
 				rollup: func(ctx context.Context, r *rollupRead) (any, error) {
 					return r.dashboardTraffic(ctx, start, end, frame.size, frame.buckets)
 				},
-				raw: func(ctx context.Context, tx *sql.Tx) (any, error) {
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) {
 					return queryDashboardTrafficRaw(ctx, tx, start, end, frame.size, frame.buckets)
 				},
 			})
