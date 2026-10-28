@@ -23,17 +23,25 @@ func conversationWhere(filter domain.ConversationFilter) (string, []any) {
 	return where, args
 }
 
+// ListConversations lists conversations by latest request from rollups
+// (reports_conversations_rollup.go) or, as fallback and oracle, from raw
+// events.
 func (s *Store) ListConversations(ctx context.Context, filter domain.ConversationFilter) (domain.ConversationsResponse, error) {
-	result := domain.ConversationsResponse{Conversations: []domain.ConversationEntry{}}
 	if filter.Limit < 1 || filter.Limit > 1000 || filter.Offset < 0 {
-		return result, ErrInvalid
+		return domain.ConversationsResponse{Conversations: []domain.ConversationEntry{}}, ErrInvalid
 	}
+	return analyticsRead(ctx, s, func(r *rollupRead) (domain.ConversationsResponse, error) { return r.listConversations(ctx, filter) },
+		func(tx *sql.Tx) (domain.ConversationsResponse, error) { return listConversationsRaw(ctx, tx, filter) })
+}
+
+func listConversationsRaw(ctx context.Context, q analyticsQuerier, filter domain.ConversationFilter) (domain.ConversationsResponse, error) {
+	result := domain.ConversationsResponse{Conversations: []domain.ConversationEntry{}}
 	where, args := conversationWhere(filter)
-	if err := s.analyticsDB.QueryRowContext(ctx, `SELECT count(DISTINCT trim(e.conversation_id))
+	if err := q.QueryRowContext(ctx, `SELECT count(DISTINCT trim(e.conversation_id))
  FROM usage_events e WHERE `+where, args...).Scan(&result.Total); err != nil {
 		return result, err
 	}
-	rows, err := s.analyticsDB.QueryContext(ctx, `SELECT trim(e.conversation_id),min(e.requested_at),max(e.requested_at),
+	rows, err := q.QueryContext(ctx, `SELECT trim(e.conversation_id),min(e.requested_at),max(e.requested_at),
  count(*),count(DISTINCT e.account_id),count(DISTINCT e.model),
  coalesce(sum(e.input_tokens+e.output_tokens),0),coalesce(sum(e.cached_input_tokens),0),
  coalesce(sum(e.cost_microdollars),0)
@@ -66,7 +74,7 @@ func (s *Store) ListConversations(ctx context.Context, filter domain.Conversatio
 	for index := range result.Conversations {
 		entry := &result.Conversations[index]
 		var account, key, name, model sql.NullString
-		err := s.analyticsDB.QueryRowContext(ctx, `SELECT e.account_id,e.api_key_id,k.name,e.model
+		err := q.QueryRowContext(ctx, `SELECT e.account_id,e.api_key_id,k.name,e.model
  FROM usage_events e LEFT JOIN api_keys k ON k.id=e.api_key_id
  WHERE trim(e.conversation_id)=? AND e.request_kind NOT IN ('warmup','limit_warmup')
  AND e.legacy_deleted=0 ORDER BY e.requested_at DESC,e.request_id DESC LIMIT 1`,
@@ -85,13 +93,21 @@ func (s *Store) ListConversations(ctx context.Context, filter domain.Conversatio
 	return result, nil
 }
 
+// ConversationDetails summarizes one conversation from rollups
+// (reports_conversations_rollup.go) or, as fallback and oracle, from raw
+// events.
 func (s *Store) ConversationDetails(ctx context.Context, id string) (domain.ConversationDetails, error) {
-	var result domain.ConversationDetails
 	if strings.TrimSpace(id) == "" {
-		return result, ErrInvalid
+		return domain.ConversationDetails{}, ErrInvalid
 	}
+	return analyticsRead(ctx, s, func(r *rollupRead) (domain.ConversationDetails, error) { return r.conversationDetails(ctx, id) },
+		func(tx *sql.Tx) (domain.ConversationDetails, error) { return conversationDetailsRaw(ctx, tx, id) })
+}
+
+func conversationDetailsRaw(ctx context.Context, q analyticsQuerier, id string) (domain.ConversationDetails, error) {
+	var result domain.ConversationDetails
 	var first, last sql.NullInt64
-	err := s.analyticsDB.QueryRowContext(ctx, `SELECT min(e.requested_at),max(e.requested_at),
+	err := q.QueryRowContext(ctx, `SELECT min(e.requested_at),max(e.requested_at),
  count(DISTINCT e.account_id),coalesce(sum(e.total_latency_ms),0)
  FROM usage_events e WHERE trim(e.conversation_id)=?
  AND e.request_kind NOT IN ('warmup','limit_warmup') AND e.legacy_deleted=0`, id).
@@ -105,7 +121,7 @@ func (s *Store) ConversationDetails(ctx context.Context, id string) (domain.Conv
 	result.ConversationID = id
 	result.Start, result.Latest = fromMillis(first.Int64), fromMillis(last.Int64)
 	var group string
-	err = s.analyticsDB.QueryRowContext(ctx, `SELECT e.useragent_group FROM usage_events e
+	err = q.QueryRowContext(ctx, `SELECT e.useragent_group FROM usage_events e
  WHERE trim(e.conversation_id)=? AND e.useragent_group IS NOT NULL
  AND e.request_kind NOT IN ('warmup','limit_warmup') AND e.legacy_deleted=0
  GROUP BY e.useragent_group ORDER BY count(*) DESC,e.useragent_group LIMIT 1`, id).Scan(&group)
@@ -114,13 +130,13 @@ func (s *Store) ConversationDetails(ctx context.Context, id string) (domain.Conv
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return result, err
 	}
-	rows, err := s.analyticsDB.QueryContext(ctx, `SELECT e.model,e.reasoning_effort,count(*),
+	rows, err := q.QueryContext(ctx, `SELECT e.model,e.reasoning_effort,count(*),
  coalesce(sum(e.total_latency_ms),0),coalesce(sum(e.input_tokens),0),
  coalesce(sum(e.cached_input_tokens),0),coalesce(sum(e.output_tokens),0),
  coalesce(sum(e.cost_microdollars),0)
  FROM usage_events e WHERE trim(e.conversation_id)=?
  AND e.request_kind NOT IN ('warmup','limit_warmup') AND e.legacy_deleted=0
- GROUP BY e.model,e.reasoning_effort ORDER BY sum(e.cost_microdollars) DESC,e.model LIMIT 2000`, id)
+ GROUP BY e.model,e.reasoning_effort ORDER BY sum(e.cost_microdollars) DESC,e.model,e.reasoning_effort LIMIT 2000`, id)
 	if err != nil {
 		return result, err
 	}

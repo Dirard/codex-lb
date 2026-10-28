@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,6 +184,39 @@ func rollupEquivalenceCases(t *testing.T, random *rand.Rand) []rollupReadCase {
 	cases = append(cases, rollupDashboardCases(random)...)
 	cases = append(cases, rollupKeyCases(random)...)
 	cases = append(cases, rollupRequestLogCases(random)...)
+	cases = append(cases, rollupConversationCases(random)...)
+	return cases
+}
+
+// rollupConversationCases are conversation lists for timeframes, searches
+// and pages, and conversation details of present, blank-padded, folded-only
+// and unknown ids.
+func rollupConversationCases(random *rand.Rand) []rollupReadCase {
+	var cases []rollupReadCase
+	for _, search := range []string{"", "conv", "a", "conv-a", "%", "_", " conv"} {
+		for _, page := range [][2]int{{5, 0}, {3, 2}, {1000, 0}, {2, 100}} {
+			var since time.Time
+			if page[1] == 2 {
+				since = rollupRandomInstant(random).Add(-7 * 24 * time.Hour)
+			} else if page[0] == 5 {
+				since = rollupRandomInstant(random).Add(-30 * 24 * time.Hour)
+			}
+			filter := domain.ConversationFilter{Since: since, Search: search, Limit: page[0], Offset: page[1]}
+			cases = append(cases, rollupReadCase{
+				name:   fmt.Sprintf("conversations %+v", filter),
+				raw:    search != strings.Trim(search, " "),
+				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.listConversations(ctx, filter) },
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return listConversationsRaw(ctx, tx, filter) },
+			})
+		}
+	}
+	for _, id := range []string{"conv-a", "conv-b", "conv-c", "conv-legacy", " conv-a ", "missing"} {
+		cases = append(cases, rollupReadCase{
+			name:   fmt.Sprintf("conversation %q", id),
+			rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.conversationDetails(ctx, id) },
+			oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return conversationDetailsRaw(ctx, tx, id) },
+		})
+	}
 	return cases
 }
 
@@ -340,7 +374,48 @@ func TestRollupReadersMatchRawEventsInEveryFoldState(t *testing.T) {
 			t.Fatalf("round %d: %d reads declined without pending journal", round, n)
 		}
 	}
-	t.Logf("%d cases per state, %d reads declined while journal rows were pending", len(cases), declined)
+	// Repricing journals cost-only rows, which every reader applies itself.
+	if _, err := s.db.Exec(`UPDATE usage_events SET cost_microdollars=cost_microdollars+7 WHERE abs(random())%3=0`); err != nil {
+		t.Fatal(err)
+	}
+	insertRollupFixtureAt(t, s, random, 20000, 50, rollupAutumnBase, 34*24*time.Hour)
+	if n := check("(c) repricing journal and tail"); n != 0 {
+		t.Fatalf("%d reads declined a cost-only journal", n)
+	}
+	t.Logf("%d cases per state, %d reads declined while removals were pending", len(cases), declined)
+	assertRollupFixtureExercised(t, s)
+}
+
+// assertRollupFixtureExercised guards against a fixture whose reads are
+// trivially equal because they are empty.
+func assertRollupFixtureExercised(t *testing.T, s *Store) {
+	t.Helper()
+	ctx := context.Background()
+	end := time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)
+	report, err := s.QueryReports(ctx, domain.ReportFilter{Start: end.AddDate(0, 0, -7), End: end, PreviousStart: end.AddDate(0, 0, -14)})
+	if err != nil || report.Summary.TotalRequests < 300 || report.Summary.TotalConversations < 3 || report.Summary.ActiveAccounts < 3 ||
+		report.Daily[3].MedianTTFTMS == 0 || len(report.ByModel) < 3 || len(report.ByUserAgent) < 4 || !report.Comparison.CanCompare {
+		t.Fatalf("report fixture %+v %v", report.Summary, err)
+	}
+	traffic, err := s.QueryDashboardTraffic(ctx, end.Add(-24*time.Hour), end, 3600, 24)
+	if err != nil || traffic.CurrentConversations == 0 || traffic.TopError == nil || traffic.Buckets[5].Requests == 0 {
+		t.Fatalf("dashboard fixture %+v %v", traffic, err)
+	}
+	usage, err := s.KeyUsage7Day(ctx, "key-0", end.Add(-7*24*time.Hour), end)
+	if err != nil || usage.TotalRequests == 0 || len(usage.AccountCosts) < 2 {
+		t.Fatalf("key usage fixture %+v %v", usage, err)
+	}
+	options, err := s.RequestLogOptions(ctx, domain.RequestLogFilter{})
+	if err != nil || len(options.AccountIDs) < 3 || len(options.APIKeys) != 2 || len(options.ModelOptions) < 6 || len(options.Statuses) < 5 {
+		t.Fatalf("options fixture %+v %v", options, err)
+	}
+	conversations, err := s.ListConversations(ctx, domain.ConversationFilter{Limit: 10})
+	if err != nil || conversations.Total < 3 || conversations.Conversations[0].RequestCount < 10 {
+		t.Fatalf("conversations fixture %+v %v", conversations, err)
+	}
+	if details, err := s.ConversationDetails(ctx, "conv-a"); err != nil || len(details.ModelStats) < 3 || details.DominantUserAgentGroup == nil {
+		t.Fatalf("conversation fixture %+v %v", details, err)
+	}
 }
 
 // mutateRollupEquivalence changes folded events as the writers of every
