@@ -16,7 +16,7 @@ func (s *Store) KeyTrendBuckets(ctx context.Context, keyID string, since, until 
 	filter := domain.ReportFilter{APIKeyIDs: []string{keyID}}
 	facts, args := reportFacts(filter, since, until)
 	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT (at_ms/3600000)*3600000,
- coalesce(sum(input_tokens+output_tokens),0),coalesce(sum(cost_usd),0)
+ coalesce(sum(input_tokens+output_tokens),0),coalesce(sum(cost_usd),0),coalesce(sum(cost_micro),0)
  FROM facts GROUP BY 1 ORDER BY 1`, args...)
 	if err != nil {
 		return nil, err
@@ -25,10 +25,11 @@ func (s *Store) KeyTrendBuckets(ctx context.Context, keyID string, since, until 
 	result := []domain.APIKeyTrendBucket{}
 	for rows.Next() {
 		var bucket domain.APIKeyTrendBucket
-		var at int64
-		if err := rows.Scan(&at, &bucket.Tokens, &bucket.CostUSD); err != nil {
+		var at, costMicro int64
+		if err := rows.Scan(&at, &bucket.Tokens, &bucket.CostUSD, &costMicro); err != nil {
 			return nil, err
 		}
+		bucket.CostUSD = reportCostUSD(bucket.CostUSD, costMicro)
 		bucket.At = fromMillis(at)
 		result = append(result, bucket)
 	}
@@ -52,12 +53,12 @@ func (s *Store) KeyUsage7Day(ctx context.Context, keyID string, since, until tim
 	hWhere, hArgs := hourlyReportWhere(filter, since, until)
 	rWhere, rArgs := rawReportWhere(filter, since, until)
 	query := `WITH account_facts AS (
- SELECT h.account_id,h.is_deleted,h.cost_usd FROM legacy_hourly_usage h WHERE ` + hWhere + `
+ SELECT h.account_id,h.is_deleted,h.cost_usd,0 AS cost_micro FROM legacy_hourly_usage h WHERE ` + hWhere + `
  UNION ALL
  SELECT CASE WHEN e.account_id IS NULL THEN char(31)
  WHEN substr(e.account_id,1,1)=char(31) THEN char(31)||e.account_id ELSE e.account_id END,
- e.legacy_deleted,e.cost_microdollars/1000000.0 FROM usage_events e WHERE ` + rWhere + `
- ) SELECT f.account_id,a.email,f.is_deleted,coalesce(sum(f.cost_usd),0)
+ e.legacy_deleted,NULL,e.cost_microdollars FROM usage_events e WHERE ` + rWhere + `
+ ) SELECT f.account_id,a.email,f.is_deleted,coalesce(sum(f.cost_usd),0),coalesce(sum(f.cost_micro),0)
  FROM account_facts f LEFT JOIN accounts a ON a.id=CASE
  WHEN f.account_id=char(31) THEN NULL
  WHEN substr(f.account_id,1,1)=char(31) THEN substr(f.account_id,2)
@@ -73,11 +74,12 @@ func (s *Store) KeyUsage7Day(ctx context.Context, keyID string, since, until tim
 		var email sql.NullString
 		var deleted bool
 		var cost float64
-		if err := rows.Scan(&accountID, &email, &deleted, &cost); err != nil {
+		var costMicro int64
+		if err := rows.Scan(&accountID, &email, &deleted, &cost, &costMicro); err != nil {
 			rows.Close()
 			return result, err
 		}
-		cost = roundReport(cost, 6)
+		cost = roundReport(reportCostUSD(cost, costMicro), 6)
 		if cost <= 0 {
 			continue
 		}

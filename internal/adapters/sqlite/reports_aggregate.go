@@ -16,6 +16,26 @@ type reportAggregate struct {
 	costUSD                                                                        float64
 }
 
+// reportCost is the canonical cost of a report scope (design §1.5): folded
+// legacy REAL costs summed in query order, then the exact integer microdollars
+// of raw events added as one last term. Rollups store microdollars too, so a
+// scope read from rollups returns the same float as one read from raw events.
+type reportCost struct {
+	legacy kbnSum
+	micro  int64
+}
+
+func (c reportCost) value() float64 {
+	sum := c.legacy
+	sum.add(float64(c.micro) / 1000000.0)
+	return sum.value()
+}
+
+// reportCostUSD combines an SQL sum of legacy costs with raw microdollars.
+func reportCostUSD(legacy float64, micro int64) float64 {
+	return reportCost{legacy: kbnSum{sum: legacy}, micro: micro}.value()
+}
+
 // QueryReports evaluates the admin report in a bounded number of statements:
 // folded hourly measures, folded hourly conversations and one ordered pass over
 // raw events feed every per-day row, median, breakdown and the summary. Per-day
@@ -101,7 +121,7 @@ func (k kbnSum) value() float64 { return k.sum + k.err }
 // reportMeasures accumulates the facts measures of one report scope.
 type reportMeasures struct {
 	requests, input, output, reasoning, known, cached, errors, cancelled int64
-	cost                                                                 kbnSum
+	cost                                                                 reportCost
 	accounts                                                             map[string]struct{}
 }
 
@@ -115,8 +135,9 @@ func (m *reportMeasures) add(f reportFact) {
 	m.errors += f.errors
 	m.cancelled += f.cancelled
 	if f.hasCost {
-		m.cost.add(f.cost)
+		m.cost.legacy.add(f.cost)
 	}
+	m.cost.micro += f.costMicro
 	if f.account != "\x1f" {
 		if m.accounts == nil {
 			m.accounts = map[string]struct{}{}
@@ -131,27 +152,23 @@ func (m *reportMeasures) result() reportAggregate {
 		accounts: int64(len(m.accounts)), costUSD: m.cost.value()}
 }
 
-// reportFact is one row of the facts relation (folded hour or raw event).
+// reportFact is one row of the facts relation (folded hour or raw event):
+// a folded hour carries a REAL cost, a raw event integer microdollars.
 type reportFact struct {
 	at                                                                   int64
 	account, model                                                       string
 	requests, input, output, reasoning, known, cached, errors, cancelled int64
 	cost                                                                 float64
 	hasCost                                                              bool
+	costMicro                                                            int64
 }
 
 type reportDay struct {
 	measures      reportMeasures
 	conversations map[string]struct{}
-	// Latency samples are kept only while their day is being read; rows arrive
-	// in time order, so a finished day keeps just its three medians.
-	ttft, queue, tps                   []float64
-	medianTTFT, medianQueue, medianTPS float64
-}
-
-func (d *reportDay) finishMedians() {
-	d.medianTTFT, d.medianQueue, d.medianTPS = reportMedianOf(d.ttft), reportMedianOf(d.queue), reportMedianOf(d.tps)
-	d.ttft, d.queue, d.tps = nil, nil, nil
+	// latency holds the day's median histograms (design §1.3); a few hundred
+	// buckets at most, independent of the number of events.
+	latency rollupLatency
 }
 
 type reportPass struct {
@@ -274,12 +291,13 @@ func (p *reportPass) readHourlyConversations(ctx context.Context, tx *sql.Tx) er
 }
 
 // readRawEvents is the single ordered pass over unfolded events. It reads the
-// same rows as every former per-day statement, so medians use the same values.
+// same rows as every former per-day statement; medians come from the same
+// histograms the rollups store.
 func (p *reportPass) readRawEvents(ctx context.Context, tx *sql.Tx) error {
 	where, args := rawReportWhere(p.filter, p.filter.Start, p.filter.End)
 	rows, err := tx.QueryContext(ctx, `SELECT e.requested_at,e.account_id,e.model,e.input_tokens,e.output_tokens,
  e.reasoning_tokens,e.reasoning_tokens_known,max(0,min(e.cached_input_tokens,e.input_tokens)),
- e.cost_microdollars/1000000.0,e.cost_microdollars,e.status,e.conversation_id,
+ e.cost_microdollars,e.status,e.conversation_id,
  coalesce(nullif(e.useragent_group,''),'Missing User-Agent'),
  e.latency_first_token_ms,e.queue_latency_ms,e.total_latency_ms
  FROM usage_events e WHERE `+where+` ORDER BY e.requested_at`, args...)
@@ -287,20 +305,18 @@ func (p *reportPass) readRawEvents(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	defer rows.Close()
-	open := -1
 	for rows.Next() {
 		var f reportFact
 		var account, conversation sql.NullString
-		var cached, costMicro, ttft sql.NullInt64
-		var cost sql.NullFloat64
+		var cached, ttft sql.NullInt64
 		var status, userAgent string
 		var queue, total int64
 		if err := rows.Scan(&f.at, &account, &f.model, &f.input, &f.output, &f.reasoning, &f.known, &cached,
-			&cost, &costMicro, &status, &conversation, &userAgent, &ttft, &queue, &total); err != nil {
+			&f.costMicro, &status, &conversation, &userAgent, &ttft, &queue, &total); err != nil {
 			return err
 		}
 		f.account = rawReportDimension(account)
-		f.requests, f.cached, f.cost, f.hasCost = 1, cached.Int64, cost.Float64, cost.Valid
+		f.requests, f.cached = 1, cached.Int64
 		switch status {
 		case "success", "completed":
 		case "cancelled":
@@ -315,35 +331,15 @@ func (p *reportPass) readRawEvents(ctx context.Context, tx *sql.Tx) error {
 			p.userAgents[userAgent] = agent
 		}
 		agent.requests++
-		agent.cost += costMicro.Int64
+		agent.cost += f.costMicro
 		if conversation.Valid {
 			if trimmed := strings.Trim(conversation.String, " "); trimmed != "" {
 				p.addConversation(f.at, trimmed)
 			}
 		}
-		day, ok := p.day(f.at)
-		if !ok {
-			continue
+		if day, ok := p.day(f.at); ok {
+			p.days[day].latency.observe(ttft, queue, f.output, total, 1)
 		}
-		if day != open {
-			if open >= 0 {
-				p.days[open].finishMedians()
-			}
-			open = day
-		}
-		d := &p.days[day]
-		if ttft.Valid && ttft.Int64 > 0 {
-			d.ttft = append(d.ttft, float64(ttft.Int64))
-			if f.output > 0 && total > ttft.Int64 {
-				d.tps = append(d.tps, float64(f.output)*1000.0/float64(total-ttft.Int64))
-			}
-		}
-		if queue >= 0 {
-			d.queue = append(d.queue, float64(queue))
-		}
-	}
-	if open >= 0 {
-		p.days[open].finishMedians()
 	}
 	return rows.Err()
 }
@@ -368,8 +364,8 @@ func (p *reportPass) dailyRows() []domain.DailyReportRow {
 		row := domain.DailyReportRow{Date: p.labels[i], Requests: values.requests, InputTokens: values.input,
 			OutputTokens: values.output, CachedInputTokens: values.cached, ActiveAccounts: values.accounts,
 			CostUSD: roundReport(values.costUSD, 4), ErrorCount: values.errors, CancelledCount: values.cancelled,
-			Conversations: int64(len(d.conversations)),
-			MedianTTFTMS:  d.medianTTFT, MedianQueueMS: d.medianQueue, MedianTPS: d.medianTPS}
+			Conversations: int64(len(d.conversations))}
+		row.MedianTTFTMS, row.MedianQueueMS, row.MedianTPS = d.latency.medians()
 		if values.known > 0 || values.reasoning > 0 {
 			reasoning := values.reasoning
 			row.ReasoningTokens = &reasoning
@@ -377,23 +373,6 @@ func (p *reportPass) dailyRows() []domain.DailyReportRow {
 		rows = append(rows, row)
 	}
 	return rows
-}
-
-// reportMedianOf is the average of the middle one or two values, 0 when empty,
-// rounded like the former SQL median.
-func reportMedianOf(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-	sort.Float64s(values)
-	middle := len(values) / 2
-	if len(values)%2 == 1 {
-		return roundReport(values[middle], 2)
-	}
-	var sum kbnSum
-	sum.add(values[middle-1])
-	sum.add(values[middle])
-	return roundReport(sum.value()/2, 2)
 }
 
 func (p *reportPass) byModel() []domain.ModelCostEntry {
@@ -509,8 +488,12 @@ func reportAccountAliases(ctx context.Context, tx *sql.Tx) (map[string]string, e
 func reportWindowTotals(ctx context.Context, tx *sql.Tx, filter domain.ReportFilter, start, end time.Time) (reportAggregate, error) {
 	var result reportAggregate
 	facts, args := reportFacts(filter, start, end)
+	var legacyCost float64
+	var costMicro int64
 	err := tx.QueryRowContext(ctx, facts+`SELECT coalesce(sum(request_count),0),coalesce(sum(input_tokens),0),
- coalesce(sum(output_tokens),0),coalesce(sum(cost_usd),0) FROM facts`, args...).Scan(&result.requests, &result.input, &result.output, &result.costUSD)
+ coalesce(sum(output_tokens),0),coalesce(sum(cost_usd),0),coalesce(sum(cost_micro),0) FROM facts`, args...).
+		Scan(&result.requests, &result.input, &result.output, &legacyCost, &costMicro)
+	result.costUSD = reportCostUSD(legacyCost, costMicro)
 	return result, err
 }
 
@@ -520,12 +503,15 @@ func (s *Store) aggregateReportWindow(ctx context.Context, filter domain.ReportF
 	query := facts + `SELECT coalesce(sum(request_count),0),coalesce(sum(input_tokens),0),
  coalesce(sum(output_tokens),0),coalesce(sum(reasoning_tokens),0),
  coalesce(sum(reasoning_known_count),0),coalesce(sum(cached_input_tokens),0),
- coalesce(sum(cost_usd),0),coalesce(sum(error_count),0),
+ coalesce(sum(cost_usd),0),coalesce(sum(cost_micro),0),coalesce(sum(error_count),0),
  coalesce(sum(cancelled_count),0),
  count(DISTINCT CASE WHEN account_id!=char(31) THEN account_id END) FROM facts`
+	var legacyCost float64
+	var costMicro int64
 	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&result.requests, &result.input, &result.output,
-		&result.reasoning, &result.known, &result.cached, &result.costUSD, &result.errors,
+		&result.reasoning, &result.known, &result.cached, &legacyCost, &costMicro, &result.errors,
 		&result.cancelled, &result.accounts)
+	result.costUSD = reportCostUSD(legacyCost, costMicro)
 	return result, err
 }
 

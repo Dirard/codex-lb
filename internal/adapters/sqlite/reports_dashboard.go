@@ -58,7 +58,7 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 	facts, args := reportFacts(filter, time.Unix(first, 0), end)
 	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT (at_ms/1000/?)*?,coalesce(sum(request_count),0),
  coalesce(sum(input_tokens),0),coalesce(sum(output_tokens),0),
- coalesce(sum(cached_input_tokens),0),coalesce(sum(cost_usd),0),
+ coalesce(sum(cached_input_tokens),0),coalesce(sum(cost_usd),0),coalesce(sum(cost_micro),0),
  coalesce(sum(error_count),0),coalesce(sum(cancelled_count),0)
  FROM facts GROUP BY 1 ORDER BY 1`, append(args, bucketSeconds, bucketSeconds)...)
 	if err != nil {
@@ -66,13 +66,14 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 	}
 	buckets := map[int64]domain.DashboardTrafficBucket{}
 	for rows.Next() {
-		var epoch int64
+		var epoch, costMicro int64
 		var bucket domain.DashboardTrafficBucket
 		if err := rows.Scan(&epoch, &bucket.Requests, &bucket.Input, &bucket.Output, &bucket.Cached,
-			&bucket.CostUSD, &bucket.Errors, &bucket.Cancelled); err != nil {
+			&bucket.CostUSD, &costMicro, &bucket.Errors, &bucket.Cancelled); err != nil {
 			rows.Close()
 			return result, err
 		}
+		bucket.CostUSD = reportCostUSD(bucket.CostUSD, costMicro)
 		bucket.At = time.Unix(epoch, 0).UTC()
 		buckets[epoch] = bucket
 	}

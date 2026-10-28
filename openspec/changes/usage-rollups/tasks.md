@@ -1,12 +1,12 @@
 ## 1. Shared rules
 
-- [ ] 1.1 Histogram codec with merge, subtract and median; raw path uses histogram medians and integer-microdollar costs.
+- [x] 1.1 Histogram codec with merge, subtract and median; raw path uses histogram medians and integer-microdollar costs.
 
 ## 2. Schema and folder
 
-- [ ] 2.1 Migration 42: rollup tables, state, journal and update/delete triggers; additive.
-- [ ] 2.2 Folder with cursor, journal draining, adaptive batches, rebuild and verifier; runs on the active worker only.
-- [ ] 2.3 Fold, crash, late-event, rowid-reuse, rebuild and two-store (old writer) tests.
+- [x] 2.1 Migration 42: rollup tables, state, journal and update/delete triggers; additive.
+- [x] 2.2 Folder with cursor, journal draining, adaptive batches, rebuild and verifier; runs on the active worker only.
+- [x] 2.3 Fold, crash, late-event, rowid-reuse, rebuild and two-store (old writer) tests.
 
 ## 3. Read paths
 
