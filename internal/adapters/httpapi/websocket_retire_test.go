@@ -77,8 +77,9 @@ func TestWebSocketRetirementFinishesActiveTurnBeforeClosing(t *testing.T) {
 	if err := conn.Write(ctx, websocket.MessageText, largeCreate()); err != nil {
 		t.Fatal(err)
 	}
-	// Large frames hold a body permit: two permits mean the next turn is queued.
-	for deadline := time.Now().Add(time.Second); len(p.websocketBodies) != 2; time.Sleep(time.Millisecond) {
+	// Large frames are charged to the body budget: two charges mean the next
+	// turn is queued.
+	for deadline := time.Now().Add(time.Second); p.bodies.Usage().UsedBytes < 2*int64(len(largeCreate())); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("second response.create was not queued")
 		}
@@ -92,9 +93,9 @@ func TestWebSocketRetirementFinishesActiveTurnBeforeClosing(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("queued turn started on a retiring server: %d upstream calls", calls.Load())
 	}
-	for deadline := time.Now().Add(time.Second); len(p.websocketBodies) != 0 || len(p.websockets) != 0; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(time.Second); p.bodies.Usage().UsedBytes != 0 || len(p.websockets) != 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("closed session leaked: bodies=%d sockets=%d", len(p.websocketBodies), len(p.websockets))
+			t.Fatalf("closed session leaked: body bytes=%d sockets=%d", p.bodies.Usage().UsedBytes, len(p.websockets))
 		}
 	}
 }
