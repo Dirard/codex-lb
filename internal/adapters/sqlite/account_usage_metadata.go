@@ -52,7 +52,7 @@ func (s *Store) SaveAccountUsageSnapshot(ctx context.Context, snapshot domain.Ac
 		seen[key] = true
 	}
 	pendingPlan := false
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var err error
 		pendingPlan, err = prepareUsageIdentityTx(ctx, tx, snapshot)
 		if err != nil || pendingPlan {

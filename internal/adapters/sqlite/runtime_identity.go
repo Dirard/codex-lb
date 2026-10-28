@@ -21,7 +21,7 @@ func (s *Store) ValidateRuntime(ctx context.Context, vault runtimeVault) error {
 	if vault == nil || vault.Fingerprint() == "" {
 		return errors.New("runtime encryption key is required")
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var fingerprint string
 		var probe []byte
 		err := tx.QueryRowContext(ctx, "SELECT key_fingerprint,encryption_probe FROM runtime_identity WHERE id=1").Scan(&fingerprint, &probe)

@@ -11,7 +11,7 @@ import (
 
 func (s *Store) reportByModel(ctx context.Context, filter domain.ReportFilter) ([]domain.ModelCostEntry, error) {
 	facts, args := reportFacts(filter, filter.Start, filter.End)
-	rows, err := s.readDB.QueryContext(ctx, facts+`SELECT model,coalesce(sum(cost_usd),0),
+	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT model,coalesce(sum(cost_usd),0),
  coalesce(sum(request_count),0),coalesce(sum(sum(cost_usd)) OVER (),0)
  FROM facts GROUP BY model ORDER BY sum(cost_usd) DESC,model LIMIT 2000`, args...)
 	if err != nil {
@@ -36,7 +36,7 @@ func (s *Store) reportByModel(ctx context.Context, filter domain.ReportFilter) (
 
 func (s *Store) reportByAccount(ctx context.Context, filter domain.ReportFilter) ([]domain.AccountCostEntry, error) {
 	facts, args := reportFacts(filter, filter.Start, filter.End)
-	rows, err := s.readDB.QueryContext(ctx, facts+`SELECT f.account_id,nullif(a.alias,''),
+	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT f.account_id,nullif(a.alias,''),
  coalesce(sum(f.cost_usd),0),coalesce(sum(f.request_count),0)
  FROM facts f LEFT JOIN accounts a ON a.id=f.account_id
  GROUP BY f.account_id,a.alias ORDER BY sum(f.cost_usd) DESC,f.account_id LIMIT 2000`, args...)
@@ -67,7 +67,7 @@ func (s *Store) reportByAccount(ctx context.Context, filter domain.ReportFilter)
 
 func (s *Store) reportByUserAgent(ctx context.Context, filter domain.ReportFilter) ([]domain.UserAgentCostEntry, error) {
 	where, args := rawReportWhere(filter, filter.Start, filter.End)
-	rows, err := s.readDB.QueryContext(ctx, `SELECT coalesce(nullif(e.useragent_group,''),'Missing User-Agent'),
+	rows, err := s.analyticsDB.QueryContext(ctx, `SELECT coalesce(nullif(e.useragent_group,''),'Missing User-Agent'),
  coalesce(sum(e.cost_microdollars),0)/1000000.0,count(*)
  FROM usage_events e WHERE `+where+` GROUP BY coalesce(nullif(e.useragent_group,''),'Missing User-Agent')
  ORDER BY sum(e.cost_microdollars) DESC,1 LIMIT 2000`, args...)
@@ -91,7 +91,7 @@ func (s *Store) reportByUserAgent(ctx context.Context, filter domain.ReportFilte
 	hourlyWhere, hourlyArgs := hourlyReportWhere(filter, filter.Start, filter.End)
 	var foldedCost float64
 	var foldedRequests int64
-	if err := s.readDB.QueryRowContext(ctx, `SELECT coalesce(sum(h.cost_usd),0),coalesce(sum(h.request_count),0)
+	if err := s.analyticsDB.QueryRowContext(ctx, `SELECT coalesce(sum(h.cost_usd),0),coalesce(sum(h.request_count),0)
  FROM legacy_hourly_usage h WHERE `+hourlyWhere, hourlyArgs...).Scan(&foldedCost, &foldedRequests); err != nil {
 		return nil, err
 	}
@@ -141,6 +141,6 @@ func (s *Store) countReportConversations(ctx context.Context, filter domain.Repo
  AND e.conversation_id IS NOT NULL AND trim(e.conversation_id)!='')`
 	args = append(args, rawArgs...)
 	var count int64
-	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(&count)
+	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
 }

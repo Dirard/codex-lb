@@ -34,7 +34,7 @@ func (s *Store) AddFirewallEntry(ctx context.Context, e domain.FirewallEntry) er
 	if err != nil || ip.Zone() != "" || ip.Unmap().String() != e.IPAddress || e.CreatedAt.IsZero() {
 		return ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, "INSERT INTO firewall_allowlist(ip_address,created_at) VALUES(?,?) ON CONFLICT DO NOTHING", e.IPAddress, millis(e.CreatedAt))
+	res, err := s.exec(ctx, "INSERT INTO firewall_allowlist(ip_address,created_at) VALUES(?,?) ON CONFLICT DO NOTHING", e.IPAddress, millis(e.CreatedAt))
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (s *Store) AddFirewallEntry(ctx context.Context, e domain.FirewallEntry) er
 }
 
 func (s *Store) DeleteFirewallEntry(ctx context.Context, ip string) error {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM firewall_allowlist WHERE ip_address=?", ip)
+	res, err := s.exec(ctx, "DELETE FROM firewall_allowlist WHERE ip_address=?", ip)
 	if err != nil {
 		return err
 	}

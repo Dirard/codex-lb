@@ -14,7 +14,7 @@ func (s *Store) RefreshExpiredKeyLimits(ctx context.Context, keyID string, now t
 	if keyID == "" || domain.IsInternalKey(keyID) || now.IsZero() {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT id,limit_window,reset_at FROM api_key_limits
  WHERE api_key_id=? AND is_active=1 AND reset_at<=?`, keyID, millis(now))
 		if err != nil {

@@ -60,9 +60,14 @@ func TestLateOperationalWritesDoNotBindReimportedAccount(t *testing.T) {
 	if err := store.SaveCodexResourceOwner(ctx, file); !errors.Is(err, ErrConflict) {
 		t.Fatalf("old file rebound: %v", err)
 	}
-	if changed, err := store.SaveAffinity(ctx, domain.AffinityBinding{Key: "hint", Kind: domain.AffinityPromptCache,
-		APIKeyID: "key-a", AccountID: "account-a", UpdatedAt: now}, 0, "old-affinity"); !errors.Is(err, ErrNoAccounts) || changed {
-		t.Fatalf("old affinity rebound: changed=%v err=%v", changed, err)
+	hint := &domain.AffinityCAS{Binding: domain.AffinityBinding{Key: "hint", Kind: domain.AffinityPromptCache,
+		APIKeyID: "key-a", AccountID: "account-a", UpdatedAt: now}}
+	if reserved, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "old-affinity-retry", APIKeyID: "key-a", AccountID: "account-a",
+		Model: "gpt-test", Now: now, Affinity: hint}); !errors.Is(err, ErrNoAccounts) || reserved.AffinityChanged {
+		t.Fatalf("old affinity rebound: changed=%v err=%v", reserved.AffinityChanged, err)
+	}
+	if _, err := store.LookupAffinity(ctx, "key-a", domain.AffinityPromptCache, "hint"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old incarnation wrote affinity: %v", err)
 	}
 	if err := store.RecordAccountOutcome(ctx, "account-a", "old-outcome", false, true); err != nil {
 		t.Fatal(err)
@@ -86,12 +91,8 @@ func TestLateOperationalWritesDoNotBindReimportedAccount(t *testing.T) {
 	if err := store.SaveCodexResourceOwner(ctx, file); err != nil {
 		t.Fatalf("new file denied: %v", err)
 	}
-	if _, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "new-affinity", APIKeyID: "key-a", AccountID: "account-a",
-		AccountGeneration: 1, Model: "gpt-test", Now: now}); err != nil {
-		t.Fatalf("new reservation denied: %v", err)
-	}
-	if changed, err := store.SaveAffinity(ctx, domain.AffinityBinding{Key: "hint", Kind: domain.AffinityPromptCache,
-		APIKeyID: "key-a", AccountID: "account-a", UpdatedAt: now}, 0, "new-affinity"); err != nil || !changed {
-		t.Fatalf("new affinity denied: changed=%v err=%v", changed, err)
+	if reserved, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "new-affinity", APIKeyID: "key-a", AccountID: "account-a",
+		AccountGeneration: 1, Model: "gpt-test", Now: now, Affinity: hint}); err != nil || !reserved.AffinityChanged {
+		t.Fatalf("new affinity denied: changed=%v err=%v", reserved.AffinityChanged, err)
 	}
 }

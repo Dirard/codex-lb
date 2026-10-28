@@ -16,7 +16,7 @@ func (s *Store) EnsureLocalProxyKey(ctx context.Context) error {
 
 func (s *Store) ensureInternalKey(ctx context.Context, id, name string) error {
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(rand.Text())))
-	_, err := s.db.ExecContext(ctx, `INSERT INTO api_keys(id,name,key_hash,key_prefix,created_at)
+	_, err := s.exec(ctx, `INSERT INTO api_keys(id,name,key_hash,key_prefix,created_at)
  VALUES(?,?,?,'internal',?) ON CONFLICT(id) DO NOTHING`, id, name, hash, time.Now().UTC().UnixMilli())
 	if err != nil {
 		return err

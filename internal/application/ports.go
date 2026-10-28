@@ -25,6 +25,12 @@ type AccountQuotaMetadata interface {
 	LoadAccountQuotaRefusalAt(context.Context, string) (*time.Time, error)
 }
 
+// AccountSelectionSnapshots loads routing telemetry for many candidates with a
+// constant number of reads.
+type AccountSelectionSnapshots interface {
+	AccountSelectionSnapshot(context.Context, []string) (map[string]domain.AccountSelectionState, error)
+}
+
 type Groups interface {
 	SaveGroup(context.Context, domain.AccountGroup, time.Time) error
 	GetGroup(context.Context, string) (domain.AccountGroup, error)
@@ -49,9 +55,7 @@ type UsageLedger interface {
 	SettleUsage(context.Context, string, domain.UsageSettlement) (bool, error)
 	GetReservation(context.Context, string) (domain.Reservation, error)
 	ListReservationsNeedingReconciliation(context.Context, string, int) ([]domain.Reservation, error)
-	TouchReservation(context.Context, string, time.Time) (bool, error)
 	MarkReservationUncertain(context.Context, string) (bool, error)
-	ReleaseStaleReservations(context.Context, time.Time) (int, error)
 	RecordUsage(context.Context, domain.UsageEvent) (bool, error)
 	UsageTotals(context.Context, string, string) (domain.UsageTotals, error)
 }

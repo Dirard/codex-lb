@@ -22,7 +22,7 @@ func (s *Store) ClaimLimitWarmupAttempt(ctx context.Context, accountID, window s
 		(window != "primary" && window != "secondary" && window != "monthly" && window != "primary_idle") {
 		return attempt, false, ErrInvalid
 	}
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var existing int
 		err := tx.QueryRowContext(ctx, `SELECT 1 FROM account_limit_warmup_attempts
 		 WHERE account_id=? AND window=? AND reset_at BETWEEN ? AND ? LIMIT 1`,
@@ -78,7 +78,7 @@ func (s *Store) CompleteLimitWarmupAttempt(ctx context.Context, accountID string
 	if status != domain.AutomationSuccess && status != domain.AutomationFailed {
 		return ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE account_limit_warmup_attempts
+	res, err := s.exec(ctx, `UPDATE account_limit_warmup_attempts
 	 SET status=?, completed_at=?, error_code=? WHERE account_id=? AND attempt=? AND status='claimed'`,
 		status, millis(finishedAt), errorCode, accountID, attempt)
 	if err != nil {

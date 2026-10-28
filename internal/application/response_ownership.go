@@ -17,23 +17,32 @@ func sessionLookupID(session string) string {
 	return fmt.Sprintf("session:%x", sha256.Sum256([]byte(session)))
 }
 
-func (p *Proxy) resolveOwner(ctx context.Context, options ResponseOptions, request responseRequest) (resolvedConversation, responseContext, error) {
+var errInvalidStoredContinuation = errors.New("invalid stored continuation")
+
+// resolveOwner resolves hard conversation owners. The owner's stored history is
+// returned unloaded: decryption and parsing are deferred until a replay or the
+// next continuation needs them.
+func (p *Proxy) resolveOwner(ctx context.Context, options ResponseOptions, request responseRequest) (resolvedConversation, *lazyHistory, error) {
 	resolved, err := resolveConversation(ctx, p.store, options.KeyID, request.Previous, options.identity(), time.Now())
 	if err != nil {
-		return resolved, responseContext{}, err
+		return resolved, nil, err
 	}
 	owner := resolved.Owner
-	var history responseContext
-	if request.Previous != "" && owner != nil && len(owner.ContextEncrypted) != 0 {
-		plain, err := p.cipher.Decrypt(owner.ContextEncrypted)
+	if request.Previous == "" || owner == nil || len(owner.ContextEncrypted) == 0 {
+		return resolved, nil, nil
+	}
+	encrypted := owner.ContextEncrypted
+	return resolved, &lazyHistory{load: func() (responseContext, error) {
+		var history responseContext
+		plain, err := p.cipher.Decrypt(encrypted)
 		if err != nil {
-			return resolved, history, err
+			return history, err
 		}
 		if len(plain) > maxReplayBytes || json.Unmarshal(plain, &history) != nil {
-			return resolved, history, errors.New("invalid stored continuation")
+			return responseContext{}, errInvalidStoredContinuation
 		}
-	}
-	return resolved, history, nil
+		return history, nil
+	}}, nil
 }
 
 func (p *Proxy) resolveFileOwner(ctx context.Context, keyID string, input json.RawMessage) (CodexResourceOwner, error) {
@@ -126,8 +135,31 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 	quotaDefinition, quotaMapped := domain.AdditionalQuotaForModel(model)
 	blockedByData, blockedByAdditionalQuota := false, false
 	unpriced := 0
+	ids := make([]string, 0, len(accounts))
 	for _, account := range accounts {
-		price, err := p.ResolvePrice(ctx, account, model)
+		ids = append(ids, account.ID)
+	}
+	snapshot, err := p.store.AccountSelectionSnapshot(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	// A subscription price depends only on the model; external sources keep
+	// their own per-account price.
+	var subscriptionPrice *pricing.Price
+	var subscriptionPriceErr error
+	resolvePrice := func(account domain.Account) (pricing.Price, error) {
+		if account.Kind != domain.AccountChatGPT {
+			return p.ResolvePrice(ctx, account, model)
+		}
+		if subscriptionPrice == nil && subscriptionPriceErr == nil {
+			price, err := p.ResolvePrice(ctx, account, model)
+			subscriptionPrice, subscriptionPriceErr = &price, err
+		}
+		return *subscriptionPrice, subscriptionPriceErr
+	}
+	for _, account := range accounts {
+		state := snapshot[account.ID]
+		price, err := resolvePrice(account)
 		if errors.Is(err, pricing.ErrUnpriced) {
 			unpriced++
 			continue
@@ -144,26 +176,18 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 			if policy != "inherit" {
 				entry.account.RoutingPolicy = policy
 			}
-			additional, err := p.store.ListAccountAdditionalQuotas(ctx, account.ID)
-			if err != nil {
-				return nil, err
-			}
-			applies, state, primary, secondary := additionalQuotaEligibility(account, quotaDefinition, additional, quotaOmissions[account.ID], now)
-			if state == "data_unavailable" {
+			applies, eligibility, primary, secondary := additionalQuotaEligibility(account, quotaDefinition, state.Additional, quotaOmissions[account.ID], now)
+			if eligibility == "data_unavailable" {
 				blockedByData = true
 				continue
 			}
-			if state == "quota_exhausted" {
+			if eligibility == "quota_exhausted" {
 				blockedByAdditionalQuota = true
 				continue
 			}
 			if applies {
 				if account.Status == domain.AccountQuotaExceeded {
-					refusalAt, err := p.store.LoadAccountQuotaRefusalAt(ctx, account.ID)
-					if err != nil {
-						return nil, err
-					}
-					if !additionalQuotaBlockRecovered(refusalAt, primary, secondary, now) {
+					if !additionalQuotaBlockRecovered(state.RefusalAt, primary, secondary, now) {
 						continue
 					}
 				} else if account.Status != domain.AccountActive {
@@ -180,22 +204,12 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 				continue
 			}
 		}
-		credits, err := p.store.LoadAccountCreditStatus(ctx, account.ID)
-		if err != nil {
-			return nil, err
-		}
-		quotas, err := p.store.ListAccountQuota(ctx, account.ID)
-		if err != nil {
-			return nil, err
-		}
+		quotas := state.Quotas
 		var refusalAt *time.Time
 		if account.Status == domain.AccountQuotaExceeded {
-			refusalAt, err = p.store.LoadAccountQuotaRefusalAt(ctx, account.ID)
-			if err != nil {
-				return nil, err
-			}
+			refusalAt = state.RefusalAt
 		}
-		if EffectiveAccountQuotaStatus(account, quotas, credits, refusalAt, now) != domain.AccountActive {
+		if EffectiveAccountQuotaStatus(account, quotas, state.Credits, refusalAt, now) != domain.AccountActive {
 			continue
 		}
 		primary, long := selectionQuotaWindows(account, quotas)
@@ -250,7 +264,9 @@ func (p *Proxy) catalogAccountsWithOmissions(request *responseRequest, candidate
 	return filterCatalogAccounts(p.Catalog, request, candidates, ownerID, true)
 }
 
-func (p *Proxy) remember(ctx context.Context, options ResponseOptions, request responseRequest, history responseContext, previous *domain.Continuation, account domain.Account, result ResponseResult, reservationID string, forwardTurn, successful bool) error {
+// continuationPlan builds the response owner and, for a successful turn, its
+// conversation aliases. Marshal and encryption run before the write job.
+func (p *Proxy) continuationPlan(options ResponseOptions, request responseRequest, history responseContext, historyComplete bool, previous *domain.Continuation, account domain.Account, result ResponseResult, forwardTurn, successful bool) (*domain.Continuation, []domain.Continuation, error) {
 	var response struct {
 		Output []json.RawMessage `json:"output"`
 	}
@@ -258,30 +274,29 @@ func (p *Proxy) remember(ctx context.Context, options ResponseOptions, request r
 	// A same-owner follow-up can still work in the provider's live session after
 	// local history was evicted. Its new tail must not become a supposedly full
 	// conversation for a later cross-account replay.
-	valid = valid && (request.Previous == "" || previous != nil && len(previous.ContextEncrypted) != 0)
+	// An unreadable stored history makes the new tail just as incomplete.
+	valid = valid && historyComplete && (request.Previous == "" || previous != nil && len(previous.ContextEncrypted) != 0)
 	items := append(slices.Clone(history.Items), request.Input...)
 	items = append(items, response.Output...)
-	owner := domain.Continuation{ResponseID: result.ResponseID, KeyID: options.KeyID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, ProviderID: account.Provider, Model: request.Model, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(p.config.ContinuationTTL), FilePinned: request.FilePinned || accountBoundItems(items)}
-	owner.FilePinned = owner.FilePinned || previous != nil && previous.FilePinned
+	now := time.Now().UTC()
+	// The history is the previous owner's stored items and the input was checked
+	// at parse time; only the new output needs a scan.
+	filePinned := request.FilePinned || previous != nil && previous.FilePinned || accountBoundItems(response.Output)
+	owner := domain.Continuation{ResponseID: result.ResponseID, KeyID: options.KeyID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, ProviderID: account.Provider, Model: request.Model, CreatedAt: now, ExpiresAt: now.Add(p.config.ContinuationTTL), FilePinned: filePinned}
 	if valid {
 		plain, err := json.Marshal(responseContext{Items: items})
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		if len(plain) <= maxReplayBytes {
 			owner.ContextEncrypted, err = p.cipher.Encrypt(plain)
 			if err != nil {
-				return err
+				return nil, nil, err
 			}
 		}
 	}
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	if err := p.store.SaveContinuation(cleanup, owner, p.config.ContinuationBounds); err != nil {
-		return err
-	}
 	if !successful {
-		return nil // Retain partial response ownership without establishing new aliases.
+		return &owner, nil, nil // Retain partial response ownership without establishing new aliases.
 	}
-	return rememberConversationAliases(cleanup, p.store, owner, options.identity(), forwardTurn, reservationID, p.config.ContinuationBounds)
+	return &owner, conversationAliases(owner, options.identity(), forwardTurn), nil
 }

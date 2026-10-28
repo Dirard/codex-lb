@@ -132,7 +132,6 @@ func (s *CodexOperations) CompactWithOptions(ctx context.Context, options CodexO
 			return CodexOperationResult{}, err
 		}
 		request.CompactionTrigger = true // Compact is subscription-only.
-		request.ResponsesLite = inputUsesResponsesLite(request.Input)
 		if s.selectCompact == nil {
 			return CodexOperationResult{}, &ProxyError{Code: "compact_routing_unavailable", Status: 503, Message: "Compact account selection is not configured"}
 		}

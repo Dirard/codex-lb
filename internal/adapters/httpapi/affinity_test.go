@@ -29,14 +29,12 @@ func TestAffinityAdminRoutesRequireAuthAndPreserveDurableHints(t *testing.T) {
 		AccessTokenEncrypted: cipher, RefreshTokenEncrypted: cipher, IDTokenEncrypted: cipher}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "affinity-reservation", APIKeyID: domain.LocalProxyKeyID,
-		AccountID: account.ID, Model: "gpt-6-sol", Now: now}); err != nil {
-		t.Fatal(err)
-	}
 	for _, kind := range []domain.AffinityKind{domain.AffinityPromptCache, domain.AffinityStickyThread, domain.AffinityCodexSession} {
-		if changed, err := store.SaveAffinity(ctx, domain.AffinityBinding{Key: string(kind), Kind: kind,
-			APIKeyID: domain.LocalProxyKeyID, AccountID: account.ID, UpdatedAt: now.Add(-time.Hour)}, 0, "affinity-reservation"); err != nil || !changed {
-			t.Fatalf("seed affinity: %v %v", changed, err)
+		reserved, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "affinity-reservation-" + string(kind), APIKeyID: domain.LocalProxyKeyID,
+			AccountID: account.ID, Model: "gpt-6-sol", Now: now, Affinity: &domain.AffinityCAS{Binding: domain.AffinityBinding{Key: string(kind), Kind: kind,
+				APIKeyID: domain.LocalProxyKeyID, AccountID: account.ID, UpdatedAt: now.Add(-time.Hour)}}})
+		if err != nil || !reserved.AffinityChanged {
+			t.Fatalf("seed affinity: %v %v", reserved.AffinityChanged, err)
 		}
 	}
 	handler := server.Handler(nil, nil)

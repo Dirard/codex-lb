@@ -117,7 +117,7 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
 	if k.CreatedAt.IsZero() {
 		k.CreatedAt = now
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var priorGroup sql.NullString
 		err := tx.QueryRowContext(ctx, "SELECT group_id FROM api_keys WHERE id=? AND deleted_at IS NULL", k.ID).Scan(&priorGroup)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -325,7 +325,7 @@ func (s *Store) DeleteAPIKey(ctx context.Context, id string) error {
 	if domain.IsInternalKey(id) {
 		return ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET is_active=0,deleted_at=?
+	res, err := s.exec(ctx, `UPDATE api_keys SET is_active=0,deleted_at=?
  WHERE id=? AND deleted_at IS NULL`, time.Now().UTC().UnixMilli(), id)
 	if err != nil {
 		return err
@@ -349,7 +349,7 @@ func (s *Store) ResetAPIKeyUsage(ctx context.Context, id string, now time.Time) 
 	if id == "" || now.IsZero() {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var exists int
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM api_keys WHERE id=? AND deleted_at IS NULL`, id).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {

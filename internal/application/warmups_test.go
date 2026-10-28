@@ -106,10 +106,6 @@ func (s *stubLedger) SettleUsage(ctx context.Context, _ string, settlement domai
 func (s *stubLedger) GetReservation(context.Context, string) (domain.Reservation, error) {
 	return domain.Reservation{}, domain.ErrNotFound
 }
-func (s *stubLedger) TouchReservation(context.Context, string, time.Time) (bool, error) {
-	return true, nil
-}
-func (s *stubLedger) ReleaseStaleReservations(context.Context, time.Time) (int, error) { return 0, nil }
 func (s *stubLedger) RecordUsage(_ context.Context, event domain.UsageEvent) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

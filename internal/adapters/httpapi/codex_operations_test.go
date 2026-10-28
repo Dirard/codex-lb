@@ -52,6 +52,13 @@ func (s *operationsKeyStore) LoadAccountCreditStatus(context.Context, string) (*
 func (s *operationsKeyStore) ListAccountQuota(context.Context, string) ([]domain.AccountQuota, error) {
 	return nil, nil
 }
+func (s *operationsKeyStore) AccountSelectionSnapshot(_ context.Context, ids []string) (map[string]domain.AccountSelectionState, error) {
+	states := make(map[string]domain.AccountSelectionState, len(ids))
+	for _, id := range ids {
+		states[id] = domain.AccountSelectionState{}
+	}
+	return states, nil
+}
 func (s *operationsKeyStore) LoadSettings(context.Context) (domain.RuntimeSettings, error) {
 	return domain.RuntimeSettings{RoutingStrategy: "round_robin"}, nil
 }

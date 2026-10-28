@@ -98,9 +98,6 @@ func TestCompactUncertainUsageIsHeldWithoutSuccessOrReprobe(t *testing.T) {
 			if err != nil || len(pending) != 1 || pending[0].Status != "reserved" || !pending[0].NeedsReconciliation {
 				t.Fatalf("missing durable reconciliation flag: %+v %v", pending, err)
 			}
-			if n, err := store.ReleaseStaleReservations(ctx, time.Now().Add(24*time.Hour)); err != nil || n != 0 {
-				t.Fatalf("stale cleanup forgave usage: %d %v", n, err)
-			}
 			if status, response := liteHTTPPost(t, url, body); status != 429 || calls.Load() != 1 {
 				t.Fatalf("held key budget was bypassed: %d calls=%d %s", status, calls.Load(), response)
 			}

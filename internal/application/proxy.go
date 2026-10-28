@@ -16,11 +16,13 @@ import (
 type ProxyStore interface {
 	Accounts
 	AccountQuotaMetadata
+	AccountSelectionSnapshots
 	QuotaCandidateAccounts(context.Context, string) ([]domain.Account, error)
 	APIKeys
 	UsageLedger
 	Settings
 	Continuations
+	ResponseFinalizer
 	CodexResourceOwners
 	ScopedOwnerAccounts
 	CapabilityLineageStore
@@ -174,10 +176,13 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 	}
 	defer release()
 	queueMS := time.Since(started).Milliseconds()
-	resolved, history, err := p.resolveOwner(ctx, options, request)
+	resolved, storedHistory, err := p.resolveOwner(ctx, options, request)
 	if err != nil {
 		return ResponseResult{}, err
 	}
+	defer storedHistory.join()
+	var history responseContext
+	var historyErr error
 	owner := resolved.Owner
 	fileOwner, err := p.resolveFileOwner(ctx, key.ID, request.Object["input"])
 	if err != nil {
@@ -209,6 +214,10 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 	var price pricing.Price
 	var accountLease *accountLease
 	if owner != nil && owner.QuotaRefused {
+		// The replay below is built before dispatch and needs the history now.
+		if history, err = storedHistory.get(); err != nil {
+			return ResponseResult{}, err
+		}
 		request.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
 	}
 	if fileOwnerID != "" && owner == nil {
@@ -281,9 +290,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		}
 		_, err = p.store.ReserveUsage(ctx, domain.ReservationRequest{ID: id, APIKeyID: key.ID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision,
 			Continuation: fileOwnerID != "" || owner != nil && account.ID == owner.AccountID,
-			Model:        request.Model, Budget: budget, Now: attemptAt})
+			Model:        request.Model, Budget: budget, Now: attemptAt, Affinity: affinity.cas(account.ID, attemptAt)})
 		if err != nil {
-			return ResponseResult{}, err
+			return ResponseResult{}, reservationError(err)
 		}
 		// Fresh replay severs inherited trust. Only its retained Lite prefix can
 		// enable the new request; no previous owner signal crosses accounts.
@@ -348,16 +357,11 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 				return deliveryErr
 			}
 		}
-		var result ResponseResult
-		var callErr error
-		if err := affinity.save(ctx, p.store, account.ID, id); err != nil {
-			callErr = &ProviderFailure{Code: "affinity_persistence_failed", Status: 503}
-		} else {
-			if options.OnDispatch != nil {
-				options.OnDispatch()
-			}
-			result, callErr = p.dispatch(ctx, target, wire, consumer)
+		if options.OnDispatch != nil {
+			options.OnDispatch()
 		}
+		storedHistory.start() // Decrypt and parse beside the upstream call.
+		result, callErr := p.dispatch(ctx, target, wire, consumer)
 		if options.OnResponseID != nil {
 			options.OnResponseID("")
 		}
@@ -385,7 +389,51 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		uncharged := !result.UsageKnown && !result.UsageReported || result.UsageKnown && result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0
 		quota := quotaFailure(result, callErr)
 		safeZero := !output.visible && !result.OutputObserved && uncharged && (quota || missingPreviousResponse(result, callErr))
-		settled, settleErr := p.settle(ctx, id, options, account, request, price, result, callErr, safeZero, started, attemptAt, queueMS, output.firstEventMS, output.firstTokenMS)
+		plan, settleErr := p.settlement(id, options, account, request, price, result, callErr, safeZero, started, attemptAt, queueMS, output.firstEventMS, output.firstTokenMS)
+		settled := !plan.RetainUncertain
+		if settleErr == nil && capabilityErr == nil && (quota || settled && callErr == nil && !result.Failed) {
+			plan.Outcome = &domain.AccountOutcome{AccountID: account.ID, QuotaRefused: quota, Success: !quota}
+			if quota && owner != nil && owner.AccountID == account.ID {
+				plan.Outcome.QuotaMark = &domain.ContinuationQuotaMark{KeyID: key.ID, ResponseID: owner.ResponseID}
+			}
+		}
+		// Everything this attempt publishes is prepared outside the writer, then
+		// committed once; a local planning failure is returned after that commit.
+		var sameAccountReplay *responseRequest
+		var replayWire json.RawMessage
+		var plannedErr error
+		if settleErr == nil && capabilityErr == nil && settled {
+			lostCache := !hydrated && owner != nil && request.Previous != "" && len(owner.ContextEncrypted) > 0 && !owner.FilePinned && safeZero && missingPreviousResponse(result, callErr)
+			if lostCache {
+				history, historyErr = storedHistory.get()
+			}
+			if lostCache && historyErr == nil {
+				replayRequest := request
+				replayRequest.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
+				if plannedErr = request.loadInput(); plannedErr == nil {
+					replayRequest.Input = request.Input
+					if _, plannedErr = p.catalogAccounts(&replayRequest, []domain.Account{account}, account.ID); plannedErr == nil {
+						if replay, err := replayBody(replayRequest, history); err == nil {
+							sameAccountReplay, replayWire = &replayRequest, replay
+						}
+					}
+				}
+			}
+			if plannedErr == nil && sameAccountReplay == nil && !quota && result.ResponseID != "" && (callErr == nil || output.visible) {
+				history, historyErr = storedHistory.get()
+				if plannedErr = request.loadInput(); plannedErr == nil {
+					plan.Continuation, plan.Aliases, plannedErr = p.continuationPlan(options, request, history, historyErr == nil, owner, account, result, target.TurnState != "", callErr == nil && !result.Failed)
+				}
+			}
+		}
+		cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		finalized, finalizeErr := p.store.FinalizeResponse(cleanup, plan)
+		cancelCleanup()
+		if finalizeErr != nil {
+			settleErr = &ProxyError{Code: "usage_settlement_failed", Status: 503, Message: "Could not persist request accounting; do not blindly repeat the request"}
+		} else if plan.RetainUncertain && !finalized.Retained {
+			settleErr = &ProxyError{Code: "usage_settlement_failed", Status: 503, Message: "Unknown operation usage could not be retained for reconciliation"}
+		}
 		if p.Diagnostics != nil && (callErr != nil || result.Failed || settleErr != nil) && !errors.Is(callErr, context.Canceled) {
 			code := result.ErrorCode
 			if callErr != nil {
@@ -407,76 +455,41 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 			p.retireRequiredSocket(route, account.ID, key.ID)
 			return result, capabilityErr
 		}
-		if quota || settled && callErr == nil && !result.Failed {
-			cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			err = p.store.RecordAccountOutcome(cleanup, account.ID, id, quota, !quota)
-			if err == nil && quota && owner != nil && owner.AccountID == account.ID {
-				err = p.store.MarkContinuationQuotaRefused(cleanup, key.ID, owner.ResponseID, account.ID, id)
-			}
-			cancelCleanup()
+		if finalized.OutcomeErr != nil {
+			return result, finalized.OutcomeErr
+		}
+		if !settled {
+			return result, finishOutput(output, callErr)
+		}
+		if plannedErr != nil {
+			return result, plannedErr
+		}
+		if sameAccountReplay != nil {
+			request = *sameAccountReplay
+			wire, hydrated = replayWire, true
+			_, accountLease, err = p.admittedAccount(ctx, []accountCandidate{{account: account, price: price}}, settings, key.ID, true, true)
 			if err != nil {
 				return result, err
 			}
-		}
-		if !settled {
-			if output.terminal != nil && callErr == nil {
-				if err := output.finish(); err != nil {
-					return result, err
-				}
-			}
-			return result, callErr
-		}
-		if !hydrated && owner != nil && request.Previous != "" && len(owner.ContextEncrypted) > 0 && !owner.FilePinned && safeZero && missingPreviousResponse(result, callErr) {
-			replayRequest := request
-			replayRequest.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
-			if err := request.loadInput(); err != nil {
-				return result, err
-			}
-			replayRequest.Input = request.Input
-			if _, err := p.catalogAccounts(&replayRequest, []domain.Account{account}, account.ID); err != nil {
-				return result, err
-			}
-			if replay, err := replayBody(replayRequest, history); err == nil {
-				request = replayRequest
-				wire, hydrated = replay, true
-				_, accountLease, err = p.admittedAccount(ctx, []accountCandidate{{account: account, price: price}}, settings, key.ID, true, true)
-				if err != nil {
-					return result, err
-				}
-				continue // Same account only; a lost cache is not a quota refusal.
-			}
+			continue // Same account only; a lost cache is not a quota refusal.
 		}
 		if !quota {
-			if result.ResponseID != "" && (callErr == nil || output.visible) {
-				if err := request.loadInput(); err != nil {
-					return result, err
-				}
-				if err := p.remember(ctx, options, request, history, owner, account, result, id, target.TurnState != "", callErr == nil && !result.Failed); err != nil {
-					return result, err
-				}
+			if finalized.ContinuationErr != nil {
+				return result, finalized.ContinuationErr
 			}
-			if output.terminal != nil && callErr == nil {
-				if err := output.finish(); err != nil {
-					return result, err
-				}
-			}
-			return result, callErr
+			return result, finishOutput(output, callErr)
 		}
 		if !safeZero {
-			if output.terminal != nil && callErr == nil {
-				if err := output.finish(); err != nil {
-					return result, err
-				}
-			}
-			return result, callErr
+			return result, finishOutput(output, callErr)
 		}
 		if request.FilePinned || owner != nil && (owner.FilePinned || len(owner.ContextEncrypted) == 0) {
-			if output.terminal != nil && callErr == nil {
-				if err := output.finish(); err != nil {
-					return result, err
-				}
+			if err := finishOutput(output, callErr); callErr == nil && err != nil {
+				return result, err
 			}
 			return result, replayUnavailable()
+		}
+		if history, historyErr = storedHistory.get(); historyErr != nil {
+			return result, replayUnavailable() // Unreadable history cannot be replayed elsewhere.
 		}
 		hydrated = true
 		request.ResponsesLite = request.ResponsesLite || inputUsesResponsesLite(history.Items)
@@ -626,9 +639,24 @@ func drainingError() error {
 	return &ProxyError{Code: "server_draining", Status: 503, Message: "Server is shutting down; retry on the replacement server"}
 }
 
-func (p *Proxy) settle(ctx context.Context, id string, options ResponseOptions, account domain.Account, request responseRequest, price pricing.Price, result ResponseResult, callErr error, safeZero bool, started, attemptAt time.Time, queueMS, firstMS, firstTokenMS int64) (bool, error) {
+// finishOutput releases the buffered terminal of a successful attempt after
+// its finalization committed, then returns the attempt's error.
+func finishOutput(output *responseOutput, callErr error) error {
+	if output.terminal != nil && callErr == nil {
+		if err := output.finish(); err != nil {
+			return err
+		}
+	}
+	return callErr
+}
+
+// settlement plans the attempt's ledger step: settle known or confirmed-absent
+// usage, or retain an uncertain reservation for reconciliation.
+func (p *Proxy) settlement(id string, options ResponseOptions, account domain.Account, request responseRequest, price pricing.Price, result ResponseResult, callErr error, safeZero bool, started, attemptAt time.Time, queueMS, firstMS, firstTokenMS int64) (domain.ResponseFinalization, error) {
+	plan := domain.ResponseFinalization{ReservationID: id, Bounds: p.config.ContinuationBounds}
 	if operationUsageUncertain(200, result.UsageKnown, callErr) && !safeZero {
-		return false, retainUncertainUsage(ctx, p.store, id)
+		plan.RetainUncertain = true
+		return plan, nil
 	}
 	usage := result.Usage
 	if !result.UsageKnown {
@@ -641,10 +669,8 @@ func (p *Proxy) settle(ctx context.Context, id string, options ResponseOptions, 
 	if result.UsageKnown {
 		cost, err := price.Cost(usage, tier)
 		if err != nil {
-			if markErr := retainUncertainUsage(ctx, p.store, id); markErr != nil {
-				return false, markErr
-			}
-			return false, &ProxyError{Code: "invalid_upstream_usage", Status: 502, Message: "Upstream usage could not be accounted; reservation retained"}
+			plan.RetainUncertain = true
+			return plan, &ProxyError{Code: "invalid_upstream_usage", Status: 502, Message: "Upstream usage could not be accounted; reservation retained"}
 		}
 		usage.CostMicrodollars = cost
 	}
@@ -675,13 +701,8 @@ func (p *Proxy) settle(ctx context.Context, id string, options ResponseOptions, 
 	if result.TimingsKnown {
 		event.FirstEventMS = result.FirstEventMS
 	}
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	_, err := p.store.SettleUsage(cleanup, id, domain.UsageSettlement{Status: settlement, Event: event})
-	if err != nil {
-		return false, &ProxyError{Code: "usage_settlement_failed", Status: 503, Message: "Could not persist request accounting; do not blindly repeat the request"}
-	}
-	return true, nil
+	plan.Settlement = domain.UsageSettlement{Status: settlement, Event: event}
+	return plan, nil
 }
 
 func quotaFailure(result ResponseResult, err error) bool {

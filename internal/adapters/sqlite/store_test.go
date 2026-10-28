@@ -186,8 +186,10 @@ func TestReservationReleaseAndReset(t *testing.T) {
 		Model: "gpt-test", Budget: domain.UsageAmount{InputTokens: 1}, Now: fixedTime}); !errors.Is(err, ErrLimitReached) {
 		t.Fatalf("exhausted limit admitted: %v", err)
 	}
-	if released, err := s.ReleaseStaleReservations(ctx, fixedTime.Add(time.Second)); err != nil || released != 2 {
-		t.Fatalf("release stale: %d, %v", released, err)
+	for _, id := range []string{"r1", "r2"} {
+		if released, err := s.SettleUsage(ctx, id, domain.UsageSettlement{Status: "released"}); err != nil || !released {
+			t.Fatalf("release %s: %v, %v", id, released, err)
+		}
 	}
 	key, err := s.GetAPIKey(ctx, "key")
 	if err != nil || key.Limits[0].CurrentValue != 0 {

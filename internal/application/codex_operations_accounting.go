@@ -127,16 +127,13 @@ func (s *CodexOperations) billedAdmitted(
 	attemptAt := s.now()
 	_, err = s.store.ReserveUsage(ctx, domain.ReservationRequest{
 		ID: id, APIKeyID: key.ID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision, Continuation: true,
-		Model: model, Budget: budget, Now: attemptAt,
+		Model: model, Budget: budget, Now: attemptAt, Affinity: target.affinity.cas(account.ID, attemptAt),
 	})
 	if err != nil {
-		return CodexOperationResult{}, err
+		return CodexOperationResult{}, reservationError(err)
 	}
 
 	result, callErr := callSafely(func() (CodexOperationResult, error) {
-		if err := target.affinity.save(ctx, s.store, account.ID, id); err != nil {
-			return CodexOperationResult{}, &ProviderFailure{Code: "affinity_persistence_failed", Status: 503}
-		}
 		if options.OnDispatch != nil {
 			options.OnDispatch()
 		}

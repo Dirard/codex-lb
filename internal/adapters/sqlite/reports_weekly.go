@@ -13,7 +13,7 @@ func (s *Store) PositiveQuotaDeltas(ctx context.Context, since, until time.Time)
 	if !since.Before(until) || until.Sub(since) > 7*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	rows, err := s.readDB.QueryContext(ctx, `WITH baseline AS (
+	rows, err := s.analyticsDB.QueryContext(ctx, `WITH baseline AS (
  SELECT (SELECT h.id FROM account_quota_history h WHERE h.account_id=q.account_id
  AND h.window=q.window AND h.observed_at<? ORDER BY h.observed_at DESC,h.id DESC LIMIT 1) AS id
  FROM account_quotas q
@@ -54,7 +54,7 @@ func (s *Store) WeeklyPaceTopKeys(ctx context.Context, since, until time.Time) (
 		return nil, ErrInvalid
 	}
 	facts, args := reportFacts(domain.ReportFilter{}, since, until)
-	rows, err := s.readDB.QueryContext(ctx, facts+`, models AS (
+	rows, err := s.analyticsDB.QueryContext(ctx, facts+`, models AS (
  SELECT api_key_id,model,sum(request_count) AS requests,
  sum(input_tokens+output_tokens) AS tokens,sum(cached_input_tokens) AS cached
  FROM facts GROUP BY api_key_id,model

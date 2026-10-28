@@ -44,7 +44,7 @@ func (s *Store) SaveAutomationJob(ctx context.Context, job domain.AutomationJob)
 	if job.ID == "" || job.Name == "" || job.Schedule.Time == "" || job.Model == "" {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, id := range job.AccountIDs {
 			var exists int
 			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM accounts WHERE id=?
@@ -126,19 +126,21 @@ func (s *Store) ListAutomationJobs(ctx context.Context) ([]domain.AutomationJob,
 }
 
 func (s *Store) DeleteAutomationJob(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM automation_jobs WHERE id=?", id)
-	if err != nil {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, "DELETE FROM automation_jobs WHERE id=?", id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotFound
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM automation_runs WHERE job_id=?", id)
 		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	_, _ = s.db.ExecContext(ctx, "DELETE FROM automation_runs WHERE job_id=?", id)
-	return nil
+	})
 }
 
 // EnsureAutomationRun inserts the durable claim row; existing rows win.
@@ -149,7 +151,7 @@ func (s *Store) EnsureAutomationRun(ctx context.Context, run domain.AutomationRu
 	if run.AccountGeneration < 0 {
 		return ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO automation_runs (
+	_, err := s.exec(ctx, `INSERT INTO automation_runs (
  id,job_id,cycle_key,slot_key,trigger_kind,status,model,reasoning_effort,scheduled_for,account_id,account_generation
  ) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slot_key) DO NOTHING`,
 		run.ID, run.JobID, run.CycleKey, run.SlotKey, run.Trigger, domain.AutomationPending,
@@ -161,7 +163,7 @@ func (s *Store) EnsureAutomationRun(ctx context.Context, run domain.AutomationRu
 // this process; only the winner executes them. Stale running rows are never
 // returned here: their upstream execution state is unknowable after a crash.
 func (s *Store) ClaimDueAutomationRuns(ctx context.Context, dueBefore time.Time) ([]domain.AutomationRun, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+automationRunColumns+` FROM automation_runs
+	rows, err := s.readDB.QueryContext(ctx, `SELECT `+automationRunColumns+` FROM automation_runs
  WHERE status=? AND scheduled_for<=? LIMIT 256`, domain.AutomationPending, millis(dueBefore))
 	if err != nil {
 		return nil, err
@@ -181,7 +183,7 @@ func (s *Store) ClaimDueAutomationRuns(ctx context.Context, dueBefore time.Time)
 	claimed := make([]domain.AutomationRun, 0, len(candidates))
 	now := time.Now().UTC()
 	for _, run := range candidates {
-		res, err := s.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, started_at=?, attempt_count=attempt_count+1
+		res, err := s.exec(ctx, `UPDATE automation_runs SET status=?, started_at=?, attempt_count=attempt_count+1
 	 WHERE id=? AND status=? AND scheduled_for<=? AND account_generation=?`,
 			domain.AutomationRunning, millis(now), run.ID, domain.AutomationPending, millis(dueBefore), run.AccountGeneration)
 		if err != nil {
@@ -206,7 +208,7 @@ func (s *Store) ClaimDueAutomationRuns(ctx context.Context, dueBefore time.Time)
 // without replaying them: the upstream synthetic request may already have
 // executed before the crash, so re-running could double-spend.
 func (s *Store) AbandonStaleAutomationRuns(ctx context.Context, staleBefore time.Time) (int, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE automation_runs
+	res, err := s.exec(ctx, `UPDATE automation_runs
 	 SET status=?, finished_at=?, error_code=?, error_message=?
 	 WHERE status=? AND started_at<?`,
 		domain.AutomationFailed, millis(time.Now().UTC()), "stale_run_abandoned",
@@ -222,7 +224,7 @@ func (s *Store) CompleteAutomationRun(ctx context.Context, id string, generation
 	if status != domain.AutomationSuccess && status != domain.AutomationFailed || generation < 0 {
 		return ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, finished_at=?, error_code=?, error_message=?
+	res, err := s.exec(ctx, `UPDATE automation_runs SET status=?, finished_at=?, error_code=?, error_message=?
 	 WHERE id=? AND account_generation=? AND status=?`, status, millis(finishedAt), errorCode, errorMessage, id, generation, domain.AutomationRunning)
 	if err != nil {
 		return err

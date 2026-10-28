@@ -47,7 +47,7 @@ func (s *Store) PinResetCredit(ctx context.Context, accountID string, accountGen
 		return application.ResetRedemption{}, domain.ErrInvalid
 	}
 	var pinned application.ResetRedemption
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		current, err := accountIncarnationCurrentTx(ctx, tx, accountID, accountGeneration)
 		if err != nil {
 			return err

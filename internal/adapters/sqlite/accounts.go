@@ -136,7 +136,7 @@ func fernetCiphertext(v []byte) bool {
 }
 
 func (s *Store) SaveAccountCredential(ctx context.Context, c domain.AccountCredential) error {
-	return transact(ctx, s.db, func(tx *sql.Tx) error { return saveAccountCredential(ctx, tx, c) })
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error { return saveAccountCredential(ctx, tx, c) })
 }
 
 func saveAccountCredential(ctx context.Context, db accountWriter, c domain.AccountCredential) error {
@@ -181,7 +181,7 @@ func (s *Store) GetAccountCredential(ctx context.Context, id string) (domain.Acc
 }
 
 func (s *Store) SaveAccountQuota(ctx context.Context, q domain.AccountQuota) error {
-	return transact(ctx, s.db, func(tx *sql.Tx) error { return saveAccountQuotaTx(ctx, tx, q) })
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error { return saveAccountQuotaTx(ctx, tx, q) })
 }
 
 func saveAccountQuotaTx(ctx context.Context, tx *sql.Tx, q domain.AccountQuota) error {
