@@ -109,6 +109,9 @@ type fakeUpdateHost struct {
 	preparedVersion string
 	calls           []string
 	stops           int
+	overlap         bool
+	besideErr       error
+	handoverErr     error
 }
 
 func (h *fakeUpdateHost) record(call string) {
@@ -177,6 +180,27 @@ func (h *fakeUpdateHost) Activate(context.Context) error {
 	if fail {
 		return errors.New("activation failed")
 	}
+	return nil
+}
+
+func (h *fakeUpdateHost) Overlap() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.overlap
+}
+
+func (h *fakeUpdateHost) StartBeside(_ context.Context, installation domain.RuntimeInstallation) error {
+	h.record("beside:" + installation.Descriptor.Version)
+	return h.besideErr
+}
+
+func (h *fakeUpdateHost) Handover(context.Context) error {
+	h.record("handover")
+	return h.handoverErr
+}
+
+func (h *fakeUpdateHost) DiscardCandidate(context.Context) error {
+	h.record("discard")
 	return nil
 }
 
