@@ -73,7 +73,7 @@ func prepareUsageIdentityTx(ctx context.Context, tx *sql.Tx, snapshot domain.Acc
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
-	if err == nil && previousStart >= millis(started) {
+	if err == nil && previousStart > millis(started) {
 		return false, ErrConflict
 	}
 	plan := strings.ToLower(strings.TrimSpace(snapshot.ReportedPlanType))
