@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"codex-lb/internal/domain"
@@ -210,6 +211,21 @@ func databaseFilePath(uri string) string {
 	return parsed.Opaque
 }
 
+// durableSynchronous is FULL: committed accounting must survive power loss.
+const durableSynchronous = "2"
+
+// testBinaryNoSync lets test binaries skip fsync. Tests verify logic, and a
+// killed process loses nothing the OS page cache still holds; the durability
+// tests opt back in. Programs built with go build always use FULL.
+var testBinaryNoSync = testing.Testing()
+
+func synchronousLevel() string {
+	if testBinaryNoSync {
+		return "0"
+	}
+	return durableSynchronous
+}
+
 func sqliteDSN(path string, readonly bool) (string, error) {
 	base, query := path, ""
 	if len(path) > 1 {
@@ -228,7 +244,7 @@ func sqliteDSN(path string, readonly bool) (string, error) {
 	}
 	values.Set("_busy_timeout", "5000")
 	values.Set("_foreign_keys", "1")
-	values.Set("_synchronous", "2")
+	values.Set("_synchronous", synchronousLevel())
 	if readonly {
 		values.Set("_query_only", "1")
 	} else {
