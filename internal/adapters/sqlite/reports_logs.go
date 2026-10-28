@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"codex-lb/internal/domain"
@@ -145,8 +146,20 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	unbounded := filter
 	unbounded.Before = nil
 	countEvents, countPending, countArgs := requestLogSources(unbounded)
-	countQuery := pendingRequestLogSource + `SELECT (SELECT count(*)` + countEvents + `)+(SELECT count(*)` + countPending + `)`
-	if err := tx.QueryRowContext(ctx, countQuery, countArgs...).Scan(&response.Total); err != nil {
+	// The page stays a raw keyset or offset read; the total comes from the
+	// rollups when they can serve the filter.
+	reader, err := openRollupRead(ctx, tx)
+	if err != nil {
+		return response, err
+	}
+	err = errRollupDeclined
+	if reader != nil {
+		response.Total, err = reader.requestLogTotal(ctx, unbounded)
+	}
+	if errors.Is(err, errRollupDeclined) {
+		response.Total, err = requestLogTotalRaw(ctx, tx, unbounded)
+	}
+	if err != nil {
 		return response, err
 	}
 	query := `SELECT e.requested_at,e.account_id,nullif(coalesce(e.plan_type,a.plan_type),''),
@@ -261,14 +274,32 @@ func logNullableInt(value sql.NullInt64) *int64 {
 	return &value.Int64
 }
 
-func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogFilter) (domain.RequestLogOptions, error) {
-	options := domain.RequestLogOptions{AccountIDs: []string{}, ModelOptions: []domain.RequestLogModelOption{},
+// requestLogTotalRaw counts the filtered events and pending entries.
+func requestLogTotalRaw(ctx context.Context, tx *sql.Tx, filter domain.RequestLogFilter) (int64, error) {
+	countEvents, countPending, countArgs := requestLogSources(filter)
+	var total int64
+	err := tx.QueryRowContext(ctx, pendingRequestLogSource+`SELECT (SELECT count(*)`+countEvents+`)+(SELECT count(*)`+
+		countPending+`)`, countArgs...).Scan(&total)
+	return total, err
+}
+
+func emptyRequestLogOptions() domain.RequestLogOptions {
+	return domain.RequestLogOptions{AccountIDs: []string{}, ModelOptions: []domain.RequestLogModelOption{},
 		APIKeys: []domain.RequestLogAPIKeyOption{}, Statuses: []string{}}
-	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return options, err
-	}
-	defer tx.Rollback()
+}
+
+// RequestLogOptions returns the filter facets of the request log from
+// rollups (reports_logs_rollup.go) or, as fallback and oracle, from raw
+// events. Statuses never filter the facets and a cursor never limits them.
+func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogFilter) (domain.RequestLogOptions, error) {
+	filter.Statuses = nil
+	filter.Before = nil
+	return analyticsRead(ctx, s, func(r *rollupRead) (domain.RequestLogOptions, error) { return r.requestLogOptions(ctx, filter) },
+		func(tx *sql.Tx) (domain.RequestLogOptions, error) { return requestLogOptionsRaw(ctx, tx, filter) })
+}
+
+func requestLogOptionsRaw(ctx context.Context, tx *sql.Tx, filter domain.RequestLogFilter) (domain.RequestLogOptions, error) {
+	options := emptyRequestLogOptions()
 	filter.Statuses = nil // Status facet must not self-filter.
 	filter.Before = nil   // Facets describe the whole result, not one page.
 	events, pending, args := requestLogSources(filter)

@@ -96,6 +96,18 @@ func (r *runtime) registerGauges(responses interface{ ClientWebSockets() (int, i
 		}
 		return out
 	})
+	r.metrics.Gauge("codex_lb_usage_rollup_lag_rows", "Usage events and journal rows the rollup folder has not folded, estimated.", func() []registry.Sample {
+		return one(float64(r.rollups.Stats().LagRows))
+	})
+	r.metrics.Gauge("codex_lb_usage_rollup_fold_errors", "Usage rollup folder runs that failed since start.", func() []registry.Sample {
+		return one(float64(r.rollups.Stats().FoldErrors))
+	})
+	r.metrics.Gauge("codex_lb_usage_rollup_rebuilds", "Usage rollup rebuilds requested since start.", func() []registry.Sample {
+		return one(float64(r.rollups.Stats().Rebuilds))
+	})
+	r.metrics.Gauge("codex_lb_usage_rollup_mismatches", "Usage rollup verifier mismatches since start.", func() []registry.Sample {
+		return one(float64(r.rollups.Stats().Mismatches))
+	})
 	r.metrics.Gauge("codex_lb_database_bytes", "SQLite database and WAL file sizes.", func() []registry.Sample {
 		out := []registry.Sample{}
 		for file, label := range map[string]string{"codex-lb.sqlite3": "database", "codex-lb.sqlite3-wal": "wal"} {

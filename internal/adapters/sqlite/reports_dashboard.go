@@ -9,19 +9,30 @@ import (
 	"codex-lb/internal/domain"
 )
 
+// QueryDashboardTraffic evaluates the dashboard overview's traffic from
+// rollups (reports_dashboard_rollup.go) or, as fallback and oracle, from raw
+// events and folded hours.
 func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time, bucketSeconds, bucketCount int) (domain.DashboardTraffic, error) {
+	if !start.Before(end) || bucketSeconds < 3600 || bucketSeconds > 86400 || bucketCount < 1 || bucketCount > 30 {
+		return domain.DashboardTraffic{Buckets: []domain.DashboardTrafficBucket{}}, ErrInvalid
+	}
+	return analyticsRead(ctx, s, func(r *rollupRead) (domain.DashboardTraffic, error) {
+		return r.dashboardTraffic(ctx, start, end, bucketSeconds, bucketCount)
+	}, func(tx *sql.Tx) (domain.DashboardTraffic, error) {
+		return queryDashboardTrafficRaw(ctx, tx, start, end, bucketSeconds, bucketCount)
+	})
+}
+
+func queryDashboardTrafficRaw(ctx context.Context, q analyticsQuerier, start, end time.Time, bucketSeconds, bucketCount int) (domain.DashboardTraffic, error) {
 	var result domain.DashboardTraffic
 	result.Buckets = []domain.DashboardTrafficBucket{}
-	if !start.Before(end) || bucketSeconds < 3600 || bucketSeconds > 86400 || bucketCount < 1 || bucketCount > 30 {
-		return result, ErrInvalid
-	}
 	filter := domain.ReportFilter{Start: start, End: end, Location: time.UTC}
-	current, err := s.aggregateReportWindow(ctx, filter, start, end)
+	current, err := aggregateReportWindow(ctx, q, filter, start, end)
 	if err != nil {
 		return result, err
 	}
 	previousStart := start.Add(-end.Sub(start))
-	previous, err := s.aggregateReportWindow(ctx, filter, previousStart, start)
+	previous, err := aggregateReportWindow(ctx, q, filter, previousStart, start)
 	if err != nil {
 		return result, err
 	}
@@ -38,48 +49,33 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 	}
 	result.PreviousCostUSD = previous.costUSD
 	result.CurrentErrors, result.CurrentCancelled = current.errors, current.cancelled
-	result.CurrentConversations, err = s.countReportConversations(ctx, filter, start, end)
+	result.CurrentConversations, err = countReportConversations(ctx, q, filter, start, end)
 	if err != nil {
 		return result, err
 	}
-	result.ConversationRequests, err = s.dashboardConversationRequests(ctx, filter, start, end)
+	result.ConversationRequests, err = dashboardConversationRequests(ctx, q, filter, start, end)
 	if err != nil {
 		return result, err
 	}
-	result.TopError, err = s.dashboardTopError(ctx, filter, start, end)
+	result.TopError, err = dashboardTopError(ctx, q, filter, start, end)
 	if err != nil {
 		return result, err
 	}
-	result.CanCompare, err = s.reportHasActivityBefore(ctx, filter, previousStart)
+	result.CanCompare, err = reportHasActivityBefore(ctx, q, filter, previousStart)
 	if err != nil {
 		return result, err
 	}
 	first := (start.Unix() + int64(bucketSeconds) - 1) / int64(bucketSeconds) * int64(bucketSeconds)
 	facts, args := reportFacts(filter, time.Unix(first, 0), end)
-	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT (at_ms/1000/?)*?,coalesce(sum(request_count),0),
- coalesce(sum(input_tokens),0),coalesce(sum(output_tokens),0),
- coalesce(sum(cached_input_tokens),0),coalesce(sum(cost_usd),0),
- coalesce(sum(error_count),0),coalesce(sum(cancelled_count),0)
- FROM facts GROUP BY 1 ORDER BY 1`, append(args, bucketSeconds, bucketSeconds)...)
+	sums, err := dashboardFactBuckets(ctx, q, facts, args, bucketSeconds)
 	if err != nil {
 		return result, err
 	}
 	buckets := map[int64]domain.DashboardTrafficBucket{}
-	for rows.Next() {
-		var epoch int64
-		var bucket domain.DashboardTrafficBucket
-		if err := rows.Scan(&epoch, &bucket.Requests, &bucket.Input, &bucket.Output, &bucket.Cached,
-			&bucket.CostUSD, &bucket.Errors, &bucket.Cancelled); err != nil {
-			rows.Close()
-			return result, err
-		}
-		bucket.At = time.Unix(epoch, 0).UTC()
+	for epoch, sum := range sums {
+		bucket := sum.bucket
+		bucket.CostUSD = reportCostUSD(sum.legacyCost, sum.m.cost)
 		buckets[epoch] = bucket
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return result, err
 	}
 	for index := 0; index < bucketCount; index++ {
 		epoch := first + int64(index*bucketSeconds)
@@ -90,7 +86,7 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 			until = end
 		}
 		if bucket.At.Before(end) {
-			bucket.Conversations, err = s.countReportConversations(ctx, filter, bucket.At, until)
+			bucket.Conversations, err = countReportConversations(ctx, q, filter, bucket.At, until)
 			if err != nil {
 				return result, err
 			}
@@ -100,20 +96,54 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 	return result, nil
 }
 
-func (s *Store) dashboardConversationRequests(ctx context.Context, filter domain.ReportFilter, start, end time.Time) (int64, error) {
+// dashboardFactSum is one trend bucket of facts: folded REAL costs summed by
+// SQLite and raw microdollars apart.
+type dashboardFactSum struct {
+	bucket     domain.DashboardTrafficBucket
+	legacyCost float64
+	m          rollupMeasures
+}
+
+// dashboardFactBuckets sums facts by trend bucket.
+func dashboardFactBuckets(ctx context.Context, q analyticsQuerier, facts string, args []any, bucketSeconds int) (map[int64]dashboardFactSum, error) {
+	rows, err := q.QueryContext(ctx, facts+`SELECT (at_ms/1000/?)*?,coalesce(sum(request_count),0),
+ coalesce(sum(input_tokens),0),coalesce(sum(output_tokens),0),
+ coalesce(sum(cached_input_tokens),0),coalesce(sum(cost_usd),0),coalesce(sum(cost_micro),0),
+ coalesce(sum(error_count),0),coalesce(sum(cancelled_count),0)
+ FROM facts GROUP BY 1 ORDER BY 1`, append(args, bucketSeconds, bucketSeconds)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sums := map[int64]dashboardFactSum{}
+	for rows.Next() {
+		var epoch int64
+		var sum dashboardFactSum
+		b := &sum.bucket
+		if err := rows.Scan(&epoch, &b.Requests, &b.Input, &b.Output, &b.Cached, &sum.legacyCost, &sum.m.cost,
+			&b.Errors, &b.Cancelled); err != nil {
+			return nil, err
+		}
+		b.At = time.Unix(epoch, 0).UTC()
+		sums[epoch] = sum
+	}
+	return sums, rows.Err()
+}
+
+func dashboardConversationRequests(ctx context.Context, q analyticsQuerier, filter domain.ReportFilter, start, end time.Time) (int64, error) {
 	var folded, raw int64
-	err := s.analyticsDB.QueryRowContext(ctx, `SELECT coalesce(sum(request_count),0) FROM legacy_conversation_hourly
+	err := q.QueryRowContext(ctx, `SELECT coalesce(sum(request_count),0) FROM legacy_conversation_hourly
  WHERE bucket_epoch>=? AND bucket_epoch<?`, start.Unix(), end.Unix()).Scan(&folded)
 	if err != nil {
 		return 0, err
 	}
 	where, args := rawReportWhere(filter, start, end)
-	err = s.analyticsDB.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e WHERE `+where+`
+	err = q.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e WHERE `+where+`
  AND e.conversation_id IS NOT NULL AND trim(e.conversation_id)!=''`, args...).Scan(&raw)
 	return folded + raw, err
 }
 
-func (s *Store) dashboardTopError(ctx context.Context, filter domain.ReportFilter, start, end time.Time) (*string, error) {
+func dashboardTopError(ctx context.Context, q analyticsQuerier, filter domain.ReportFilter, start, end time.Time) (*string, error) {
 	rawWhere, rawArgs := rawReportWhere(filter, start, end)
 	query := `SELECT error_code FROM (
  SELECT error_code,error_count AS amount FROM legacy_hourly_errors
@@ -125,7 +155,7 @@ func (s *Store) dashboardTopError(ctx context.Context, filter domain.ReportFilte
 ) GROUP BY error_code ORDER BY sum(amount) DESC,error_code LIMIT 1`
 	args := append([]any{start.Unix(), end.Unix()}, rawArgs...)
 	var code string
-	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&code)
+	err := q.QueryRowContext(ctx, query, args...).Scan(&code)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

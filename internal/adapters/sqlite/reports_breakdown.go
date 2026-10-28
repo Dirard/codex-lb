@@ -7,7 +7,7 @@ import (
 	"codex-lb/internal/domain"
 )
 
-func (s *Store) countReportConversations(ctx context.Context, filter domain.ReportFilter, start, end time.Time) (int64, error) {
+func countReportConversations(ctx context.Context, q analyticsQuerier, filter domain.ReportFilter, start, end time.Time) (int64, error) {
 	rawWhere, rawArgs := rawReportWhere(filter, start, end)
 	query := `SELECT count(DISTINCT conversation_id) FROM (`
 	args := make([]any, 0)
@@ -30,6 +30,6 @@ func (s *Store) countReportConversations(ctx context.Context, filter domain.Repo
  AND e.conversation_id IS NOT NULL AND trim(e.conversation_id)!='')`
 	args = append(args, rawArgs...)
 	var count int64
-	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&count)
+	err := q.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
 }
