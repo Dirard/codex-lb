@@ -144,7 +144,8 @@ func PlanCapacity(host HostResources, overrides CapacityOverrides) CapacityPlan 
 		plan.Overridden = append(plan.Overridden, "body_memory_key_share")
 	}
 	// An idle key can always send one maximum-size body.
-	plan.BodyBudgetKeyBytes = max(plan.BodyBudgetBytes*int64(share)/100, min(plan.BodyBudgetBytes, MaxRequestBodyBytes))
+	keyBytes := plan.BodyBudgetBytes/100*int64(share) + plan.BodyBudgetBytes%100*int64(share)/100 // no overflow for huge overrides
+	plan.BodyBudgetKeyBytes = max(keyBytes, min(plan.BodyBudgetBytes, MaxRequestBodyBytes))
 	plan.UpstreamWebSockets = plan.MaxGenerations
 	plan.UpstreamConnsPerHost = plan.MaxGenerations
 	plan.SQLiteReaders = min(32, max(8, 2*host.CPUs+4))

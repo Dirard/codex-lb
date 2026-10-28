@@ -4,20 +4,30 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"sync"
+	"time"
 
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
 )
 
-// bodyChargeChunk bounds how much one read of an undeclared body charges ahead
-// of the bytes it actually returns.
+// bodyChargeChunk bounds how much one read charges ahead of the bytes it
+// actually returns.
 const bodyChargeChunk = 64 << 10
+
+// A request body must keep arriving: a read that makes no progress for
+// bodyIdleTimeout ends the request, and a body is never read for longer than
+// RequestBodyTimeout, which the runtime also uses as its server ReadTimeout.
+const (
+	bodyIdleTimeout    = 10 * time.Second
+	RequestBodyTimeout = 2 * time.Minute
+)
 
 // BodyBudget bounds the request-body bytes that in-flight proxy requests
 // retain, across every proxy route, with an optional per-key share. It counts
-// body bytes, not process memory, and never blocks: a body that does not fit
-// is refused with local capacity.
+// body bytes as they arrive, not process memory, and never blocks: a body that
+// does not fit is refused with local capacity.
 type BodyBudget struct {
 	mu       sync.Mutex
 	limit    int64
@@ -25,6 +35,8 @@ type BodyBudget struct {
 	used     int64
 	keys     map[string]int64
 	rejected uint64
+	// idleTimeout is bodyIdleTimeout; tests shorten it.
+	idleTimeout time.Duration
 }
 
 // BodyBudgetUsage reports retained body bytes against the budget.
@@ -46,7 +58,7 @@ func NewBodyBudget(limit, keyLimit int64) *BodyBudget {
 	if keyLimit <= 0 || keyLimit > limit {
 		keyLimit = limit
 	}
-	return &BodyBudget{limit: limit, keyLimit: keyLimit, keys: make(map[string]int64)}
+	return &BodyBudget{limit: limit, keyLimit: keyLimit, keys: make(map[string]int64), idleTimeout: bodyIdleTimeout}
 }
 
 // Usage reports the retained bytes, the bounds and how many bodies were refused.
@@ -73,6 +85,15 @@ func (b *BodyBudget) sharedKey(key string) bool {
 	return b.keyLimit < b.limit && key != domain.LocalProxyKeyID
 }
 
+// freeLocked is what key may still charge.
+func (b *BodyBudget) freeLocked(key string) int64 {
+	free := b.limit - b.used
+	if b.sharedKey(key) {
+		free = min(free, b.keyLimit-b.keys[key])
+	}
+	return free
+}
+
 // bodyLease is one request's charge against the budget. release returns it
 // exactly once; later grants and releases are no-ops.
 type bodyLease struct {
@@ -91,11 +112,7 @@ func (l *bodyLease) grow(n int64, all bool) int64 {
 	if l.closed || n <= 0 {
 		return 0
 	}
-	free := b.limit - b.used
-	if b.sharedKey(l.key) {
-		free = min(free, b.keyLimit-b.keys[l.key])
-	}
-	granted := min(n, free)
+	granted := min(n, b.freeLocked(l.key))
 	if granted <= 0 || all && granted < n {
 		return 0
 	}
@@ -142,72 +159,135 @@ func (l *bodyLease) give(n int64) {
 	}
 }
 
-// chargedReader charges every byte it returns before the caller can retain it.
-// prepaid bytes (a declared Content-Length) were charged up front; beyond them
-// each read is granted at most bodyChargeChunk and the unread rest refunded.
+// admit checks a declared body length before any byte is read: a length above
+// maximum is too large, one the free budget cannot hold now is refused. Nothing
+// is reserved; bytes are charged as they arrive, so a request that declares a
+// length and sends nothing holds nothing.
+func (l *bodyLease) admit(r *http.Request, maximum int64) error {
+	if r.ContentLength > maximum {
+		return requestTooLarge()
+	}
+	if r.ContentLength <= 0 {
+		return nil
+	}
+	b := l.budget
+	b.mu.Lock()
+	fits := r.ContentLength <= b.freeLocked(l.key)
+	b.mu.Unlock()
+	if !fits {
+		return b.refuse()
+	}
+	return nil
+}
+
+// open admits r's body and returns a reader that charges every byte it returns
+// and keeps the read deadline moving while bytes arrive; maximum bounds the
+// body as read from the connection.
+func (l *bodyLease) open(w http.ResponseWriter, r *http.Request, maximum int64) (io.Reader, error) {
+	if err := l.admit(r, maximum); err != nil {
+		return nil, err
+	}
+	var source io.Reader = http.MaxBytesReader(w, r.Body, maximum)
+	if r.ContentLength != 0 {
+		end := time.Now().Add(RequestBodyTimeout)
+		progress := &progressReader{source: source, controller: http.NewResponseController(w), idle: l.budget.idleTimeout, end: end}
+		progress.extend()
+		source = progress
+	}
+	return source, nil
+}
+
+// chargedReader charges every byte it returns before the caller can retain it,
+// granting at most bodyChargeChunk per read and refunding the unread rest. It
+// returns at most limit bytes (0: unlimited); one more byte, read without
+// charge, means the body is too large rather than over budget.
 type chargedReader struct {
-	source  io.Reader
-	lease   *bodyLease
-	prepaid int64
+	source io.Reader
+	lease  *bodyLease
+	limit  int64
+	read   int64
+	err    error
 }
 
 func (c *chargedReader) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if c.prepaid > 0 {
-		n, err := c.source.Read(p[:min(int64(len(p)), c.prepaid)])
-		c.prepaid -= int64(n)
-		return n, err
+	if c.limit > 0 {
+		if c.read >= c.limit {
+			c.err = probeEnd(c.source, requestTooLarge)
+			var tooLarge *http.MaxBytesError
+			if errors.As(c.err, &tooLarge) {
+				c.err = requestTooLarge()
+			}
+			return 0, c.err
+		}
+		p = p[:min(int64(len(p)), c.limit-c.read)]
 	}
 	granted := c.lease.grow(min(int64(len(p)), bodyChargeChunk), false)
 	if granted == 0 {
 		// Nothing is free: the body fits only if it has already ended.
-		var probe [1]byte
-		if _, err := io.ReadAtLeast(c.source, probe[:], 1); err != nil {
-			return 0, err
-		}
-		return 0, c.lease.budget.refuse()
+		c.err = probeEnd(c.source, c.lease.budget.refuse)
+		return 0, c.err
 	}
 	n, err := c.source.Read(p[:granted])
+	c.read += int64(n)
 	c.lease.refund(granted - int64(n))
 	return n, err
 }
 
-// admitDeclared charges a declared body length before any byte is read: a
-// length above maximum is too large, one the budget cannot hold is refused. It
-// returns the prepaid length, 0 when the length is undeclared.
-func (l *bodyLease) admitDeclared(r *http.Request, maximum int64) (int64, error) {
-	if r.ContentLength > maximum {
-		return 0, requestTooLarge()
+// probeEnd reads one byte without charging it: the end of the body yields
+// io.EOF, a further byte the failure.
+func probeEnd(source io.Reader, failure func() error) error {
+	var probe [1]byte
+	if _, err := io.ReadAtLeast(source, probe[:], 1); err != nil {
+		return err
 	}
-	if r.ContentLength <= 0 {
-		return 0, nil
-	}
-	if l.grow(r.ContentLength, true) == 0 {
-		return 0, l.budget.refuse()
-	}
-	return r.ContentLength, nil
+	return failure()
 }
 
-// readDeclaredBody reads a body of known, already charged length into one
-// exactly sized buffer.
-func readDeclaredBody(source io.Reader, length int64) ([]byte, error) {
-	body := make([]byte, length)
-	if _, err := io.ReadFull(source, body); err != nil {
-		return nil, &application.ProxyError{Code: "invalid_request_body", Status: 400, Message: "Could not decode request body"}
-	}
-	return body, nil
+// progressReader moves the connection's read deadline to idle after every read
+// that returns data, never past end, so a stalled upload ends the request and
+// releases what it was charged. Once the body has ended the deadline is left
+// alone: the server clears it for its own background read.
+type progressReader struct {
+	source     io.Reader
+	controller *http.ResponseController
+	idle       time.Duration
+	end        time.Time
 }
 
-// readChargedBody reads a body of unknown length through its charging reader.
-func readChargedBody(reader *chargedReader, maximum int64) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(reader, maximum+1))
-	if refused := budgetRefusal(err); refused != nil {
-		return nil, refused
+func (p *progressReader) extend() {
+	deadline := time.Now().Add(p.idle)
+	if deadline.After(p.end) {
+		deadline = p.end
+	}
+	// Unsupported writers (tests' recorders) keep the server's ReadTimeout.
+	_ = p.controller.SetReadDeadline(deadline)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.source.Read(b)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return n, &application.ProxyError{Code: "request_body_timeout", Status: 408, Message: "Request body stopped arriving"}
+	}
+	if n > 0 && err == nil {
+		p.extend()
+	}
+	return n, err
+}
+
+// readChargedBody reads a whole body through its charging reader.
+func readChargedBody(reader *chargedReader) ([]byte, error) {
+	body, err := io.ReadAll(reader)
+	if failure := bodyFailure(err); failure != nil {
+		return nil, failure
 	}
 	var tooLarge *http.MaxBytesError
-	if int64(len(body)) > maximum || errors.As(err, &tooLarge) {
+	if errors.As(err, &tooLarge) {
 		return nil, requestTooLarge()
 	}
 	if err != nil {
@@ -216,11 +296,12 @@ func readChargedBody(reader *chargedReader, maximum int64) ([]byte, error) {
 	return body, nil
 }
 
-// budgetRefusal returns the budget's local capacity error carried by err.
-func budgetRefusal(err error) error {
-	var refused *application.ProxyError
-	if errors.As(err, &refused) && refused.Code == "local_capacity_exceeded" {
-		return refused
+// bodyFailure returns the local error (budget refusal, size or timeout) a body
+// read carried, if any.
+func bodyFailure(err error) error {
+	var failure *application.ProxyError
+	if errors.As(err, &failure) {
+		return failure
 	}
 	return nil
 }

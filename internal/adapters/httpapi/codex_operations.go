@@ -415,16 +415,13 @@ func readOperationJSON(w http.ResponseWriter, r *http.Request, lease *bodyLease,
 }
 
 // readOperationBody reads an operation body as sent (operations do not decode
-// Content-Encoding), charged to lease like a Responses body.
+// Content-Encoding), charged to lease as it arrives.
 func readOperationBody(w http.ResponseWriter, r *http.Request, lease *bodyLease, maximum int64) ([]byte, error) {
-	if _, err := lease.admitDeclared(r, maximum); err != nil {
+	source, err := lease.open(w, r, maximum)
+	if err != nil {
 		return nil, err
 	}
-	source := http.MaxBytesReader(w, r.Body, maximum)
-	if r.ContentLength >= 0 {
-		return readDeclaredBody(source, r.ContentLength)
-	}
-	return readChargedBody(&chargedReader{source: source, lease: lease}, maximum)
+	return readChargedBody(&chargedReader{source: source, lease: lease, limit: maximum})
 }
 
 func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease, requireModel bool) (application.CodexTranscriptionRequest, error) {
@@ -437,11 +434,11 @@ func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease
 	default:
 		return application.CodexTranscriptionRequest{}, &application.ProxyError{Code: "unsupported_content_encoding", Status: 415, Message: "Unsupported request encoding"}
 	}
-	prepaid, err := lease.admitDeclared(r, domain.MaxRequestBodyBytes)
+	source, err := lease.open(w, r, domain.MaxRequestBodyBytes)
 	if err != nil {
 		return application.CodexTranscriptionRequest{}, err
 	}
-	reader := multipart.NewReader(&chargedReader{source: http.MaxBytesReader(w, r.Body, domain.MaxRequestBodyBytes), lease: lease, prepaid: prepaid}, params["boundary"])
+	reader := multipart.NewReader(&chargedReader{source: source, lease: lease, limit: domain.MaxRequestBodyBytes}, params["boundary"])
 	var result application.CodexTranscriptionRequest
 	files := 0
 	for {
@@ -449,8 +446,8 @@ func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		if refused := budgetRefusal(err); refused != nil {
-			return application.CodexTranscriptionRequest{}, refused
+		if failure := bodyFailure(err); failure != nil {
+			return application.CodexTranscriptionRequest{}, failure
 		}
 		if err != nil {
 			return application.CodexTranscriptionRequest{}, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Invalid multipart request"}
@@ -464,8 +461,8 @@ func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease
 			result.Filename = part.FileName()
 			result.ContentType = part.Header.Get("Content-Type")
 			result.Audio, err = io.ReadAll(io.LimitReader(part, 25_000_001))
-			if refused := budgetRefusal(err); refused != nil {
-				return application.CodexTranscriptionRequest{}, refused
+			if failure := bodyFailure(err); failure != nil {
+				return application.CodexTranscriptionRequest{}, failure
 			}
 			if err != nil || len(result.Audio) > 25_000_000 {
 				return application.CodexTranscriptionRequest{}, &application.ProxyError{Code: "audio_too_large", Status: 413, Message: "Audio file exceeds size limit"}
@@ -474,13 +471,14 @@ func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease
 			continue
 		}
 		value, err := io.ReadAll(io.LimitReader(part, 65537))
-		part.Close()
-		if refused := budgetRefusal(err); refused != nil {
-			return application.CodexTranscriptionRequest{}, refused
+		if failure := bodyFailure(err); failure != nil {
+			return application.CodexTranscriptionRequest{}, failure
 		}
+		// An invalid field is not drained, so its remainder is never charged.
 		if err != nil || len(value) > 65536 {
 			return application.CodexTranscriptionRequest{}, &application.ProxyError{Code: "invalid_request", Status: 400, Message: "Invalid transcription field"}
 		}
+		part.Close()
 		switch name {
 		case "model":
 			result.Model = string(value)

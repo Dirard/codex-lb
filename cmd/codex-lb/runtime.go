@@ -244,7 +244,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	r.server = &http.Server{Addr: cfg.listen, Handler: accessLog(r.requests.track(mux), logger, registry, cfg.trusted),
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 		BaseContext:       func(net.Listener) context.Context { return baseCtx },
-		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, IdleTimeout: 90 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: httpapi.RequestBodyTimeout, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 64 << 10,
 		// No whole-response WriteTimeout: SSE/WS may legitimately run for hours.
 	}

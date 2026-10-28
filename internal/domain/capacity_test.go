@@ -92,6 +92,10 @@ func TestPlanCapacityBodyBudgetOverrides(t *testing.T) {
 	if whole.BodyBudgetKeyBytes != whole.BodyBudgetBytes {
 		t.Fatalf("100%% share must disable the per-key bound: %+v", whole)
 	}
+	huge := PlanCapacity(host, CapacityOverrides{BodyBudgetBytes: 1 << 61, BodyBudgetKeySharePct: 50})
+	if huge.BodyBudgetKeyBytes != 1<<60 {
+		t.Fatalf("huge budget share overflowed: %d", huge.BodyBudgetKeyBytes)
+	}
 	tight := PlanCapacity(host, CapacityOverrides{BodyBudgetBytes: MaxRequestBodyBytes, BodyBudgetKeySharePct: 25})
 	if tight.BodyBudgetKeyBytes != MaxRequestBodyBytes {
 		t.Fatalf("per-key bound must admit one maximum-size body: %+v", tight)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -209,9 +208,8 @@ func (p *ProxyHandler) responses(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(result.Response)
 }
 
-// readProxyBody reads a Responses or Chat body charged to lease: a declared
-// identity body is charged up front and read into one exact buffer; gzip and
-// undeclared bodies are charged by decoded bytes while they are read.
+// readProxyBody reads a Responses or Chat body charged to lease as it arrives;
+// a gzip body is charged and bounded by its decoded bytes.
 func readProxyBody(w http.ResponseWriter, r *http.Request, lease *bodyLease) (json.RawMessage, error) {
 	const maximum = domain.MaxRequestBodyBytes
 	compressed := false
@@ -222,24 +220,22 @@ func readProxyBody(w http.ResponseWriter, r *http.Request, lease *bodyLease) (js
 	default:
 		return nil, &application.ProxyError{Code: "unsupported_content_encoding", Status: 415, Message: "Unsupported request encoding"}
 	}
-	prepaid, err := lease.admitDeclared(r, maximum)
+	source, err := lease.open(w, r, maximum)
 	if err != nil {
 		return nil, err
 	}
-	source := http.MaxBytesReader(w, r.Body, maximum)
-	if !compressed && r.ContentLength >= 0 {
-		return readDeclaredBody(source, r.ContentLength)
-	}
-	var reader io.Reader = source
 	if compressed {
 		gz, err := gzip.NewReader(source)
 		if err != nil {
+			if failure := bodyFailure(err); failure != nil {
+				return nil, failure
+			}
 			return nil, &application.ProxyError{Code: "invalid_content_encoding", Status: 400, Message: "Invalid compressed request body"}
 		}
 		defer gz.Close()
-		reader = gz
+		source = gz
 	}
-	return readChargedBody(&chargedReader{source: reader, lease: lease, prepaid: prepaid}, maximum)
+	return readChargedBody(&chargedReader{source: source, lease: lease, limit: maximum})
 }
 
 func proxyError(err error) (int, string, string) {

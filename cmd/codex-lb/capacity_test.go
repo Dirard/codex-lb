@@ -57,9 +57,9 @@ func TestServeCapacityFlags(t *testing.T) {
 	}
 }
 
-// TestRuntimeRoutesShareOneBodyBudget holds a declared Responses body that has
-// not arrived yet; compact, Chat Completions and transcription bodies then get
-// local capacity from the same budget until the holder disconnects.
+// TestRuntimeRoutesShareOneBodyBudget holds a Responses body that has arrived
+// except for its last byte; compact, Chat Completions and transcription bodies
+// then get local capacity from the same budget until the holder disconnects.
 func TestRuntimeRoutesShareOneBodyBudget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -84,8 +84,8 @@ func TestRuntimeRoutesShareOneBodyBudget(t *testing.T) {
 	}
 	server := httptest.NewServer(r.server.Handler)
 	defer server.Close()
-	// declare sends only the request head, so the server charges the declared
-	// length and then waits for a body that never comes.
+	// declare sends only the request head; the server checks the declared
+	// length against the free budget and charges bytes as they arrive.
 	declare := func(path, contentType string, length int) net.Conn {
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", strings.TrimPrefix(server.URL, "http://"))
 		if err != nil {
@@ -106,6 +106,9 @@ func TestRuntimeRoutesShareOneBodyBudget(t *testing.T) {
 		return response.StatusCode == http.StatusServiceUnavailable && bytes.Contains(payload, []byte("local_capacity_exceeded")) && response.Header.Get("Retry-After") == "2"
 	}
 	holder := declare("/v1/responses", "application/json", 20<<20)
+	if _, err := holder.Write(bytes.Repeat([]byte("x"), 20<<20-1)); err != nil {
+		t.Fatal(err)
+	}
 	for deadline := time.Now().Add(5 * time.Second); !refused(declare("/backend-api/codex/responses/compact", "application/json", 20<<20)); {
 		if time.Now().After(deadline) {
 			t.Fatal("compact did not share the Responses body budget")

@@ -32,7 +32,7 @@ func (p *ProxyHandler) readWebSocketFrame(ctx context.Context, connection *webso
 	} else {
 		body := bytes.NewBuffer(prefix)
 		_, err = body.ReadFrom(&chargedReader{source: reader, lease: lease})
-		if refused = budgetRefusal(err); refused == nil {
+		if refused = bodyFailure(err); refused == nil {
 			return kind, body.Bytes(), lease.release, err
 		}
 		lease.release()

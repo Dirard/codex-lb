@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,27 +87,58 @@ func TestChargedReaderAdmitsExactFitAndRefusesOneMoreByte(t *testing.T) {
 	}
 	fit.release()
 	over := bodies.lease("key")
-	_, err = io.ReadAll(&chargedReader{source: strings.NewReader("0123456789x"), lease: over})
-	if budgetRefusal(err) == nil || bodies.Usage().Rejected != 1 {
+	reader := &chargedReader{source: strings.NewReader("0123456789xy"), lease: over}
+	_, err = io.ReadAll(reader)
+	var refused *application.ProxyError
+	if !errors.As(err, &refused) || refused.Status != 503 || bodies.Usage().Rejected != 1 {
 		t.Fatalf("one byte over the budget was admitted: %v", err)
+	}
+	// The refusal is sticky and counted once.
+	if _, again := reader.Read(make([]byte, 4)); again != err || bodies.Usage().Rejected != 1 {
+		t.Fatalf("repeated refusal: %v rejected=%d", again, bodies.Usage().Rejected)
 	}
 	if used := bodies.Usage().UsedBytes; used != 10 {
 		t.Fatalf("partial charge = %d, want the bytes read", used)
 	}
 	over.release()
-	prepaid := bodies.lease("key")
-	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("01234"))
-	paid, err := prepaid.admitDeclared(request, 32)
-	if err != nil || paid != 5 || bodies.Usage().UsedBytes != 5 {
-		t.Fatalf("declared length was not charged up front: %d %v", paid, err)
-	}
-	body, err = io.ReadAll(&chargedReader{source: request.Body, lease: prepaid, prepaid: paid})
-	if err != nil || string(body) != "01234" || bodies.Usage().UsedBytes != 5 {
-		t.Fatalf("prepaid body charged twice: %q used=%d", body, bodies.Usage().UsedBytes)
-	}
-	prepaid.release()
+}
+
+// Past the route maximum a body is too large whatever the budget holds: the
+// byte that proves it is read without charging.
+func TestChargedReaderLimitReportsTooLargeBeforeBudget(t *testing.T) {
+	bodies := NewBodyBudget(10, 0)
+	lease := bodies.lease("key")
+	_, err := io.ReadAll(&chargedReader{source: strings.NewReader("0123456789x"), lease: lease, limit: 10})
 	var tooLarge *application.ProxyError
-	if _, err := bodies.lease("key").admitDeclared(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", 33))), 32); !errors.As(err, &tooLarge) || tooLarge.Status != 413 || bodies.Usage().UsedBytes != 0 {
+	if !errors.As(err, &tooLarge) || tooLarge.Status != 413 || bodies.Usage().Rejected != 0 || bodies.Usage().UsedBytes != 10 {
+		t.Fatalf("body past the maximum on a full budget: %v %+v", err, bodies.Usage())
+	}
+	lease.release()
+	exact := bodies.lease("key")
+	if body, err := io.ReadAll(&chargedReader{source: strings.NewReader("0123456789"), lease: exact, limit: 10}); err != nil || len(body) != 10 {
+		t.Fatalf("body of exactly the maximum: %d %v", len(body), err)
+	}
+	exact.release()
+}
+
+// A declared length is checked against the free budget but not reserved.
+func TestDeclaredLengthIsCheckedNotReserved(t *testing.T) {
+	bodies := NewBodyBudget(10, 0)
+	request := func(length int) *http.Request {
+		return httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", length)))
+	}
+	if err := bodies.lease("key").admit(request(10), 32); err != nil || bodies.Usage().UsedBytes != 0 {
+		t.Fatalf("fitting declared length: %v used=%d", err, bodies.Usage().UsedBytes)
+	}
+	holder := bodies.lease("key")
+	holder.grow(4, true)
+	var refused *application.ProxyError
+	if err := bodies.lease("key").admit(request(7), 32); !errors.As(err, &refused) || refused.Status != 503 {
+		t.Fatalf("declared length beyond the free budget: %v", err)
+	}
+	holder.release()
+	var tooLarge *application.ProxyError
+	if err := bodies.lease("key").admit(request(33), 32); !errors.As(err, &tooLarge) || tooLarge.Status != 413 || bodies.Usage().UsedBytes != 0 {
 		t.Fatalf("declared length above the maximum: %v", err)
 	}
 }
@@ -226,6 +259,86 @@ func TestNativeChatBodiesAreChargedToTheSharedBudget(t *testing.T) {
 		t.Fatalf("fitting Chat body: %d %s", served.Code, served.Body.String())
 	}
 	if usage := bodies.Usage(); usage.UsedBytes != 0 || usage.Rejected != 1 {
+		t.Fatalf("usage = %+v", usage)
+	}
+}
+
+// rawBodyRequest sends a request head declaring length and the first part of
+// its body over a raw connection, leaving the rest unsent.
+func rawBodyRequest(t *testing.T, server *httptest.Server, path string, length int, sent []byte) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: codex-lb\r\nAuthorization: Bearer synthetic-heartbeat\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n", path, length)
+	if _, err := conn.Write(sent); err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+// TestStalledUploadReleasesItsChargeAtTheIdleDeadline: an upload that stops
+// arriving ends with 408 and returns what it was charged, while an upload that
+// keeps arriving more slowly than the idle deadline is served and its stream
+// outlives the deadline.
+func TestStalledUploadReleasesItsChargeAtTheIdleDeadline(t *testing.T) {
+	var calls atomic.Int32
+	server, _ := heartbeatFixture(t, func(ctx context.Context, target application.ResponseTarget, body json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+		calls.Add(1)
+		// Longer than the idle deadline: a deadline left on the connection
+		// after the body would cancel this response.
+		if err := heartbeatSleep(ctx, 600*time.Millisecond); err != nil {
+			return application.ResponseResult{}, err
+		}
+		return (localReplyProvider{}).Respond(ctx, target, body, emit)
+	})
+	p := server.Config.Handler.(*ProxyHandler)
+	p.bodies.idleTimeout = 200 * time.Millisecond
+	body := []byte(`{"model":"gpt-6-sol","stream":true,"input":"` + strings.Repeat("z", 64<<10) + `"}`)
+
+	stalled := rawBodyRequest(t, server, "/backend-api/codex/responses", len(body), body[:32<<10])
+	// A blocked read also holds its grant for the next chunk (at most 64 KiB).
+	for deadline := time.Now().Add(time.Second); p.bodies.Usage().UsedBytes < 32<<10; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("received bytes were not charged: %d", p.bodies.Usage().UsedBytes)
+		}
+	}
+	_ = stalled.SetReadDeadline(time.Now().Add(3 * time.Second))
+	response, err := http.ReadResponse(bufio.NewReader(stalled), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusRequestTimeout || !strings.Contains(string(payload), "request_body_timeout") {
+		t.Fatalf("stalled upload: %d %s", response.StatusCode, payload)
+	}
+	for deadline := time.Now().Add(time.Second); p.bodies.Usage().UsedBytes != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("stalled upload kept its charge")
+		}
+	}
+
+	slow := rawBodyRequest(t, server, "/backend-api/codex/responses", len(body), nil)
+	for offset := 0; offset < len(body); offset += 8 << 10 {
+		time.Sleep(100 * time.Millisecond)
+		if _, err := slow.Write(body[offset:min(len(body), offset+8<<10)]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = slow.SetReadDeadline(time.Now().Add(5 * time.Second))
+	response, err = http.ReadResponse(bufio.NewReader(slow), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(payload), "response.completed") || calls.Load() != 1 {
+		t.Fatalf("slow but progressing upload: %d calls=%d %s", response.StatusCode, calls.Load(), payload)
+	}
+	if usage := p.bodies.Usage(); usage.UsedBytes != 0 || usage.Rejected != 0 {
 		t.Fatalf("usage = %+v", usage)
 	}
 }

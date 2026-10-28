@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -390,5 +391,89 @@ func TestTranscriptionBodiesAreChargedToTheSharedBudget(t *testing.T) {
 	}
 	if usage := bodies.Usage(); usage.UsedBytes != 0 || usage.Rejected != 2 || calls.Load() != 2 {
 		t.Fatalf("usage = %+v calls = %d", usage, calls.Load())
+	}
+}
+
+// Review finding 1: connections that declare a large body and send none of it
+// must not hold the budget; the declared length is checked, not reserved.
+func TestStalledDeclaredBodiesHoldNoBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bodies := httpapi.NewBodyBudget(128<<20, 64<<20)
+	server, store := budgetResponsesServer(t, func(_ context.Context, _ application.ResponseTarget, _ json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+		return wireComplete("served", emit)
+	}, bodies)
+	if err := store.SaveAPIKey(ctx, domain.APIKey{ID: "second-key", Name: "second", KeyHash: fmt.Sprintf("%x", sha256.Sum256([]byte("synthetic-second-key"))), KeyPrefix: "synthetic", IsActive: true}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{"synthetic-key", "synthetic-key", "synthetic-second-key", "synthetic-second-key"} {
+		conn, err := net.Dial("tcp", server.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		fmt.Fprintf(conn, "POST /v1/responses HTTP/1.1\r\nHost: codex-lb\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n", token, domain.MaxRequestBodyBytes)
+	}
+	time.Sleep(50 * time.Millisecond)
+	// Each stalled read holds at most its first small grant.
+	if used := bodies.Usage().UsedBytes; used > 4*(64<<10) {
+		t.Fatalf("headers without a body hold %d bytes", used)
+	}
+	for _, token := range []string{"synthetic-key", "synthetic-second-key"} {
+		if reply, err := postBudgetBody(ctx, server.URL+"/v1/responses", token, "application/json", bytes.NewReader(responsesBody("small", 1<<10))); err != nil || reply.status != http.StatusOK {
+			t.Fatalf("request beside stalled uploads from %s: %+v %v", token, reply, err)
+		}
+	}
+	if bodies.Usage().Rejected != 0 {
+		t.Fatalf("usage = %+v", bodies.Usage())
+	}
+}
+
+// Review finding 2: a body past the route maximum is too large (413), not over
+// budget (503), even when the key's free share is no larger than the maximum.
+func TestOversizedBodiesGetTooLargeOnTheMinimumPlan(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// The 64 MiB minimum plan gives one key exactly the 32 MiB maximum.
+	bodies := httpapi.NewBodyBudget(64<<20, 32<<20)
+	server, store := budgetResponsesServer(t, nil, bodies)
+	oversized := responsesBody("big", int(domain.MaxRequestBodyBytes)+10)
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, _ = writer.Write(oversized)
+	_ = writer.Close()
+	for name, send := range map[string]func() (budgetReply, error){
+		"gzip declared": func() (budgetReply, error) {
+			return postBudgetBody(ctx, server.URL+"/v1/responses", "synthetic-key", "application/json", bytes.NewReader(compressed.Bytes()), "Content-Encoding", "gzip")
+		},
+		"gzip chunked": func() (budgetReply, error) {
+			return postBudgetBody(ctx, server.URL+"/v1/responses", "synthetic-key", "application/json", undeclared{bytes.NewReader(compressed.Bytes())}, "Content-Encoding", "gzip")
+		},
+		"identity chunked": func() (budgetReply, error) {
+			return postBudgetBody(ctx, server.URL+"/v1/responses", "synthetic-key", "application/json", undeclared{bytes.NewReader(oversized)})
+		},
+	} {
+		if reply, err := send(); err != nil || reply.status != http.StatusRequestEntityTooLarge || reply.code != "request_too_large" || reply.retry != "" {
+			t.Fatalf("%s: %+v %v", name, reply, err)
+		}
+	}
+	operations := application.NewCodexOperations(store, store, nil, time.Hour)
+	handler := httpapi.NewCodexOperationsHandler(store, operations, nil)
+	handler.ConfigureBodyBudget(bodies)
+	operationsServer := httptest.NewServer(handler)
+	t.Cleanup(operationsServer.Close)
+	var form bytes.Buffer
+	multipartWriter := multipart.NewWriter(&form)
+	_ = multipartWriter.WriteField("model", "gpt-4o-transcribe")
+	file, _ := multipartWriter.CreateFormFile("file", "synthetic.wav")
+	_, _ = file.Write(bytes.Repeat([]byte("a"), 26_000_000))
+	_ = multipartWriter.Close()
+	if reply, err := postBudgetBody(ctx, operationsServer.URL+"/backend-api/transcribe", "synthetic-key", multipartWriter.FormDataContentType(), undeclared{&form}); err != nil ||
+		reply.status != http.StatusRequestEntityTooLarge || reply.code != "audio_too_large" {
+		t.Fatalf("chunked oversized audio: %+v %v", reply, err)
+	}
+	waitBudget(t, bodies, 0)
+	if usage := bodies.Usage(); usage.Rejected != 0 {
+		t.Fatalf("oversized bodies were counted as budget refusals: %+v", usage)
 	}
 }
