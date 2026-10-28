@@ -13,6 +13,7 @@ import (
 )
 
 func TestStoreUsesDurableWALAcrossReopen(t *testing.T) {
+	requireDurableSync(t)
 	path := filepath.Join(t.TempDir(), "journal.sqlite")
 	for range 2 {
 		store, err := Open(path)
@@ -113,6 +114,7 @@ func TestUsageTotalsReadCommittedDataWithoutWaitingForWriter(t *testing.T) {
 }
 
 func TestEveryReadConnectionIsBoundedReadOnlyAndConfigured(t *testing.T) {
+	requireDurableSync(t)
 	ctx := context.Background()
 	store, _ := testStore(t)
 	connections := make([]*sql.Conn, readPoolSize)
@@ -150,6 +152,7 @@ func TestEveryReadConnectionIsBoundedReadOnlyAndConfigured(t *testing.T) {
 }
 
 func TestWriterPragmasSurvivePhysicalReconnect(t *testing.T) {
+	requireDurableSync(t)
 	ctx := context.Background()
 	store, _ := testStore(t)
 	for range 2 {
@@ -222,5 +225,20 @@ func TestLiteralAndEscapedURIPathsOpenSameDatabase(t *testing.T) {
 	loaded, err := second.GetAPIKey(ctx, key.ID)
 	if err != nil || loaded.ID != key.ID {
 		t.Fatalf("URI opened another database: key=%+v error=%v", loaded, err)
+	}
+}
+
+// requireDurableSync opens stores with the production FULL synchronous level.
+func requireDurableSync(t *testing.T) {
+	t.Helper()
+	previous := testBinaryNoSync
+	testBinaryNoSync = false
+	t.Cleanup(func() { testBinaryNoSync = previous })
+}
+
+func TestProgramsAlwaysUseFullSynchronous(t *testing.T) {
+	requireDurableSync(t)
+	if got := synchronousLevel(); got != durableSynchronous {
+		t.Fatalf("synchronous = %s", got)
 	}
 }
