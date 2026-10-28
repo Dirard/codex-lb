@@ -11,13 +11,27 @@ import { getErrorMessageOrNull } from "@/utils/errors";
 
 const CAPACITY_QUERY_KEY = ["runtime", "capacity"] as const;
 
-function UsageRow({ label, used, limit }: { label: string; used: number; limit: number }) {
+function formatBodyBytes(bytes: number): string {
+  return bytes > 0 ? formatBytes(bytes) : "0 B";
+}
+
+function UsageRow({
+  label,
+  used,
+  limit,
+  format = formatNumber,
+}: {
+  label: string;
+  used: number;
+  limit: number;
+  format?: (value: number) => string;
+}) {
   const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between gap-2 text-xs">
         <span className="text-muted-foreground">{label}</span>
-        <span className="tabular-nums">{formatNumber(used)} / {formatNumber(limit)}</span>
+        <span className="tabular-nums">{format(used)} / {format(limit)}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted" role="presentation">
         <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
@@ -44,10 +58,15 @@ function CapacityDetails({ capacity }: { capacity: RuntimeCapacity }) {
           used={Math.round(usage.residentBytes / (1 << 20))}
           limit={Math.round((limits.goMemoryLimitBytes || host.memoryBytes) / (1 << 20))}
         />
+        <UsageRow label={t("settings.capacity.bodies")} used={usage.bodyBytes} limit={limits.bodyBudgetBytes} format={formatBodyBytes} />
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <dt>{t("settings.capacity.goMemoryLimit")}</dt>
         <dd className="tabular-nums text-foreground">{limits.goMemoryLimitBytes > 0 ? formatBytes(limits.goMemoryLimitBytes) : t("settings.capacity.unset")}</dd>
+        <dt>{t("settings.capacity.bodyKeyLimit")}</dt>
+        <dd className="tabular-nums text-foreground">{formatBytes(limits.bodyBudgetKeyBytes)}</dd>
+        <dt>{t("settings.capacity.bodyRejections")}</dt>
+        <dd className="tabular-nums text-foreground">{formatNumber(usage.bodyRejections)}</dd>
         <dt>{t("settings.capacity.goHeap")}</dt>
         <dd className="tabular-nums text-foreground">{formatBytes(usage.goHeapBytes)}</dd>
         <dt>{t("settings.capacity.upstream")}</dt>

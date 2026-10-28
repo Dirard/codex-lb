@@ -29,6 +29,26 @@ func largeCreate() []byte {
 	return []byte(`{"type":"response.create","model":"gpt-6-sol","input":"` + strings.Repeat("x", 6000) + `"}`)
 }
 
+// largeBodies is a request-body budget that holds exactly n largeCreate messages.
+func largeBodies(n int) *BodyBudget { return NewBodyBudget(int64(n*len(largeCreate())), 0) }
+
+// heldLarge reports how many whole largeCreate messages the budget holds; -1
+// when the charge is not a whole number of messages.
+func heldLarge(p *ProxyHandler) int {
+	used, size := int(p.bodies.Usage().UsedBytes), len(largeCreate())
+	if used%size != 0 {
+		return -1
+	}
+	return used / size
+}
+
+// fullBodies is a budget whose every byte is held by another request.
+func fullBodies() *BodyBudget {
+	bodies := NewBodyBudget(1<<20, 0)
+	bodies.lease("other-request").grow(1<<20, true)
+	return bodies
+}
+
 func TestLargeWebSocketBodyPermitsDoNotBlockCancellation(t *testing.T) {
 	started := make(chan struct{})
 	var calls atomic.Int32
@@ -41,7 +61,7 @@ func TestLargeWebSocketBodyPermitsDoNotBlockCancellation(t *testing.T) {
 		return (localReplyProvider{}).Respond(ctx, target, body, emit)
 	})
 	p := server.Config.Handler.(*ProxyHandler)
-	p.websocketBodies = make(chan struct{}, 1)
+	p.bodies = largeBodies(1)
 	p.websocketKeepaliveInterval = time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -52,7 +72,7 @@ func TestLargeWebSocketBodyPermitsDoNotBlockCancellation(t *testing.T) {
 	if err := heartbeatWait(ctx, started); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.websocketBodies) != 1 {
+	if heldLarge(p) != 1 {
 		t.Fatal("active large body was not charged")
 	}
 	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.cancel"}`)); err != nil {
@@ -61,8 +81,8 @@ func TestLargeWebSocketBodyPermitsDoNotBlockCancellation(t *testing.T) {
 	if kind, _ := heartbeatRead(t, ctx, conn); kind != "error" {
 		t.Fatal("cancellation did not finish the turn", kind)
 	}
-	if len(p.websocketBodies) != 0 {
-		t.Fatal("cancelled body retained a permit")
+	if heldLarge(p) != 0 {
+		t.Fatal("cancelled body retained a charge")
 	}
 	for _, invalid := range []string{
 		`{` + strings.Repeat(" ", 6000),
@@ -75,8 +95,8 @@ func TestLargeWebSocketBodyPermitsDoNotBlockCancellation(t *testing.T) {
 		if kind, _ := heartbeatRead(t, ctx, conn); kind != "error" {
 			t.Fatal(kind)
 		}
-		if len(p.websocketBodies) != 0 {
-			t.Fatal("invalid frame retained a body permit")
+		if heldLarge(p) != 0 {
+			t.Fatal("invalid frame retained a body charge")
 		}
 	}
 	if err := conn.Write(ctx, websocket.MessageText, largeCreate()); err != nil {
@@ -86,9 +106,9 @@ func TestLargeWebSocketBodyPermitsDoNotBlockCancellation(t *testing.T) {
 		t.Fatal(kind)
 	}
 	// Terminal delivery is acknowledged before the handler releases the input.
-	for deadline := time.Now().Add(time.Second); len(p.websocketBodies) != 0; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(time.Second); heldLarge(p) != 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("completed body retained a permit")
+			t.Fatal("completed body retained a charge")
 		}
 	}
 	if calls.Load() != 2 {
@@ -109,7 +129,7 @@ func TestLargeQueuedWebSocketBodiesReleaseOnOverflowAndDisconnect(t *testing.T) 
 				return application.ResponseResult{}, ctx.Err()
 			})
 			p := server.Config.Handler.(*ProxyHandler)
-			p.websocketBodies = make(chan struct{}, 2)
+			p.bodies = largeBodies(2)
 			p.websocketKeepaliveInterval = time.Hour
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -123,7 +143,7 @@ func TestLargeQueuedWebSocketBodiesReleaseOnOverflowAndDisconnect(t *testing.T) 
 			if err := conn.Write(ctx, websocket.MessageText, largeCreate()); err != nil {
 				t.Fatal(err)
 			}
-			for deadline := time.Now().Add(time.Second); len(p.websocketBodies) != 2; time.Sleep(time.Millisecond) {
+			for deadline := time.Now().Add(time.Second); heldLarge(p) != 2; time.Sleep(time.Millisecond) {
 				if time.Now().After(deadline) {
 					t.Fatal("queued body not charged")
 				}
@@ -140,11 +160,11 @@ func TestLargeQueuedWebSocketBodiesReleaseOnOverflowAndDisconnect(t *testing.T) 
 			conn.CloseNow()
 			for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
 				sockets := len(p.websockets)
-				if sockets == 0 && len(p.websocketBodies) == 0 {
+				if sockets == 0 && p.bodies.Usage().UsedBytes == 0 {
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatalf("cleanup leaked socket=%d bodies=%d", sockets, len(p.websocketBodies))
+					t.Fatalf("cleanup leaked socket=%d bodies=%d", sockets, heldLarge(p))
 				}
 			}
 			if calls.Load() != 1 {
@@ -167,7 +187,7 @@ func TestLargeWebSocketCurrentAndStagedRequestsComplete(t *testing.T) {
 		return (localReplyProvider{}).Respond(ctx, target, body, emit)
 	})
 	p := server.Config.Handler.(*ProxyHandler)
-	p.websocketBodies = make(chan struct{}, 2)
+	p.bodies = largeBodies(2)
 	p.websocketKeepaliveInterval = time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -180,7 +200,7 @@ func TestLargeWebSocketCurrentAndStagedRequestsComplete(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for deadline := time.Now().Add(time.Second); len(p.websocketBodies) != 2; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(time.Second); heldLarge(p) != 2; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("next message was not staged beside its current response")
 		}
@@ -197,8 +217,7 @@ func TestLargeWebSocketCurrentAndStagedRequestsComplete(t *testing.T) {
 }
 
 func TestLargeWebSocketBodyDiscardLeavesControlReadable(t *testing.T) {
-	p := &ProxyHandler{websocketBodies: make(chan struct{}, 1)}
-	p.websocketBodies <- struct{}{}
+	p := &ProxyHandler{bodies: fullBodies()}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -206,14 +225,14 @@ func TestLargeWebSocketBodyDiscardLeavesControlReadable(t *testing.T) {
 		}
 		defer conn.CloseNow()
 		conn.SetReadLimit(32 << 20)
-		_, body, release, err := p.readWebSocketFrame(r.Context(), conn)
+		_, body, release, err := p.readWebSocketFrame(r.Context(), conn, "synthetic-key")
 		defer release()
 		if len(body) != 0 || err == nil {
 			t.Error("read a large body without admission")
 			return
 		}
 		_ = sendWebSocketError(r.Context(), conn, err)
-		_, control, release, err := p.readWebSocketFrame(r.Context(), conn)
+		_, control, release, err := p.readWebSocketFrame(r.Context(), conn, "synthetic-key")
 		defer release()
 		if err != nil || string(control) != `{"type":"response.cancel"}` {
 			t.Error("control frame unavailable after discard", err)
@@ -242,8 +261,8 @@ func TestLargeWebSocketBodyDiscardLeavesControlReadable(t *testing.T) {
 	if _, body, err := conn.Read(ctx); err != nil || string(body) != `{"type":"response.cancel"}` {
 		t.Fatalf("control lost after discard: %s %v", body, err)
 	}
-	if len(p.websocketBodies) != 1 {
-		t.Fatal("rejection released someone else's permit")
+	if usage := p.bodies.Usage(); usage.UsedBytes != 1<<20 || usage.Rejected != 1 {
+		t.Fatalf("rejection changed someone else's charge: %+v", usage)
 	}
 }
 
@@ -264,18 +283,18 @@ func TestLargePartialWebSocketFrameDisconnectReleasesPermit(t *testing.T) {
 	if _, err := writer.Write([]byte(strings.Repeat("x", 16<<10))); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(time.Second); len(p.websocketBodies) != 1; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(time.Second); p.bodies.Usage().UsedBytes == 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("partial large input was not charged")
 		}
 	}
 	conn.CloseNow()
 	for deadline := time.Now().Add(time.Second); ; time.Sleep(time.Millisecond) {
-		if len(p.websockets) == 0 && len(p.websocketBodies) == 0 {
+		if len(p.websockets) == 0 && p.bodies.Usage().UsedBytes == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("partial input leaked its permits")
+			t.Fatal("partial input leaked its charges")
 		}
 	}
 	key, err := store.GetAPIKey(ctx, "heartbeat-key")
@@ -297,7 +316,7 @@ func TestWebSocketInputPressurePreservesSameActiveTurn(t *testing.T) {
 		return application.ResponseResult{}, ctx.Err()
 	})
 	p := server.Config.Handler.(*ProxyHandler)
-	p.websocketBodies = make(chan struct{}, 1)
+	p.bodies = largeBodies(1)
 	p.websocketKeepaliveInterval = time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -320,7 +339,7 @@ func TestWebSocketInputPressurePreservesSameActiveTurn(t *testing.T) {
 		t.Fatal("excess input cancelled the admitted turn")
 	default:
 	}
-	if len(p.websocketBodies) != 1 || calls.Load() != 1 {
+	if heldLarge(p) != 1 || calls.Load() != 1 {
 		t.Fatal("excess input changed admission or dispatched upstream")
 	}
 	if err := active.Write(ctx, websocket.MessageText, []byte(`{"type":"response.cancel"}`)); err != nil {
@@ -329,14 +348,13 @@ func TestWebSocketInputPressurePreservesSameActiveTurn(t *testing.T) {
 	if kind, _ := heartbeatRead(t, ctx, active); kind != "error" {
 		t.Fatal(kind)
 	}
-	if len(p.websocketBodies) != 0 {
-		t.Fatal("cancelled body retained a permit")
+	if heldLarge(p) != 0 {
+		t.Fatal("cancelled body retained a charge")
 	}
 }
 
 func TestLargeWebSocketDiscardKeepsMessageSizeLimit(t *testing.T) {
-	p := &ProxyHandler{websocketBodies: make(chan struct{}, 1)}
-	p.websocketBodies <- struct{}{}
+	p := &ProxyHandler{bodies: fullBodies()}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -344,7 +362,7 @@ func TestLargeWebSocketDiscardKeepsMessageSizeLimit(t *testing.T) {
 		}
 		defer conn.CloseNow()
 		conn.SetReadLimit(8 << 10)
-		_, body, release, err := p.readWebSocketFrame(r.Context(), conn)
+		_, body, release, err := p.readWebSocketFrame(r.Context(), conn, "synthetic-key")
 		release()
 		if body != nil || !errors.Is(err, websocket.ErrMessageTooBig) {
 			t.Error("discard bypassed the message size limit", err)
@@ -362,7 +380,7 @@ func TestLargeWebSocketDiscardKeepsMessageSizeLimit(t *testing.T) {
 	if _, _, err := conn.Read(ctx); websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
 		t.Fatalf("oversized message did not close the connection: %v", err)
 	}
-	if len(p.websocketBodies) != 1 {
-		t.Fatal("discard released another message's permit")
+	if p.bodies.Usage().UsedBytes != 1<<20 {
+		t.Fatal("discard released another message's charge")
 	}
 }

@@ -16,7 +16,7 @@ func TestRuntimeCapacityRouteReportsPlanAndUsageToAdministrators(t *testing.T) {
 	plan := domain.PlanCapacity(domain.HostResources{CPUs: 6, MemoryBytes: 4 << 30, MemorySource: domain.MemorySourceCgroupV2, FileDescriptors: 65536},
 		domain.CapacityOverrides{MaxClientWebSockets: 9000})
 	server.ConfigureRuntimeCapacity(RuntimeCapacitySource{Plan: plan, Usage: func() CapacityUsage {
-		return CapacityUsage{ActiveGenerations: 3, QueuedGenerations: 1, ClientWebSockets: 42, ResidentBytes: 123 << 20}
+		return CapacityUsage{ActiveGenerations: 3, QueuedGenerations: 1, ClientWebSockets: 42, BodyBytes: 5 << 20, BodyRejections: 2, ResidentBytes: 123 << 20}
 	}})
 	handler := server.Handler(nil, nil)
 	if got := runtimeUpdateRequest(handler, "GET", "/api/runtime/capacity", "").Code; got != http.StatusUnauthorized {
@@ -43,10 +43,12 @@ func TestRuntimeCapacityRouteReportsPlanAndUsageToAdministrators(t *testing.T) {
 			t.Fatal(err)
 		}
 		if view.Host.CPUs != 6 || view.Host.MemorySource != domain.MemorySourceCgroupV2 || view.Limits.MaxGenerations != 2048 ||
-			view.Limits.ClientWebSockets != 9000 || view.Limits.SQLiteReaders != 16 || len(view.Overridden) != 1 || view.Overridden[0] != "max_client_websockets" {
+			view.Limits.ClientWebSockets != 9000 || view.Limits.SQLiteReaders != 16 || len(view.Overridden) != 1 || view.Overridden[0] != "max_client_websockets" ||
+			view.Limits.BodyBudgetBytes != 512<<20 || view.Limits.BodyBudgetKeyBytes != 256<<20 {
 			t.Fatalf("view = %+v", view)
 		}
 		if view.Usage.ActiveGenerations != 3 || view.Usage.QueuedGenerations != 1 || view.Usage.ClientWebSockets != 42 ||
+			view.Usage.BodyBytes != 5<<20 || view.Usage.BodyRejections != 2 ||
 			view.Usage.ResidentBytes != 123<<20 || view.Usage.GoHeapBytes <= 0 || view.Usage.Goroutines <= 0 {
 			t.Fatalf("usage = %+v", view.Usage)
 		}
@@ -55,9 +57,10 @@ func TestRuntimeCapacityRouteReportsPlanAndUsageToAdministrators(t *testing.T) {
 
 func TestProxyHandlerLimitsSizeIngressBudgets(t *testing.T) {
 	proxy := application.NewProxy(nil, nil, nil, application.ProxyConfig{MaxStreams: 4, MaxQueued: 2})
-	handler := NewProxyHandlerWithLimits(nil, proxy, nil, ProxyHandlerLimits{BodyReaders: 7, ClientWebSockets: 9})
-	if open, limit := handler.ClientWebSockets(); open != 0 || limit != 9 || cap(handler.reading) != 7 || cap(handler.websocketBodies) != 12 {
-		t.Fatalf("budgets = %d/%d readers=%d bodies=%d", open, limit, cap(handler.reading), cap(handler.websocketBodies))
+	bodies := NewBodyBudget(7<<20, 3<<20)
+	handler := NewProxyHandlerWithLimits(nil, proxy, nil, ProxyHandlerLimits{Bodies: bodies, ClientWebSockets: 9})
+	if open, limit := handler.ClientWebSockets(); open != 0 || limit != 9 || handler.bodies != bodies {
+		t.Fatalf("budgets = %d/%d bodies=%+v", open, limit, handler.bodies.Usage())
 	}
 	if active, queued := proxy.AdmissionUsage(); active != 0 || queued != 0 {
 		t.Fatalf("idle usage = %d/%d", active, queued)

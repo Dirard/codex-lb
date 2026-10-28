@@ -17,6 +17,7 @@ import (
 	"codex-lb/internal/adapters/credentials"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/application"
+	"codex-lb/internal/domain"
 )
 
 type config struct {
@@ -34,6 +35,8 @@ type config struct {
 	selfUpdate                                bool
 	memoryLimit                               int64 // 0 derive from host, <0 leave unset
 	maxGenerations, maxClientWebSockets       int
+	bodyMemoryBudget                          int64 // 0 derive from host
+	bodyMemoryKeyShare                        int   // percent; 0 default share
 	logLevel                                  slog.Level
 	metricsListen                             string
 	publicOrigin                              string
@@ -67,6 +70,22 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		flags.StringVar(&cfg.metricsListen, "metrics-listen", "", "optional address for Prometheus /metrics and /debug/pprof, e.g. 127.0.0.1:9464; unauthenticated, keep it on loopback")
 		flags.Func("max-generations", "concurrent generation bound; default derived from detected memory (512 on a 1 GB host)", positiveIntFlag("max-generations", &cfg.maxGenerations))
 		flags.Func("max-client-websockets", "client WebSocket bound; default derived from detected memory and descriptor limit (4096 on a 1 GB host)", positiveIntFlag("max-client-websockets", &cfg.maxClientWebSockets))
+		flags.Func("body-memory-budget", "request-body bytes all in-flight proxy requests may retain, e.g. 512MiB; default one eighth of detected memory (128MiB on a 1 GB host)", func(raw string) error {
+			size, ok := parseByteSize(raw)
+			if !ok || size < domain.MaxRequestBodyBytes {
+				return errors.New("body-memory-budget must be a size of at least 32MiB such as 512MiB")
+			}
+			cfg.bodyMemoryBudget = size
+			return nil
+		})
+		flags.Func("body-memory-key-share", "percent of the request-body budget one API key may hold (1-100, 100 disables the per-key bound); default 50", func(raw string) error {
+			share, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(raw), "%"))
+			if err != nil || share < 1 || share > 100 {
+				return errors.New("body-memory-key-share must be a percent from 1 to 100")
+			}
+			cfg.bodyMemoryKeyShare = share
+			return nil
+		})
 		flags.StringVar(&cfg.publicOrigin, "public-origin", "", "HTTPS origin browsers use for the dashboard, e.g. https://lb.example.com; enables Secure cookies and HSTS")
 		flags.BoolVar(&cfg.allowPrivateModelSources, "allow-private-model-sources", false, "allow model sources on loopback, private and link-local addresses (self-hosted sources)")
 		flags.Func("unauthenticated-client", "client CIDR (resolved through trusted proxies) permitted without a key only while API-key auth is disabled", func(raw string) error {
@@ -203,6 +222,17 @@ func parseMemoryLimit(raw string) (int64, error) {
 	case "off":
 		return -1, nil
 	}
+	size, ok := parseByteSize(value)
+	if !ok || size < 64<<20 {
+		return 0, errors.New("memory-limit must be auto, off, or a size of at least 64MiB such as 3GiB")
+	}
+	return size, nil
+}
+
+// parseByteSize accepts a positive byte size with the GOMEMLIMIT suffixes B,
+// KiB, MiB, GiB and TiB.
+func parseByteSize(raw string) (int64, bool) {
+	value := strings.TrimSpace(raw)
 	multiplier := int64(1)
 	for _, unit := range []struct {
 		suffix string
@@ -214,8 +244,8 @@ func parseMemoryLimit(raw string) (int64, error) {
 		}
 	}
 	number, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if err != nil || number <= 0 || number > (1<<62)/multiplier || number*multiplier < 64<<20 {
-		return 0, errors.New("memory-limit must be auto, off, or a size of at least 64MiB such as 3GiB")
+	if err != nil || number <= 0 || number > (1<<62)/multiplier {
+		return 0, false
 	}
-	return number * multiplier, nil
+	return number * multiplier, true
 }
