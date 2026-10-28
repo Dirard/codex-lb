@@ -80,11 +80,11 @@ func TestAggregateWindowExcludesUnknownBurnAndSharedAccounts(t *testing.T) {
 	if *group.RemainingPercent != 60 || *group.CapacityCredits != 200 || *group.RemainingCredits != 120 {
 		t.Fatalf("remaining %v of %v", *group.RemainingPercent, *group.CapacityCredits)
 	}
-	if !group.NextResetAt.Equal(*at(3*time.Hour)) || !group.FullResetAt.Equal(*at(4*time.Hour)) {
+	if !group.NextResetAt.Equal(*at(3 * time.Hour)) || !group.FullResetAt.Equal(*at(4 * time.Hour)) {
 		t.Fatalf("resets %v %v", group.NextResetAt, group.FullResetAt)
 	}
 	// The unknown-burn account is excluded from the runway: 20/10 = 2 h.
-	if *group.BurnCreditsPerHour != 10 || !group.RunsOutBeforeReset || !group.ProjectedExhaustionAt.Equal(*at(2*time.Hour)) {
+	if *group.BurnCreditsPerHour != 10 || !group.RunsOutBeforeReset || !group.ProjectedExhaustionAt.Equal(*at(2 * time.Hour)) {
 		t.Fatalf("projection %v burn %v", group.ProjectedExhaustionAt, *group.BurnCreditsPerHour)
 	}
 	// The same account in another group counts fully there as well.

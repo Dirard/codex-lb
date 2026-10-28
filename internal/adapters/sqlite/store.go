@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -37,6 +38,9 @@ type Options struct {
 	// that share the database; new reservations record it. Empty generates a
 	// random id at open.
 	InstanceID string
+	// wrapConnector, set only by tests, wraps the reader connector of the
+	// read and analytics pools, for example to count statements.
+	wrapConnector func(driver.Connector) driver.Connector
 }
 
 // analyticsPoolSize bounds dashboard reports and request-log listing on their
@@ -153,6 +157,9 @@ func OpenWithOptions(path string, options Options) (*Store, error) {
 	if err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if options.wrapConnector != nil {
+		readerConnector = options.wrapConnector(readerConnector)
 	}
 	readDB := sql.OpenDB(readerConnector)
 	readDB.SetMaxOpenConns(readPoolSize)

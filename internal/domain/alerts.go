@@ -211,10 +211,7 @@ func RawAlerts(in AlertInputs) []Alert {
 
 func runwayAlert(subject AlertRunwaySubject, window AlertWindow, now time.Time) (Alert, bool) {
 	health := window.Health
-	critical := false
-	if health.RemainingPercent != nil && *health.RemainingPercent <= RunwayCriticalRemainingPercent {
-		critical = true
-	}
+	critical := health.RemainingPercent != nil && *health.RemainingPercent <= RunwayCriticalRemainingPercent
 	within := RunwayCriticalPrimary
 	if window.Key != "5h" {
 		within = RunwayCriticalSecondary
