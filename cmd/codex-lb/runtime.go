@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex-lb/internal/adapters/backups"
@@ -67,6 +68,10 @@ type runtime struct {
 	retireOnce     sync.Once
 	retireStart    chan struct{}
 	retired        chan struct{}
+	// peerWorkers is the number of other live workers the launcher reported;
+	// peerLoadAt is when it last did (Unix nanoseconds).
+	peerWorkers atomic.Int32
+	peerLoadAt  atomic.Int64
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
@@ -289,11 +294,33 @@ func (r *runtime) startBackground() {
 		go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
 		go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
 		go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
-		go func() { defer r.background.Done(); _ = r.data.store.ResumeModelReprices(r.backgroundCtx) }()
+		go func() {
+			defer r.background.Done()
+			// Repricing writes in long chunk series; let a retiring worker
+			// settle its requests first.
+			if r.waitForSoleWorker(r.backgroundCtx) {
+				_ = r.data.store.ResumeModelReprices(r.backgroundCtx)
+			}
+		}()
 		if err := r.startMetrics(); err != nil {
 			r.logger.Warn("metrics listener disabled", "address", r.config.metricsListen, "reason", err.Error())
 		}
 	})
+}
+
+// waitForSoleWorker returns true once no other worker of the installation
+// serves, or false when ctx ends first.
+func (r *runtime) waitForSoleWorker(ctx context.Context) bool {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for r.peerWorkers.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+	return ctx.Err() == nil
 }
 
 // haltBackground stops background loops and metrics for good; a later
@@ -401,14 +428,15 @@ func (r *runtime) retireServing(ctx context.Context) {
 	retiredAt := time.Now()
 	active, queued := r.proxy.AdmissionUsage()
 	r.logger.Info("retiring: new connections go to the replacement worker", "active_generations", active, "queued_generations", queued)
-	r.haltBackground()
-	close(r.retired)
-	r.proxy.BeginRetire()
 	deadline, cancel := context.WithTimeout(context.Background(), retirementDeadline)
 	defer cancel()
-	// Shutdown closes this worker's copy of the shared listener and its idle
-	// connections; the replacement keeps accepting on the same socket.
+	// Stop accepting first: Shutdown closes this worker's copy of the shared
+	// listener and its idle connections, and the replacement already accepts
+	// on the same socket. Only then join background work and acknowledge.
+	r.proxy.BeginRetire()
 	go func() { _ = r.server.Shutdown(deadline) }()
+	r.haltBackground()
+	close(r.retired)
 	joined := make(chan struct{})
 	go func() { r.requests.active.Wait(); close(joined) }()
 	select {

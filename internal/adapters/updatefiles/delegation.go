@@ -8,10 +8,12 @@ import (
 )
 
 // LauncherDelegation records that a bootstrap re-executed the selected version
-// as the launcher. A delegation that was never confirmed is not repeated.
+// as the launcher. Attempts counts starts that ended before the delegated
+// launcher confirmed; once they are exhausted the delegation is Failed.
 type LauncherDelegation struct {
 	SHA256    string `json:"sha256"`
 	Confirmed bool   `json:"confirmed"`
+	Attempts  int    `json:"attempts,omitempty"`
 	Failed    bool   `json:"failed,omitempty"`
 }
 

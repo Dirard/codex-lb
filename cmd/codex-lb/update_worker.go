@@ -127,6 +127,10 @@ func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) err
 	})
 	if handoff != nil {
 		r.registerHandoffControl(mux, started)
+		var expiry sync.WaitGroup
+		expiry.Add(1)
+		go func() { defer expiry.Done(); r.expirePeerLoad(ctx) }()
+		defer func() { stop(); expiry.Wait() }()
 	}
 	server := &http.Server{Handler: updatecontrol.Protect(token, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 75 * time.Second, MaxHeaderBytes: 4096}
 	done := make(chan struct{})
@@ -228,8 +232,7 @@ func (r *runtime) registerHandoffControl(mux *http.ServeMux, started <-chan stru
 			http.Error(w, "Invalid load", http.StatusBadRequest)
 			return
 		}
-		r.proxy.SetPeerLoad(report.Load)
-		r.applyPeerMemory(report.ResidentBytes)
+		r.applyPeerLoad(report)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /peer-exited", func(w http.ResponseWriter, request *http.Request) {
@@ -238,15 +241,18 @@ func (r *runtime) registerHandoffControl(mux *http.ServeMux, started <-chan stru
 			http.Error(w, "Invalid peers", http.StatusBadRequest)
 			return
 		}
-		for _, instance := range exit.Live {
+		var exited []string
+		for _, instance := range exit.Exited {
 			if !validInstance(instance) {
 				http.Error(w, "Invalid peers", http.StatusBadRequest)
 				return
 			}
+			// This worker's own reservations are live whatever the launcher sent.
+			if instance != r.data.store.InstanceID() {
+				exited = append(exited, instance)
+			}
 		}
-		// This worker's own reservations are live whatever the launcher sent.
-		live := append(exit.Live, r.data.store.InstanceID())
-		interrupted, err := r.data.store.MarkInterruptedReservations(request.Context(), live)
+		interrupted, err := r.data.store.MarkInstanceReservationsInterrupted(request.Context(), exited)
 		if err != nil {
 			http.Error(w, "Cannot mark interrupted usage", http.StatusServiceUnavailable)
 			return
@@ -256,6 +262,38 @@ func (r *runtime) registerHandoffControl(mux *http.ServeMux, started <-chan stru
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// peerLoadTTL clears a peer load the launcher stopped refreshing, so a lost
+// final update cannot hold capacity, account limits or memory forever.
+const peerLoadTTL = 5 * time.Second
+
+func (r *runtime) applyPeerLoad(report workerLoadReport) {
+	r.proxy.SetPeerLoad(report.Load)
+	r.applyPeerMemory(report.ResidentBytes)
+	r.peerWorkers.Store(int32(max(0, report.Workers)))
+	if report.Workers > 0 {
+		r.peerLoadAt.Store(time.Now().UnixNano())
+	} else {
+		r.peerLoadAt.Store(0)
+	}
+}
+
+// expirePeerLoad runs until ctx ends and drops a stale peer load.
+func (r *runtime) expirePeerLoad(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if at := r.peerLoadAt.Load(); at != 0 && time.Since(time.Unix(0, at)) > peerLoadTTL {
+			r.logger.Warn("peer load expired without a launcher update; using this worker's own limits")
+			r.applyPeerLoad(workerLoadReport{})
+		}
+	}
 }
 
 // applyPeerMemory leaves the planned Go memory limit to the host's workers

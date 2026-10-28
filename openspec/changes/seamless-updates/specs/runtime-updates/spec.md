@@ -17,7 +17,7 @@ Installation SHALL use bounded HTTPS downloads from the fixed release origin, ve
 - **THEN** the executable still verifies and its inspected capabilities are used
 
 ### Requirement: Preserve active work and single-writer ownership
-Downloading SHALL leave the current server operational. The system MUST NOT force-cancel an active generation to install an update. Only one installation SHALL own the live database: its launcher holds the exclusive database lock, and only workers it started SHALL use the database. A seamless switch SHALL NOT wait for an idle moment. A classic switch SHALL require a race-free admission gate with no active work, SHALL reject new work after that gate before upstream dispatch, and its waiting SHALL be bounded and leave the current runtime usable if no safe window occurs.
+Downloading SHALL leave the current server operational. The system MUST NOT force-cancel an active generation to install an update. Only one installation SHALL own the live database: its launcher holds the exclusive database lock, and only workers it started SHALL use the database. A seamless switch SHALL NOT wait for an idle moment. A classic switch SHALL wait until every retiring worker exited and SHALL require a race-free admission gate with no active work, SHALL reject new work after that gate before upstream dispatch, and its waiting SHALL be bounded and leave the current runtime usable if no safe window occurs.
 
 #### Scenario: Long-running work during a seamless switch
 - **WHEN** an update is seamless while a response is streaming
@@ -56,7 +56,7 @@ The administrator UI SHALL show the running version, newer version when known, u
 
 ### Requirement: Updates may migrate the database forward with a restorable backup
 
-An update to a version with a newer database schema SHALL take the consistent pre-switch backup before the new version starts and migrates the database; a seamless switch takes it online. If a classic candidate fails startup verification, cannot be persisted as current, or fails activation after migrating, the runtime SHALL restore that backup — removing the failed version's WAL and shared-memory files first — before restarting the previous version. A seamless candidate migrates only additively for the running version, so its failure SHALL NOT restore the backup. Failures before the new version starts SHALL NOT replace the database. After a schema-changing update the previous version SHALL be offered as a rollback only when it is handoff-capable and its schema is at least the new version's schema floor; otherwise the status SHALL explain that returning to it requires restoring the pre-update backup. Boot recovery MUST NOT restore a backup automatically, because traffic may already have used the newer schema.
+An update to a version with a newer database schema SHALL take the consistent pre-switch backup before the new version starts and migrates the database; a seamless switch takes it online. If a classic candidate fails startup verification, cannot be persisted as current, or fails activation after migrating, the runtime SHALL restore that backup — removing the failed version's WAL and shared-memory files first — before restarting the previous version. A seamless candidate migrates only additively for the running version, so its failure SHALL NOT restore the backup. Failures before the new version starts SHALL NOT replace the database. After a schema-changing update the previous version SHALL be offered as a rollback only when it is handoff-capable and its schema is at least the new version's schema floor; otherwise the status SHALL explain that returning to it requires restoring the pre-update backup. Boot recovery MUST NOT restore a backup automatically, because traffic may already have used the newer schema, unless that backup was taken in the same boot right before the failing version opened the database.
 
 #### Scenario: A release adds migrations
 - **WHEN** the administrator applies go-v1.1.0 with schema 40 to an installation on schema 33
@@ -73,12 +73,16 @@ An update to a version with a newer database schema SHALL take the consistent pr
 
 ### Requirement: A replaced bootstrap executable takes effect
 
-When the managed runtime starts from a bootstrap executable whose digest differs from the recorded bootstrap digest, it SHALL adopt that executable as the current version whether its version is newer or older, retaining the previously current version as the rollback candidate, and SHALL log the bootstrap and selected versions. When the adopted version has a newer schema than the retained one, the launcher SHALL take the pre-update backup of an existing database before the adopted worker opens it. Restarting with the recorded bootstrap MUST keep the current selection, including an administrator's rollback. State without a recorded bootstrap digest SHALL keep adopting only newer bootstraps. Adoption MUST NOT restore data; an older binary still refuses a database it cannot operate on.
+When the managed runtime starts from a bootstrap executable whose digest differs from the recorded bootstrap digest, it SHALL adopt that executable as the current version whether its version is newer or older, retaining the previously current version as the rollback candidate, and SHALL log the bootstrap and selected versions. Whenever the selected version's schema is newer than the existing database's schema version, the launcher SHALL take the pre-update backup before that worker opens the database, also when an earlier start failed. Restarting with the recorded bootstrap MUST keep the current selection, including an administrator's rollback. State without a recorded bootstrap digest SHALL keep adopting only newer bootstraps. Adoption MUST NOT restore data; an older binary still refuses a database it cannot operate on.
 
 #### Scenario: Emergency downgrade by binary replacement
 - **WHEN** an operator replaces go-v1.0.4 with the go-v1.0.2 binary and restarts the service
 - **THEN** go-v1.0.2 runs, go-v1.0.4 is retained as the previous version, and the launcher logs the selection
 - **AND** restarting again with the same go-v1.0.2 binary keeps that selection
+
+#### Scenario: The adopted version fails on its first start
+- **WHEN** the replaced bootstrap's worker migrates the database and fails before serving
+- **THEN** the backup taken in that boot is restored and the previous version starts on it with the failure reported
 
 #### Scenario: Manual upgrade across a schema change
 - **WHEN** an operator replaces the go-v1.0.10 bootstrap (schema 33) with go-v1.2.0 and restarts the service
@@ -123,12 +127,12 @@ A worker started beside another live worker SHALL NOT start background loops, th
 - **THEN** exactly one worker runs it
 
 ### Requirement: The launcher follows the installed version
-A launcher whose selected version is newer than itself and handoff-capable SHALL record a pending delegation for that digest and re-execute the selected binary as the launcher with the same arguments and process id; the delegated launcher SHALL load the installation state without bootstrap adoption and confirm the delegation after its first worker is active. A launcher that finds an unconfirmed delegation for the selected digest SHALL NOT delegate again, SHALL record the failure and SHALL serve with its own launcher logic.
+A launcher whose selected version is newer than itself and handoff-capable SHALL record a pending delegation for that digest and re-execute the selected binary as the launcher with the same arguments and process id; the delegated launcher SHALL load the installation state without bootstrap adoption and confirm the delegation after its first worker is active. After two starts for the selected digest ended unconfirmed, a launcher SHALL NOT delegate to it again, SHALL record the failure and SHALL serve with its own launcher logic.
 
 #### Scenario: Restart after a dashboard update
 - **WHEN** an installation whose bootstrap is go-v1.2.0 restarts after updating to a newer handoff-capable release
 - **THEN** the newer release runs as both launcher and worker
 
 #### Scenario: The delegated launcher crashes
-- **WHEN** the delegated launcher exits before its first worker is active and the service manager restarts the bootstrap
+- **WHEN** the delegated launcher exits twice before its first worker is active and the service manager restarts the bootstrap
 - **THEN** the bootstrap serves with its own launcher logic and reports the failed delegation

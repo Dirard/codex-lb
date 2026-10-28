@@ -328,12 +328,13 @@ func TestBootstrapDelegatesToNewerInstalledLauncher(t *testing.T) {
 		t.Fatalf("delegation was not confirmed: %+v, %v\n%s", delegation, err, output)
 	}
 
-	// An unconfirmed delegation is not repeated: the bootstrap serves itself.
+	// Delegations that repeatedly ended unconfirmed are not retried: the
+	// bootstrap serves itself.
 	reopened, err = updatefiles.New(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.SaveDelegation(updatefiles.LauncherDelegation{SHA256: installed.SHA256}); err != nil {
+	if err := reopened.SaveDelegation(updatefiles.LauncherDelegation{SHA256: installed.SHA256, Attempts: delegationAttempts}); err != nil {
 		t.Fatal(err)
 	}
 	reopened.Close()

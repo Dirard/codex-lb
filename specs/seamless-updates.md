@@ -68,7 +68,7 @@ Requirements:
 Persisted and inspected descriptors SHALL be compared by identity (version, platform, schema, update protocol); capability fields SHALL be taken from the latest inspection of the verified executable, so state written by an older launcher stays valid.
 
   R3:
-A switch SHALL be seamless when the running worker and the candidate both report `handoff ≥ 1`, the launcher holds the listener (use case 2), the platform matches, the candidate schema is not older than the running schema, and the running schema is at least the candidate's `schemaFloor`. Otherwise an update SHALL use the classic idle-gated switch with its existing rules; an older candidate schema SHALL still be refused.
+A switch (update or rollback) SHALL be seamless when the running worker and the candidate both report `handoff ≥ 1`, the launcher holds the listener (use case 2), the platform matches, and the older of the two schemas is at least the newer one's `schemaFloor`. Otherwise it SHALL use the classic idle-gated switch with its existing rules; an update to an older schema SHALL still be refused. A classic switch SHALL start only after every retiring worker exited.
 
   R4:
 Rollback and boot recovery SHALL accept a retained version with an equal schema, or a handoff-capable version whose schema is at least the current version's `schemaFloor`; such a rollback SHALL NOT restore a backup.
@@ -188,10 +188,10 @@ Requirements:
 A launcher whose selected version is newer than itself and handoff-capable SHALL record a pending delegation for that digest and re-execute the selected binary as the launcher with the same arguments and process id; the delegated launcher SHALL load the installation state without bootstrap adoption.
 
   R27:
-The delegated launcher SHALL confirm the delegation after its first worker is active. A launcher that finds an unconfirmed delegation for the selected digest SHALL NOT delegate again, SHALL record that the delegation failed and SHALL serve with its own launcher logic.
+The delegated launcher SHALL confirm the delegation after its first worker is active. After two starts for the selected digest ended unconfirmed, a launcher SHALL NOT delegate to it again, SHALL record that the delegation failed and SHALL serve with its own launcher logic; flags in the service command line must be understood by the bootstrap, which parses them before delegating.
 
   R30:
-When a replaced bootstrap is adopted and its schema is newer than the retained version's, the launcher SHALL back up an existing database before the adopted worker migrates it, so the one manual installation that enables this slice is as recoverable as an update.
+Whenever the selected version's schema is newer than the existing database's `user_version` (a replaced bootstrap, a first managed start on existing data, or a start that failed earlier), the launcher SHALL back up the database before the worker opens it. If that worker fails before serving, boot recovery SHALL restore this boot's backup and start the previous version, so the one manual installation that enables this slice is as recoverable as an update.
 
 ### 7. Administrator interface
 
@@ -247,3 +247,7 @@ None blocking. Assumptions are recorded in the decision log.
 - 2026-10-28: The writer's 5 s batch deadline starts after `BEGIN IMMEDIATE` obtained the lock, so waiting for the other worker does not consume the execution budget of a batch.
 - 2026-10-28: Snapshot writing and verification (`WriteSnapshot`, `VerifySnapshot`) accept a database newer than the code when its recorded floor allows it, so a rolled-back worker can still take online backups.
 - 2026-10-28: A loser of a refresh race may see `refresh_token_reused` before the winner committed its rotation; for that code only the re-read is retried for up to one second (50 ms steps) before marking the account for re-authentication. Empty access tokens are never returned and a forced refresh never returns the rejected token.
+- 2026-10-28 (review): A classic switch waits for retiring workers: it may migrate non-additively and restoring its backup needs no live worker. The peer load expires in the worker after 5 s without a relay update; exited workers are reported by instance id with retries; retention and reprice resumption wait while another worker lives; retirement stops accepting before joining background work.
+- 2026-10-28 (review): The boot backup is decided from the database's `user_version`, not from whether this start adopted the bootstrap, so a first start that failed while backing up cannot migrate unprotected on the next start. A backup taken in the same boot may be restored by boot recovery because no traffic reached the migrated schema.
+- 2026-10-28 (review): Delegation is retried once: an ordinary stop can end a delegated start before its confirmation; a launcher that crashes keeps failing and is given up after two starts.
+- 2026-10-28 (review): `/load` and `/peer-load` belong to handoff protocol 1: a launcher decodes them with its own `WorkerLoad`, so fields a later worker adds are not relayed by an older launcher; future workers must also keep accepting protocol level 1.

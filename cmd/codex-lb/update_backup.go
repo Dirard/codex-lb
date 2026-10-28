@@ -93,6 +93,27 @@ func (h *updateHost) Backup(ctx context.Context) error {
 	return nil
 }
 
+// databaseSchemaVersion reads PRAGMA user_version through a read-only
+// connection; exists is false for a missing or empty file.
+func databaseSchemaVersion(dbPath string) (version int, exists bool, err error) {
+	info, err := os.Lstat(dbPath)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Mode().IsRegular() && info.Size() == 0) {
+		return 0, false, nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return 0, false, errors.New("runtime database is unsafe")
+	}
+	database, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro"}).String())
+	if err != nil {
+		return 0, false, err
+	}
+	defer database.Close()
+	if err := database.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return 0, false, err
+	}
+	return version, true, nil
+}
+
 func syncUpdatePath(path string) error {
 	file, err := os.Open(path)
 	if err != nil {

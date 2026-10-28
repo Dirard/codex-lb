@@ -79,6 +79,7 @@ type updateHost struct {
 	relaying                               bool
 	relayStop                              chan struct{}
 	relayDone                              sync.WaitGroup
+	exitReports                            sync.WaitGroup
 }
 
 type limitedOutput struct{ bytes.Buffer }
@@ -169,12 +170,19 @@ func (h *updateHost) own() error {
 func (h *updateHost) release() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	owned := h.lock != nil
 	for _, file := range []*os.File{h.listener, h.lock, h.lifelineRead, h.lifeline} {
 		if file != nil {
 			file.Close()
 		}
 	}
 	h.listener, h.lock, h.lifelineRead, h.lifeline = nil, nil, nil, nil
+	// Locking created the file; an older worker would take an empty one for
+	// an existing database and refuse to create its encryption key.
+	dbPath := filepath.Join(h.dataDir, "codex-lb.sqlite3")
+	if info, err := os.Lstat(dbPath); owned && err == nil && info.Mode().IsRegular() && info.Size() == 0 {
+		_ = os.Remove(dbPath)
+	}
 }
 
 func randomInstance() (string, error) {
@@ -271,10 +279,15 @@ func (h *updateHost) childExited(child *updateChild, err error) {
 	h.mu.Lock()
 	child.err = err
 	unexpected := !child.expected
-	close(child.done)
 	delete(h.retiring, child)
 	active := h.child
-	live := h.liveInstancesLocked()
+	report := !unexpected && child != active && child.handoff && active != nil && active.handoff
+	if report {
+		// Counted before done closes: whoever joins this worker also joins
+		// the report about it.
+		h.exitReports.Add(1)
+	}
+	close(child.done)
 	h.mu.Unlock()
 	if unexpected {
 		select {
@@ -283,15 +296,31 @@ func (h *updateHost) childExited(child *updateChild, err error) {
 		}
 		return
 	}
-	if child != active && child.handoff && active != nil && active.handoff {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := active.control.Call(ctx, "POST", "/peer-exited", peerExit{Live: live}, nil); err != nil {
-				h.log().Warn("could not report the retired worker's exit", "version", child.version)
-			}
-		}()
+	if report {
+		go h.reportExit(active, child)
 	}
+}
+
+// reportExit asks the serving worker to mark the exited worker's unsettled
+// reservations, retrying for about a minute while that worker lives.
+func (h *updateHost) reportExit(active, exited *updateChild) {
+	defer h.exitReports.Done()
+	delay := time.Second
+	for attempt := 0; attempt < 6; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := active.control.Call(ctx, "POST", "/peer-exited", peerExit{Exited: []string{exited.instance}}, nil)
+		cancel()
+		if err == nil {
+			return
+		}
+		select {
+		case <-active.done:
+			return
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+	h.log().Warn("could not report a worker's exit; its unsettled usage is marked at the next start", "version", exited.version)
 }
 
 // workerReadyTimeout bounds a worker's start, which includes its migrations:
@@ -346,6 +375,9 @@ func (h *updateHost) PrepareStart(ctx context.Context, item domain.RuntimeInstal
 	h.mu.Lock()
 	h.child = child
 	h.mu.Unlock()
+	if len(h.liveWorkers()) > 1 {
+		h.startRelay()
+	}
 	return h.awaitReady(ctx, child, item.Descriptor.Version)
 }
 
@@ -518,6 +550,27 @@ func (h *updateHost) DiscardCandidate(context.Context) error {
 	return nil
 }
 
+// awaitRetired waits until no worker is still finishing earlier requests.
+func (h *updateHost) awaitRetired(ctx context.Context) error {
+	for {
+		h.mu.Lock()
+		var waiting *updateChild
+		for child := range h.retiring {
+			waiting = child
+			break
+		}
+		h.mu.Unlock()
+		if waiting == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-waiting.done:
+		}
+	}
+}
+
 // stopRetiring ends workers still finishing earlier requests; a worker that
 // binds and locks by itself cannot start while they hold the descriptors.
 func (h *updateHost) stopRetiring(ctx context.Context) error {
@@ -540,6 +593,11 @@ func (h *updateHost) WaitForIdle(ctx context.Context) (result error) {
 	child := h.current()
 	if child == nil {
 		return errors.New("no managed worker")
+	}
+	// A classic switch stops the serving worker and may migrate the database
+	// beyond what a retiring worker runs on: let those finish first.
+	if err := h.awaitRetired(ctx); err != nil {
+		return err
 	}
 	// A lost acknowledgement can follow a successful gate. Explicitly cancel
 	// that gate on failure, including the deadline, so the server stays usable.
@@ -672,6 +730,8 @@ func (h *updateHost) Shutdown() error {
 		go func() { defer wait.Done(); h.terminate(child) }()
 	}
 	wait.Wait()
+	// Exit reports end with the workers they address.
+	h.exitReports.Wait()
 	h.mu.Lock()
 	h.child, h.candidate = nil, nil
 	h.mu.Unlock()
@@ -679,18 +739,21 @@ func (h *updateHost) Shutdown() error {
 	return nil
 }
 
+// peerExit names workers that ended; their unsettled reservations are interrupted.
 type peerExit struct {
-	Live []string `json:"live"`
+	Exited []string `json:"exited"`
 }
 
-// workerLoadReport is one worker's admission pressure and resident memory.
+// workerLoadReport is one worker's admission pressure and resident memory;
+// relayed to a worker it is the sum over Workers other live workers.
 type workerLoadReport struct {
 	Load          application.WorkerLoad `json:"load"`
 	ResidentBytes int64                  `json:"residentBytes"`
+	Workers       int                    `json:"workers,omitempty"`
 }
 
 func (r workerLoadReport) add(other workerLoadReport) workerLoadReport {
-	return workerLoadReport{Load: r.Load.Add(other.Load), ResidentBytes: r.ResidentBytes + other.ResidentBytes}
+	return workerLoadReport{Load: r.Load.Add(other.Load), ResidentBytes: r.ResidentBytes + other.ResidentBytes, Workers: r.Workers + other.Workers}
 }
 
 func (h *updateHost) liveWorkers() []*updateChild {
@@ -745,10 +808,17 @@ func (h *updateHost) startRelay() {
 		for {
 			workers := h.liveWorkers()
 			if len(workers) < 2 {
+				// The worker also expires a stale peer load; retrying here
+				// clears it sooner.
 				for _, child := range workers {
-					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = child.control.Call(ctx, "PUT", "/peer-load", workerLoadReport{}, nil)
-					cancel()
+					for attempt := 0; attempt < 5; attempt++ {
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						err := child.control.Call(ctx, "PUT", "/peer-load", workerLoadReport{}, nil)
+						cancel()
+						if err == nil {
+							break
+						}
+					}
 				}
 				// A worker started meanwhile relied on this loop; keep going.
 				h.mu.Lock()
@@ -774,6 +844,7 @@ func (h *updateHost) startRelay() {
 				var peers workerLoadReport
 				for other, report := range reports {
 					if other != child {
+						report.Workers = 1
 						peers = peers.add(report)
 					}
 				}

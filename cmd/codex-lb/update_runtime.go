@@ -58,20 +58,32 @@ func delegationTarget(ctx context.Context, store *updatefiles.Store, state *doma
 	if err != nil {
 		return current, false
 	}
+	attempts := 0
 	if previous.SHA256 == current.SHA256 && !previous.Confirmed {
-		if !previous.Failed {
-			logger.Warn("the launcher of the selected version did not start; using the bootstrap launcher", "selected_version", current.Descriptor.Version)
-			_ = store.SaveDelegation(updatefiles.LauncherDelegation{SHA256: current.SHA256, Failed: true})
-			state.Phase, state.LastError = "failed", "The launcher of "+current.Descriptor.Version+" did not start; the installed bootstrap launcher is used"
-			_ = store.Save(ctx, *state)
-		}
+		attempts = previous.Attempts
+	}
+	if previous.SHA256 == current.SHA256 && previous.Failed {
+		logger.Warn("the launcher of the selected version failed before; using the bootstrap launcher", "selected_version", current.Descriptor.Version)
 		return current, false
 	}
-	if err := store.SaveDelegation(updatefiles.LauncherDelegation{SHA256: current.SHA256}); err != nil {
+	// An ordinary stop can also end a start before confirmation, so only
+	// repeated unconfirmed starts count as a failed launcher.
+	if attempts >= delegationAttempts {
+		logger.Warn("the launcher of the selected version did not start; using the bootstrap launcher", "selected_version", current.Descriptor.Version, "attempts", attempts)
+		_ = store.SaveDelegation(updatefiles.LauncherDelegation{SHA256: current.SHA256, Attempts: attempts, Failed: true})
+		state.Phase, state.LastError = "failed", "The launcher of "+current.Descriptor.Version+" did not start; the installed bootstrap launcher is used"
+		_ = store.Save(ctx, *state)
+		return current, false
+	}
+	if err := store.SaveDelegation(updatefiles.LauncherDelegation{SHA256: current.SHA256, Attempts: attempts + 1}); err != nil {
 		return current, false
 	}
 	return inspected, true
 }
+
+// delegationAttempts is how many starts of a delegated launcher may end before
+// it confirms; then the bootstrap's own launcher logic is used.
+const delegationAttempts = 2
 
 // delegateLauncher replaces this process image with the selected version,
 // keeping the process id a service manager tracks. It returns only on failure.
@@ -115,15 +127,12 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	}
 	delegated := os.Getenv(delegatedEnv)
 	var state domain.RuntimeInstallState
-	adopted := false // an operator replaced the bootstrap executable
 	if delegated != "" && updatefiles.MatchesExecutable(ctx, executable, delegated) {
 		// A bootstrap already initialized the state and selected this binary.
 		state, err = store.Load(ctx)
 	} else {
 		delegated = ""
-		before, loadErr := store.Load(ctx)
 		state, err = store.Initialize(ctx, executable, runtimeDescriptor())
-		adopted = err == nil && loadErr == nil && before.Current.SHA256 != state.Current.SHA256
 	}
 	if err != nil {
 		return errors.New("cannot initialize managed runtime version")
@@ -167,15 +176,20 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 		listen: cfg.listen, logger: logger}
 	host.shutdownTimeout = cfg.shutdownGrace + time.Minute
 	defer host.Shutdown()
-	if adoptionMigrates(adopted, state) {
-		// A manually installed newer bootstrap migrates the database when its
-		// worker opens it; keep the pre-migration state like an update does.
-		if err = backupExistingDatabase(ctx, host, cfg.dataDir); err != nil {
-			return errors.New("cannot back up the database before the replaced bootstrap migrates it")
-		}
-		logger.Info("pre-migration backup taken for the replaced bootstrap", "previous_version", state.Previous.Descriptor.Version, "selected_version", state.Current.Descriptor.Version)
+	// The selected version migrates an older database when its worker opens it
+	// (a replaced bootstrap, or a first managed start on existing data). Decide
+	// from the database itself, so a start that failed earlier still backs up.
+	migrating, err := bootMigrates(cfg.dataDir, state.Current.Descriptor.SchemaVersion)
+	if err != nil {
+		return errors.New("cannot read the database schema version")
 	}
-	if err = prepareManagedBoot(ctx, store, host, &state); err != nil {
+	if migrating {
+		if err = host.Backup(ctx); err != nil {
+			return errors.New("cannot back up the database before the selected version migrates it")
+		}
+		logger.Info("pre-migration backup taken", "selected_version", state.Current.Descriptor.Version)
+	}
+	if err = prepareManagedBoot(ctx, store, host, &state, migrating); err != nil {
 		if errors.Is(err, errRuntimeNotExecutable) && state.Current.Descriptor.Identity() == runtimeDescriptor().Identity() && updatefiles.MatchesExecutable(ctx, executable, state.Current.SHA256) {
 			return serveWithoutUpdates(ctx, cfg, logger, "Update storage does not permit executable files")
 		}
@@ -222,19 +236,14 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	}
 }
 
-// adoptionMigrates reports whether an adopted bootstrap will migrate the
-// database beyond the schema of the version it replaced.
-func adoptionMigrates(adopted bool, state domain.RuntimeInstallState) bool {
-	return adopted && state.Previous != nil && state.Current.Descriptor.SchemaVersion > state.Previous.Descriptor.SchemaVersion
-}
-
-// backupExistingDatabase takes the pre-update backup unless there is no data yet.
-func backupExistingDatabase(ctx context.Context, host *updateHost, dataDir string) error {
-	info, err := os.Lstat(filepath.Join(dataDir, "codex-lb.sqlite3"))
-	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Size() == 0) {
-		return nil
+// bootMigrates reports whether a worker of schema will migrate the existing
+// database; a missing or empty database is created, not migrated.
+func bootMigrates(dataDir string, schema int) (bool, error) {
+	version, exists, err := databaseSchemaVersion(filepath.Join(dataDir, "codex-lb.sqlite3"))
+	if err != nil || !exists {
+		return false, err
 	}
-	return host.Backup(ctx)
+	return version < schema, nil
 }
 
 // inspectRetained verifies a retained executable and returns it with the
@@ -254,7 +263,11 @@ func inspectRetained(ctx context.Context, store *updatefiles.Store, host *update
 	return item, nil
 }
 
-func prepareManagedBoot(ctx context.Context, store *updatefiles.Store, host *updateHost, state *domain.RuntimeInstallState) error {
+// prepareManagedBoot starts the selected version or recovers to the previous
+// one. restorable means the pre-update backup was taken in this boot right
+// before the selected version opened the database, so no traffic can have used
+// a schema it migrated and that backup may be restored for the previous version.
+func prepareManagedBoot(ctx context.Context, store *updatefiles.Store, host *updateHost, state *domain.RuntimeInstallState, restorable bool) error {
 	start := func(item *domain.RuntimeInstallation) error {
 		inspected, err := inspectRetained(ctx, store, host, *item)
 		if err != nil {
@@ -287,10 +300,17 @@ func prepareManagedBoot(ctx context.Context, store *updatefiles.Store, host *upd
 	if state.Previous == nil {
 		return errors.New("managed runtime startup failed; no compatible previous version")
 	}
+	restored := false
 	if !domain.SharedSchema(state.Current.Descriptor, state.Previous.Descriptor) {
-		// Traffic may have reached the newer schema, so the pre-update backup is
-		// never restored automatically here.
-		return errors.New("managed runtime startup failed; no compatible previous version (it needs the pre-update database backup in updates/)")
+		// Otherwise traffic may have reached the newer schema, so the backup is
+		// restored only when it was taken in this boot.
+		if !restorable {
+			return errors.New("managed runtime startup failed; no compatible previous version (it needs the pre-update database backup in updates/)")
+		}
+		if err := host.RestoreBackup(cleanup); err != nil {
+			return errors.New("managed runtime startup failed and the pre-update backup could not be restored")
+		}
+		restored = true
 	}
 	previous := *state.Previous
 	if err := start(&previous); err != nil {
@@ -299,6 +319,9 @@ func prepareManagedBoot(ctx context.Context, store *updatefiles.Store, host *upd
 	}
 	state.Current, state.Previous, state.Pending = previous, nil, nil
 	state.Phase, state.LastError = "failed", "Failed runtime startup; previous version restored"
+	if restored {
+		state.LastError += " with the pre-update backup"
+	}
 	if err := store.Save(ctx, *state); err != nil {
 		_ = host.Stop(cleanup)
 		return errors.New("cannot persist runtime recovery")

@@ -102,6 +102,12 @@ func (s *Store) Initialize(ctx context.Context, executable string, descriptor do
 	if err != nil {
 		return state, err
 	}
+	// The replacement is the version already selected (installed earlier from
+	// the dashboard): record it as the bootstrap and keep the rollback candidate.
+	if state.Current.SHA256 == initial.SHA256 {
+		state.BootstrapSHA256 = initial.SHA256
+		return state, s.Save(ctx, state)
+	}
 	if state.Current.SHA256 != "" {
 		previous := state.Current
 		state.Previous = &previous

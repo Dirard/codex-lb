@@ -27,7 +27,9 @@ func (r *runtime) maintainReports(ctx context.Context) error {
 		r.retention = application.NewRetentionService(r.data.store, time.Now)
 		r.nextOptimize = time.Now().Add(time.Hour)
 	}
-	if now := time.Now(); !now.Before(r.nextRetention) {
+	// Retention commits batch after batch for up to its budget; while another
+	// worker still finishes requests that would starve its settlements.
+	if now := time.Now(); !now.Before(r.nextRetention) && r.peerWorkers.Load() == 0 {
 		r.nextRetention = now.Add(r.maintainReportRetention(ctx, r.retention))
 	}
 	r.maintainDatabaseFiles(ctx, &r.nextOptimize)

@@ -164,7 +164,7 @@ func startManagedIntegrationRuntime(t *testing.T, ctx context.Context, dataDir, 
 	m.service = application.NewRuntimeUpdates(ctx, source, m.store, m.host, state, application.RuntimeUpdateConfig{WaitTimeout: 5 * time.Second})
 	m.server = &http.Server{Handler: updatecontrol.Protect(token, updatecontrol.Handler(m.service))}
 	go func() { _ = m.server.Serve(m.control) }()
-	if err := prepareManagedBoot(ctx, m.store, m.host, &state); err != nil {
+	if err := prepareManagedBoot(ctx, m.store, m.host, &state, false); err != nil {
 		t.Fatal(err)
 	}
 	fence, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
