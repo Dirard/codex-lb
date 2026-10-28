@@ -12,8 +12,9 @@ import (
 const writeBatchSize = 64
 
 // writeExecutionTimeout bounds executing one batch. It starts only after the
-// writer connection is obtained, so waiting behind another transaction never
-// fails queued jobs.
+// writer connection and the database write lock are obtained, so waiting
+// behind another transaction, in this process or another, never fails queued
+// jobs.
 const writeExecutionTimeout = 5 * time.Second
 
 type writeJob struct {
@@ -149,14 +150,18 @@ func (w *batchWriter) commit(jobs []*writeJob) {
 	if fatal != nil {
 		return
 	}
-	// No caller can interrupt another job's SQLite transaction. A bounded batch
-	// deadline still prevents a damaged/blocked writer from running indefinitely.
-	ctx, cancel := context.WithTimeout(context.Background(), w.timeout)
-	defer cancel()
-	tx, fatal = conn.BeginTx(ctx, nil)
+	// BEGIN IMMEDIATE waits, within the busy timeout, for another process of the
+	// installation to release the write lock; that is not execution time either.
+	txCtx, cancelTx := context.WithCancel(context.Background())
+	defer cancelTx()
+	tx, fatal = conn.BeginTx(txCtx, nil)
 	if fatal != nil {
 		return
 	}
+	// No caller can interrupt another job's SQLite transaction. A bounded batch
+	// deadline still prevents a damaged/blocked writer from running indefinitely.
+	ctx, cancel := context.WithTimeout(txCtx, w.timeout)
+	defer cancel()
 	for i, job := range jobs {
 		if results[i] = job.ctx.Err(); results[i] != nil {
 			continue

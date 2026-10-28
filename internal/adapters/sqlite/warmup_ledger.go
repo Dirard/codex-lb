@@ -29,8 +29,8 @@ func (s *Store) ReserveWarmupUsage(ctx context.Context, id, accountID, model str
 			return ErrNoAccounts
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO usage_reservations
-		 (id,api_key_id,account_id,account_generation,model,status,created_at,updated_at) VALUES(?,?,?,?,?,'reserved',?,?)`,
-			id, domain.WarmupKeyID, accountID, accountGeneration, model, millis(now), millis(now))
+		 (id,api_key_id,account_id,account_generation,model,status,created_at,updated_at,owner_instance) VALUES(?,?,?,?,?,'reserved',?,?,?)`,
+			id, domain.WarmupKeyID, accountID, accountGeneration, model, millis(now), millis(now), s.instanceID)
 		return err
 	})
 }

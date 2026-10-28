@@ -25,7 +25,7 @@ func reconcileUsage(ctx context.Context, cfg config, output io.Writer) error {
 		return err
 	}
 	defer data.close()
-	if _, err := data.store.MarkInterruptedReservations(ctx); err != nil {
+	if _, err := data.store.MarkInterruptedReservations(ctx, nil); err != nil {
 		return errors.New("cannot mark interrupted reservations for reconciliation")
 	}
 	if cfg.reservation == "" {

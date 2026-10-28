@@ -137,13 +137,12 @@ func TestReserveAndSettleKeepWorkingDuringLongReprice(t *testing.T) {
 	}
 }
 
-// A tariff saved before a crash has its history repriced after the next start.
-func TestInterruptedRepriceResumesAfterOpen(t *testing.T) {
+// simulateInterruptedReprice saves price as the first job of
+// ApplyModelPriceChange does and leaves its history pass pending, as a crash
+// right after that job would.
+func simulateInterruptedReprice(t *testing.T, store *Store, price pricing.Price) {
+	t.Helper()
 	ctx := context.Background()
-	store, path := testStore(t)
-	seedPricedHistory(t, store, 2*repriceRawChunk+7)
-	price := pricing.Price{Standard: pricing.Rates{Input: 9000000, Cached: 900000, Output: 27000000}}
-	// Simulate the first job of ApplyModelPriceChange followed by a crash.
 	raw, err := json.Marshal(price)
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +154,26 @@ func TestInterruptedRepriceResumesAfterOpen(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO model_reprice_pending(model,requested_at) VALUES('gpt-6-sol',?)`, millis(fixedTime)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func pendingReprices(t *testing.T, store *Store) int {
+	t.Helper()
+	var pending int
+	if err := store.readDB.QueryRow(`SELECT count(*) FROM model_reprice_pending`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	return pending
+}
+
+// A tariff saved before a crash has its history repriced when the process
+// that owns background work resumes it, not by merely opening the database:
+// a worker opened beside an active one must not start background work.
+func TestInterruptedRepriceResumesOnlyWhenRequested(t *testing.T) {
+	ctx := context.Background()
+	store, path := testStore(t)
+	seedPricedHistory(t, store, 2*repriceRawChunk+7)
+	price := pricing.Price{Standard: pricing.Rates{Input: 9000000, Cached: 900000, Output: 27000000}}
+	simulateInterruptedReprice(t, store, price)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +182,25 @@ func TestInterruptedRepriceResumesAfterOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	reopened.background.Wait()
+	if pending := pendingReprices(t, reopened); pending != 1 {
+		t.Fatalf("open changed pending reprices: %d", pending)
+	}
+	expected, err := price.Cost(domain.UsageAmount{InputTokens: 1000, OutputTokens: 100}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repriced int
+	if err := reopened.readDB.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE cost_microdollars=?`, expected).Scan(&repriced); err != nil || repriced != 0 {
+		t.Fatalf("open repriced history: %d %v", repriced, err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := reopened.ResumeModelReprices(cancelled); !errors.Is(err, context.Canceled) || pendingReprices(t, reopened) != 1 {
+		t.Fatalf("cancelled resumption: %v", err)
+	}
+	if err := reopened.ResumeModelReprices(ctx); err != nil {
+		t.Fatal(err)
+	}
 	stored, ok, err := reopened.GetModelPriceOverride(ctx, "gpt-6-sol")
 	if err != nil || !ok || stored.Standard.Output != price.Standard.Output {
 		t.Fatalf("override fixture: %+v %v %v", stored, ok, err)

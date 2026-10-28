@@ -1,13 +1,31 @@
 package sqlite
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
-// MarkInterruptedReservations is called only after the installation's exclusive
-// database lock is held, before admitting requests. An interrupted upstream call
-// may have consumed tokens: preserve its budget until an explicit reconciliation.
-func (s *Store) MarkInterruptedReservations(ctx context.Context) (int64, error) {
-	result, err := s.exec(ctx, `UPDATE usage_reservations SET needs_reconciliation=1
- WHERE status='reserved' AND needs_reconciliation=0`)
+// MarkInterruptedReservations preserves the budget of open reservations whose
+// owning process is gone: an interrupted upstream call may have consumed
+// tokens, so they stay reserved until an explicit reconciliation. live lists
+// the instance ids of the workers that are still running, the caller's own
+// included; their reservations are left alone, and reservations without an
+// owner never count as live. Nil or empty live marks every open reservation,
+// which is correct only while no other worker uses the database, such as at
+// startup under the installation's exclusive lock before admitting requests.
+func (s *Store) MarkInterruptedReservations(ctx context.Context, live []string) (int64, error) {
+	query := `UPDATE usage_reservations SET needs_reconciliation=1
+ WHERE status='reserved' AND needs_reconciliation=0`
+	owners := make([]any, 0, len(live))
+	for _, id := range live {
+		if id != "" {
+			owners = append(owners, id)
+		}
+	}
+	if len(owners) != 0 {
+		query += ` AND owner_instance NOT IN (?` + strings.Repeat(",?", len(owners)-1) + `)`
+	}
+	result, err := s.exec(ctx, query, owners...)
 	if err != nil {
 		return 0, err
 	}
