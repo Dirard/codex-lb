@@ -199,11 +199,21 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	defer idle.Stop()
 	var liteState application.ResponsesLiteState
 	for {
+		// A closing process ends the session between turns. The separate check
+		// keeps a queued response.create from winning the select below and
+		// starting another turn here; that frame was never dispatched.
+		closing := p.proxy.SessionsClosing()
+		select {
+		case <-closing:
+			p.closeMovedWebSocket(connection)
+			return
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-p.proxy.DrainStarted():
-			_ = connection.Close(websocket.StatusGoingAway, "Server is shutting down")
+		case <-closing:
+			p.closeMovedWebSocket(connection)
 			return
 		case <-idle.C:
 			_ = connection.Close(websocket.StatusNormalClosure, "Idle connection")
@@ -261,6 +271,18 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			idle.Reset(120 * time.Second)
 		}
 	}
+}
+
+// closeMovedWebSocket sends 1001 so the client reconnects: to the replacement
+// server on drain, to the active process of the same installation on retirement.
+func (p *ProxyHandler) closeMovedWebSocket(connection *websocket.Conn) {
+	reason := "Server is restarting; reconnect"
+	select {
+	case <-p.proxy.DrainStarted():
+		reason = "Server is shutting down"
+	default:
+	}
+	_ = connection.Close(websocket.StatusGoingAway, reason)
 }
 
 const (
