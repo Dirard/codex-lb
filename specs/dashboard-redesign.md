@@ -1155,14 +1155,14 @@ internal/adapters/httpapi/server_timing_test.go
 
 PR 2 — overview, alerts and attention keys:
 
-1. [ ] OpenSpec change `redesign-overview-alerts`: proposal, tasks, `go-runtime` delta (R1–R18, R46–R50) and the `frontend-architecture` REMOVED and MODIFIED deltas of use case 2; strict validation.
-2. [ ] Confirm the PR 1 prerequisites on `main`: key slices at both grains, the window planner and the top-N query; record any gap in Q7.
-3. [ ] Domain: `AccountHealthState`, `WindowHealth`, `ProjectRunway`, `EvaluateAlerts` with thresholds, attention ranking; table tests (R10–R17). Docstrings name the workflow steps of use cases 2.1–2.3.
-4. [ ] SQLite: `ListAccountHealth`, `ListKeyRows`, `KeyDailySpend`, `ErrorWindows`, `Directory`; raw-equivalence tests across zones and fold states; raw fallback for today (R5, R6, R9).
-5. [ ] Application and HTTP: `OverviewService`, `ShellStatusService`, `/api/overview`, `/api/directory`, `GET /api/api-keys/{id}`, additive `/api/dashboard/status`, `Server-Timing` (R1, R2, R5, R48, R50).
-6. [ ] Web: `useShellStatus`, header and status bar without own polls, `GlobalSearch`, `features/overview`, `features/requests` (moved components), redirects, locales (`en`, `ko`, `zh-CN`), MSW mocks and handler coverage (R1, R3, R4, R7, R8, R15, R17, R18).
-7. [ ] Contract tests for the new endpoints and the unchanged public key-usage endpoints; `BenchmarkDashboardPages` for the overview; production-copy latency run (R46, R49).
-8. [ ] Mark use case 4 of `specs/dashboard-delivery.md` outdated; gates (`make check`, `make web-check`, `make test-web-contract`), PR, CI, release notes listing the deprecation of `/api/dashboard/overview`.
+1. [x] OpenSpec change `overview-groups` (named by the owner instead of `redesign-overview-alerts`): proposal, tasks, `go-runtime` delta (R1–R18, R46–R50) and the `frontend-architecture` REMOVED and MODIFIED deltas of use cases 1–3; strict validation.
+2. [x] Confirm the PR 1 prerequisites: key slices at both grains, the window planner and the read snapshot are on `feat/usage-rollups` (PR 2 is branched from it, not from `main`); the top-N query is implemented here as the per-key local-day slice read; no gap for Q7.
+3. [x] Domain: `AccountHealthState`, `WindowHealth` (`AggregateWindow`), `ProjectRunway`, `QuotaBurnPerHour`, `EvaluateAlerts` with thresholds, attention ranking; table tests (R10–R17). Docstrings name the workflow steps of use cases 2.1–2.3.
+4. [x] SQLite: `OverviewEntities` (batch account health and key rows), `OverviewUsage` (local-day key spend and error windows), `ShellSnapshot`, `Directory`; raw-equivalence tests across zones and fold states; raw fallback for today (R5, R6, R9).
+5. [x] Application and HTTP: `OverviewService`, `ShellStatusService`, `DirectoryService`, `/api/overview`, `/api/directory`, `GET /api/api-keys/{id}`, additive `/api/dashboard/status`, `Server-Timing` (R1, R2, R5, R48, R50).
+6. [x] Web: `useShellStatus`, header and status bar without own polls, `GlobalSearch`, `features/overview`, `features/requests` (moved components), redirects, locales (`en`, `ko`, `zh-CN`), MSW mocks and handler coverage (R1, R3, R4, R7, R8, R15, R17, R18).
+7. [ ] Contract tests for the new endpoints and the unchanged public key-usage endpoints and `BenchmarkDashboardPages` for the overview are done; the production-copy latency run is open (needs operator approval) (R46, R49).
+8. [ ] Use case 4 of `specs/dashboard-delivery.md` is marked outdated and the local gates pass; PR, CI and the release notes listing the deprecation of `/api/dashboard/overview` and `/api/dashboard/projections` are open.
 
 PR 3 — key page and reports:
 
@@ -1200,6 +1200,18 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - Q8: Remove deprecated admin endpoints in the release after PR 4 (default), or keep `GET /api/api-keys/` longer for operator scripts?
 - Q9: Bulk move and set-limits run one key per write job because limit backfill sums the key's raw events of each window inside the write transaction (up to ≈ 0.5 s for a busy key's monthly limit). Accept (default), or first move the backfill out of the write transaction?
 - Q10: Scale assumptions of this plan: at most 100 accounts and at most 5 000 keys for in-memory filtering and sorting on the server. Correct?
+
+## Implementation notes (PR 2)
+
+- Branch `feat/overview-groups` from `feat/usage-rollups`; OpenSpec change `openspec/changes/overview-groups/` (the owner's name for `redesign-overview-alerts`).
+- Reads: `GET /api/overview` runs 24 SQL statements at any scale (entity snapshot 8, usage snapshot with legacy facts, raw spans, tail, journal, total hours, one key-slice statement of range arms and client-disconnect error hours, quota history 1, shell status 6); the directory 3 and the shell status 6. Past local days of whole-hour zones read the UTC-day slice row plus the hour rows of the offset; yesterday, which holds the same-time split, and today read hour rows; fractional zones read hour rows with the PR 1 split hours.
+- Measured (i9-14900K, modernc, warm): 300 keys, 50 groups, 100 accounts, every key active every hour of 8 days, overview median 37 ms (`TestOverviewMeetsItsLatencyBudgetAtTargetScale`, asserted < 300 ms); `BenchmarkDashboardPages` with 1.51 M events over 30 days: overview 46 ms (UTC), 47 ms (Europe/Prague), 123 ms (Asia/Kolkata), directory 0.7 ms, shell status 0.8 ms, request log 24 h 4 ms.
+- Shell status adds `stickyThreadsEnabled`, `preferEarlierResetAccounts` and `preferEarlierResetWindow` so the status bar's routing label needs no settings read; `spendYesterdaySameTimeUsd` and `spend7dUsd` are nullable (null while the rollups are unusable).
+- Window health follows the key-report group aggregate exactly: an expired observation is not current, unknown plans have no capacity. Runways use only accounts with a known burn; reset-time jitter below 30 minutes is one window.
+- Limit fill and the `≥ 90 %` counts consider active (enabled, unexpired) member keys; spend counts every non-deleted member key.
+- The Requests page keeps offset pagination with the existing table; `nextCursor` "load more" is deferred. `/api/request-logs` accepts `30d` and `/api/conversations` `1h` and `24h` so one symbolic period drives both views.
+- Until PR 4, Groups opens `/settings#account-groups` and Keys renders the APIs page at `/keys`; key links use `/keys?selected=<id>` until the key page of PR 3.
+- The appearance settings for the dashboard refresh rate and the burn-projection card no longer affect any page; they are removed with the Settings rework of PR 4.
 
 ## Decision log
 
