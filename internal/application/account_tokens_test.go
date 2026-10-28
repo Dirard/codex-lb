@@ -305,6 +305,44 @@ func TestReusedRefreshWaitsForRotationStoredElsewhere(t *testing.T) {
 	}
 }
 
+// The winner of a refresh race may store its rotation only after the loser's
+// re-read window ended and the loser marked the account for re-authentication
+// as refresh_token_reused (a slow provider answer to the winner, or its writer
+// waiting for the other worker's write lock). The winner's rotation proves the
+// rejection was that race, so the account must be usable again.
+func TestLateRefreshWinnerReactivatesAccountMarkedByTheLoser(t *testing.T) {
+	store, vault, account, credential := tokenFixture(t)
+	rotated := expiringToken(time.Now().Add(time.Hour))
+	access, err := vault.Encrypt([]byte(rotated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewTokenService(store, vault, refreshFunc(func(context.Context, string) (application.OAuthTokens, error) {
+		return application.OAuthTokens{}, &application.OAuthError{Code: "refresh_token_reused", Message: "synthetic rejection"}
+	}))
+	defer service.Close()
+	var oauth *application.OAuthError
+	if _, err := service.AccessToken(context.Background(), account, credential); !errors.As(err, &oauth) || oauth.Code != "refresh_token_reused" {
+		t.Fatalf("losing refresh = %v", err)
+	}
+	marked, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || marked.Status != domain.AccountReauthRequired || marked.DeactivationReason != "refresh_token_reused" {
+		t.Fatalf("loser did not mark the account: %+v %v", marked, err)
+	}
+	rotateElsewhere(t, store, vault, credential, access)
+	current, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || current.Status != domain.AccountActive || current.DeactivationReason != "" {
+		t.Fatalf("valid rotation left the account %s (%q): %v", current.Status, current.DeactivationReason, err)
+	}
+	stored, err := store.GetAccountCredential(context.Background(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, err := vault.Decrypt(stored.AccessTokenEncrypted); err != nil || string(plain) != rotated {
+		t.Fatalf("winner's access token not stored: %v", err)
+	}
+}
+
 func TestPermanentRefreshFailureWithoutRotationRequiresReauth(t *testing.T) {
 	store, vault, account, credential := tokenFixture(t)
 	service := application.NewTokenService(store, vault, refreshFunc(func(context.Context, string) (application.OAuthTokens, error) {

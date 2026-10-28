@@ -194,6 +194,92 @@ func TestPeerKeyStreamsCountInFairShare(t *testing.T) {
 	lease.release()
 }
 
+// A key waiting for an account on the other worker is an active key of the
+// union: fair share over two workers must judge a busy key as one process
+// holding both would, and forget the key once its admission stops waiting.
+func TestPeerWaitingKeysCountInFairShare(t *testing.T) {
+	settings := domain.RuntimeSettings{RoutingStrategy: "round_robin", ProxyAccountStreamLimit: 4,
+		ProxyApiKeyFairShareCongestionThresholdPct: 50}
+	choices := admissionTestChoices("a")
+	fairShare := func(p *Proxy) (share, keys int, denied bool) {
+		a := p.accountAdmission
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		_, share, _, _, keys, denied = a.fairShareLocked(choices, settings, "heavy")
+		return share, keys, denied
+	}
+	wait := func(p *Proxy, key string) uint64 {
+		a := p.accountAdmission
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		var id uint64
+		a.waitLocked(&id, key, choices)
+		return id
+	}
+	hold := func(p *Proxy) {
+		for range 2 {
+			if _, _, err := p.admittedAccount(context.Background(), choices, settings, "heavy", false, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	single := admissionTestProxy()
+	hold(single)
+	wait(single, "starved")
+	singleShare, singleKeys, singleDenied := fairShare(single)
+	if singleShare != 2 || singleKeys != 2 || !singleDenied {
+		t.Fatalf("one process: share=%d keys=%d denied=%v", singleShare, singleKeys, singleDenied)
+	}
+
+	active, retiring := admissionTestProxy(), admissionTestProxy()
+	hold(active)
+	waiter := wait(retiring, "starved")
+	wait(retiring, "starved")
+	wait(retiring, "")
+	if load := retiring.Load(); !reflect.DeepEqual(load, WorkerLoad{Accounts: map[string]AccountLoad{"a": {Waiting: []string{"starved"}}}}) {
+		t.Fatalf("waiting keys reported as %+v", load)
+	}
+	relay := func() { la, lr := active.Load(), retiring.Load(); active.SetPeerLoad(lr); retiring.SetPeerLoad(la) }
+	relay()
+	if share, keys, denied := fairShare(active); share != singleShare || keys != singleKeys || denied != singleDenied {
+		t.Fatalf("two workers: share=%d keys=%d denied=%v, one process: share=%d keys=%d denied=%v",
+			share, keys, denied, singleShare, singleKeys, singleDenied)
+	}
+	retiring.accountAdmission.removeWaiter(waiter)
+	relay()
+	if share, keys, denied := fairShare(active); keys != 2 || !denied || share != 2 {
+		t.Fatalf("a key still waiting was forgotten: share=%d keys=%d denied=%v", share, keys, denied)
+	}
+	retiring.accountAdmission.mu.Lock()
+	for id := range retiring.accountAdmission.waiters {
+		delete(retiring.accountAdmission.waiters, id)
+	}
+	retiring.accountAdmission.mu.Unlock()
+	relay()
+	if share, keys, denied := fairShare(active); keys != 1 || denied || share != 4 {
+		t.Fatalf("a key that stopped waiting still counts: share=%d keys=%d denied=%v", share, keys, denied)
+	}
+}
+
+func TestWorkerLoadAddUnitesWaitingKeys(t *testing.T) {
+	left := WorkerLoad{Accounts: map[string]AccountLoad{"a": {Streams: 1, Waiting: []string{"k2", "k1"}}}}
+	right := WorkerLoad{Accounts: map[string]AccountLoad{"a": {Waiting: []string{"k1", "k3", ""}}, "b": {Waiting: []string{"k1"}}}}
+	sum := left.Add(right)
+	want := WorkerLoad{Accounts: map[string]AccountLoad{"a": {Streams: 1, Waiting: []string{"k1", "k2", "k3"}}, "b": {Waiting: []string{"k1"}}}}
+	if !reflect.DeepEqual(sum, want) {
+		t.Fatalf("sum %+v, want %+v", sum, want)
+	}
+	sum.Accounts["b"].Waiting[0] = "changed"
+	if right.Accounts["b"].Waiting[0] != "k1" || left.Accounts["a"].Waiting[0] != "k2" {
+		t.Fatalf("sum aliases its inputs: left=%+v right=%+v", left, right)
+	}
+	encoded, err := json.Marshal(want.Accounts["b"])
+	if err != nil || string(encoded) != `{"creates":0,"streams":0,"waiting":["k1"]}` {
+		t.Fatalf("waiting keys wire form: %s %v", encoded, err)
+	}
+}
+
 func TestPeerLoadHoldsGlobalCapacityUntilCleared(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()
@@ -289,6 +375,149 @@ func TestPeerSlotsTopUpWhenLocalCapacityFrees(t *testing.T) {
 	if !p.TryBeginIdleDrain() {
 		t.Fatal("peer slots kept the idle gate closed")
 	}
+}
+
+// Both workers admitted up to their own capacity before the first relay and
+// keep a backlog. A slot freed while the peers' load wants more peer tokens
+// than this worker holds becomes a peer token instead of going to a local
+// waiter, so the union is back within the plan after one relay rather than
+// once the backlog is gone; clearing the peer load hands the slots back.
+func TestReleasedSlotsBecomePeerTokensBeforeLocalWaiters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel() // A failure must not leave queued admissions behind.
+		workers := []*Proxy{
+			NewProxy(nil, nil, nil, ProxyConfig{MaxStreams: 2, MaxQueued: 4, QueueTimeout: time.Minute}),
+			NewProxy(nil, nil, nil, ProxyConfig{MaxStreams: 2, MaxQueued: 4, QueueTimeout: time.Minute}),
+		}
+		results := make([]chan admissionResult, len(workers))
+		held := make([][]func(), len(workers))
+		for i, p := range workers {
+			results[i] = make(chan admissionResult, 4)
+			for range 4 {
+				go func() {
+					release, err := p.acquire(ctx)
+					results[i] <- admissionResult{release: release, err: err}
+				}()
+			}
+		}
+		admitted := func(i, want int) {
+			t.Helper()
+			synctest.Wait()
+			for range want {
+				result, done := pending(results[i])
+				if !done || result.err != nil {
+					t.Fatalf("worker %d: queued admission did not start: done=%v err=%v", i, done, result.err)
+				}
+				held[i] = append(held[i], result.release)
+			}
+			if result, done := pending(results[i]); done {
+				t.Fatalf("worker %d: a queued admission took a slot held for the peer: %v", i, result.err)
+			}
+		}
+		relay := func() {
+			first, second := workers[0].Load(), workers[1].Load()
+			workers[0].SetPeerLoad(second)
+			workers[1].SetPeerLoad(first)
+		}
+		union := func() int { return workers[0].Load().Active + workers[1].Load().Active }
+		admitted(0, 2)
+		admitted(1, 2)
+		relay()
+		if got := union(); got != 4 {
+			t.Fatalf("union before any release = %d", got)
+		}
+		release := func(i int) {
+			held[i][0]()
+			held[i] = held[i][1:]
+		}
+		// One generation finishes on each worker; both keep two queued.
+		for i := range workers {
+			release(i)
+			admitted(i, 0)
+		}
+		if got := union(); got != 2 {
+			t.Fatalf("union after one release per worker = %d, want the plan of 2", got)
+		}
+		for i, p := range workers {
+			if streams, slots := peerSlots(p); streams != 1 || slots != 3 {
+				t.Fatalf("worker %d peer tokens: streams=%d admitted=%d", i, streams, slots)
+			}
+			if active, queued := p.AdmissionUsage(); active != 1 || queued != 2 {
+				t.Fatalf("worker %d own usage: active=%d queued=%d", i, active, queued)
+			}
+		}
+		relay()
+		// The peer tokens now match the peers' load, so the next release
+		// admits a local waiter and the union stays at the plan.
+		release(0)
+		admitted(0, 1)
+		if got := union(); got != 2 {
+			t.Fatalf("union after a release at the wanted peer tokens = %d", got)
+		}
+		workers[0].SetPeerLoad(WorkerLoad{})
+		admitted(0, 1)
+		if active, queued := workers[0].AdmissionUsage(); active != 2 || queued != 0 {
+			t.Fatalf("cleared peer load: active=%d queued=%d", active, queued)
+		}
+		workers[1].SetPeerLoad(WorkerLoad{})
+		admitted(1, 1)
+		for i, p := range workers {
+			for len(held[i]) != 0 {
+				release(i)
+				synctest.Wait()
+				if result, done := pending(results[i]); done {
+					if result.err != nil {
+						t.Fatalf("worker %d: last queued admission: %v", i, result.err)
+					}
+					held[i] = append(held[i], result.release)
+				}
+			}
+			if len(p.streams) != 0 || len(p.admitted) != 0 {
+				t.Fatalf("worker %d slots leaked: streams=%d admitted=%d", i, len(p.streams), len(p.admitted))
+			}
+		}
+	})
+}
+
+// A queued admission that gives up returns its admission slot to the peers'
+// tally while their load wants it, like a finished generation does.
+func TestTimedOutAdmissionLeavesItsSlotToThePeer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		p := NewProxy(nil, nil, nil, ProxyConfig{MaxStreams: 1, MaxQueued: 1, QueueTimeout: time.Second})
+		active, err := p.acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results := make(chan admissionResult, 1)
+		go func() {
+			release, err := p.acquire(ctx)
+			results <- admissionResult{release: release, err: err}
+		}()
+		synctest.Wait()
+		p.SetPeerLoad(WorkerLoad{Queued: 1})
+		if streams, admitted := peerSlots(p); streams != 0 || admitted != 0 {
+			t.Fatalf("full channels took peer tokens: streams=%d admitted=%d", streams, admitted)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		var failure *ProxyError
+		if result, done := pending(results); !done || !errors.As(result.err, &failure) || failure.Message != "Timed out waiting for local stream capacity" {
+			t.Fatalf("queued admission: done=%v err=%v", done, result.err)
+		}
+		if streams, admitted := peerSlots(p); streams != 0 || admitted != 1 {
+			t.Fatalf("timed-out slot: peer streams=%d admitted=%d", streams, admitted)
+		}
+		if _, err := p.acquire(ctx); !errors.As(err, &failure) || failure.Message != "Request queue is full; retry shortly" {
+			t.Fatalf("the peer's queue slot went to a new local admission: %v", err)
+		}
+		active()
+		p.SetPeerLoad(WorkerLoad{})
+		if len(p.streams) != 0 || len(p.admitted) != 0 {
+			t.Fatalf("slots leaked: streams=%d admitted=%d", len(p.streams), len(p.admitted))
+		}
+	})
 }
 
 func TestLoadReportsOnlyOwnAdmittedWork(t *testing.T) {

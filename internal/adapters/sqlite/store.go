@@ -198,7 +198,10 @@ func (s *Store) InstanceID() string { return s.instanceID }
 func (s *Store) Close() error {
 	s.writer.close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, _ = s.db.ExecContext(ctx, "PRAGMA optimize")
+	_ = retryBusy(writeLockWait, func() bool { return ctx.Err() == nil }, func() error {
+		_, err := s.db.ExecContext(ctx, "PRAGMA optimize")
+		return err
+	})
 	cancel()
 	return errors.Join(s.maintenance.Close(), s.analyticsDB.Close(), s.readDB.Close(), s.db.Close())
 }
@@ -265,9 +268,14 @@ func sqliteDSN(path string, readonly bool) (string, error) {
 	} else {
 		// Another worker of the installation may write the same file during an
 		// update. A deferred read-then-write transaction would then fail with
-		// SQLITE_BUSY_SNAPSHOT; IMMEDIATE takes the write lock at BEGIN and waits
-		// for it within the busy timeout instead.
+		// SQLITE_BUSY_SNAPSHOT; IMMEDIATE takes the write lock at BEGIN instead.
 		values.Set("_txlock", "immediate")
+		// Writes wait for that lock in retryBusy, not in SQLite's busy handler
+		// (see writeLockWait). Inside an IMMEDIATE WAL transaction nothing else
+		// waits for a lock (a new file migrates before WAL, with no other
+		// connection open), so every write on this pool begins through the
+		// batch writer or beginWrite.
+		values.Set("_busy_timeout", "0")
 		// A checkpoint that resets the WAL truncates it to this size, so one
 		// large transaction or a long reader cannot grow the file forever.
 		values.Add("_pragma", fmt.Sprintf("journal_size_limit(%d)", walSizeLimit))
@@ -309,7 +317,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version == len(migrations) {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	// An additive migration runs while the previous worker still writes.
+	tx, err := s.beginWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -361,18 +370,6 @@ func newerSchemaCompatible(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, nil
 	}
 	return err == nil && floor <= len(migrations), err
-}
-
-func transact(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func millis(t time.Time) int64     { return t.UTC().UnixMilli() }

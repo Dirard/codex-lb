@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 )
@@ -17,6 +19,55 @@ const writeBatchSize = 64
 // jobs.
 const writeExecutionTimeout = 5 * time.Second
 
+// writeLockWait bounds how long a write waits for the database write lock.
+// The writer connection has no SQLite busy timeout: SQLite's busy handler
+// sleeps up to 100 ms between attempts and rarely catches the lock free while
+// another worker of the installation commits short transactions back to back.
+// retryBusy polls every few milliseconds instead.
+const writeLockWait = 15 * time.Second
+
+// writeLockRetryDelay is the jittered pause between write lock attempts.
+func writeLockRetryDelay() time.Duration {
+	return time.Millisecond + rand.N(4*time.Millisecond)
+}
+
+// Polling alone rarely wins against batches that follow each other within
+// microseconds, the longer each batch the less. A writer that kept the lock
+// busy for writeLockShare without a gap of writeLockYield therefore leaves
+// such a gap, longer than any retry delay, before its next batch. That costs
+// at most 4 % of a saturated writer and nothing otherwise.
+const (
+	writeLockShare = 250 * time.Millisecond
+	writeLockYield = 10 * time.Millisecond
+)
+
+// retryBusy repeats attempt while it fails because another connection holds
+// the write lock, until wait reports that nobody waits any longer or budget
+// passed. attempt must leave nothing changed when it fails busy, as BEGIN
+// IMMEDIATE and single autocommit statements do.
+func retryBusy(budget time.Duration, wait func() bool, attempt func() error) error {
+	deadline := time.Now().Add(budget)
+	for {
+		err := attempt()
+		if err == nil || !isBusy(err) || !wait() || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(writeLockRetryDelay())
+	}
+}
+
+// beginWrite starts a write transaction on the writer pool outside the batch
+// writer (migrations, the legacy import), waiting for the write lock like the
+// batch writer does while ctx allows.
+func (s *Store) beginWrite(ctx context.Context) (*sql.Tx, error) {
+	var tx *sql.Tx
+	err := retryBusy(writeLockWait, func() bool { return ctx.Err() == nil }, func() (err error) {
+		tx, err = s.db.BeginTx(ctx, nil)
+		return err
+	})
+	return tx, err
+}
+
 type writeJob struct {
 	ctx  context.Context
 	run  func(context.Context, *sql.Tx) error
@@ -26,24 +77,34 @@ type writeJob struct {
 // batchWriter shares one durable commit among already waiting short mutations.
 // A job never returns while its callback or commit is still in progress.
 type batchWriter struct {
-	db      *sql.DB
-	timeout time.Duration
-	jobs    chan *writeJob
-	stop    chan struct{}
-	done    chan struct{}
-	mu      sync.Mutex
-	closed  bool
-	pending sync.WaitGroup
-	once    sync.Once
+	db       *sql.DB
+	timeout  time.Duration
+	lockWait time.Duration
+	jobs     chan *writeJob
+	stop     chan struct{}
+	done     chan struct{}
+	mu       sync.Mutex
+	closed   bool
+	pending  sync.WaitGroup
+	once     sync.Once
 }
 
 func newBatchWriter(db *sql.DB) *batchWriter {
-	w := &batchWriter{db: db, timeout: writeExecutionTimeout, jobs: make(chan *writeJob, 128), stop: make(chan struct{}), done: make(chan struct{})}
+	w := &batchWriter{db: db, timeout: writeExecutionTimeout, lockWait: writeLockWait, jobs: make(chan *writeJob, 128), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(w.done)
+		// busySince starts the current run of batches that left the write lock
+		// no gap of writeLockYield; ended is when the previous batch finished.
+		var busySince, ended time.Time
 		for {
 			select {
 			case first := <-w.jobs:
+				if gap := time.Since(ended); gap >= writeLockYield {
+					busySince = time.Now()
+				} else if time.Since(busySince) >= writeLockShare {
+					time.Sleep(writeLockYield - gap)
+					busySince = time.Now()
+				}
 				batch := []*writeJob{first}
 			collect:
 				for len(batch) < writeBatchSize {
@@ -55,6 +116,7 @@ func newBatchWriter(db *sql.DB) *batchWriter {
 					}
 				}
 				w.commit(batch)
+				ended = time.Now()
 			case <-w.stop:
 				return
 			}
@@ -150,11 +212,19 @@ func (w *batchWriter) commit(jobs []*writeJob) {
 	if fatal != nil {
 		return
 	}
-	// BEGIN IMMEDIATE waits, within the busy timeout, for another process of the
-	// installation to release the write lock; that is not execution time either.
+	// BEGIN IMMEDIATE is retried while another process of the installation
+	// holds the write lock; that is not execution time either. A job whose
+	// context ends meanwhile never ran, so it gets its error at once and leaves
+	// the batch; the others keep waiting up to lockWait.
 	txCtx, cancelTx := context.WithCancel(context.Background())
 	defer cancelTx()
-	tx, fatal = conn.BeginTx(txCtx, nil)
+	fatal = retryBusy(w.lockWait, func() bool {
+		jobs = answerCancelled(jobs)
+		return len(jobs) != 0
+	}, func() (err error) {
+		tx, err = conn.BeginTx(txCtx, nil)
+		return err
+	})
 	if fatal != nil {
 		return
 	}
@@ -183,4 +253,22 @@ func (w *batchWriter) commit(jobs []*writeJob) {
 		}
 	}
 	fatal = tx.Commit()
+}
+
+// answerCancelled completes the jobs whose context ended before their batch
+// began; none of them ran. It returns the jobs that still wait and leaves the
+// given slice unchanged.
+func answerCancelled(jobs []*writeJob) []*writeJob {
+	if !slices.ContainsFunc(jobs, func(job *writeJob) bool { return job.ctx.Err() != nil }) {
+		return jobs
+	}
+	waiting := make([]*writeJob, 0, len(jobs))
+	for _, job := range jobs {
+		if err := job.ctx.Err(); err != nil {
+			job.done <- err
+		} else {
+			waiting = append(waiting, job)
+		}
+	}
+	return waiting
 }
