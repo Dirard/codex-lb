@@ -386,6 +386,22 @@ export function formatRelative(ms: number): string {
   return t("formatters.relative.days", { count: days });
 }
 
+/** A compact elapsed time: "just now", "5m ago", "2h ago", "3d ago". */
+export function formatAgo(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) {
+    return t("formatters.ago.justNow");
+  }
+  if (minutes < 60) {
+    return t("formatters.ago.minutes", { count: minutes });
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return t("formatters.ago.hours", { count: hours });
+  }
+  return t("formatters.ago.days", { count: Math.floor(hours / 24) });
+}
+
 export function formatResetRelative(ms: number): string {
   if (ms <= 60_000) {
     return t("formatters.relative.minutes", { count: 1 });

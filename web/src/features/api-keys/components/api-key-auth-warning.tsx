@@ -1,14 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { AlertMessage } from "@/components/alert-message";
-import { getSettings } from "@/features/settings/api";
+import { useShellStatus } from "@/components/layout/use-shell-status";
 
 // Keyless proxy access is an explicit operator choice; keep it visible on
-// every dashboard page while API-key authentication is off.
+// every dashboard page while API-key authentication is off. The flag comes
+// from the shell status, so the warning adds no request of its own.
 export function ApiKeyAuthWarning() {
   const { t } = useTranslation();
-  const { data } = useQuery({ queryKey: ["settings", "detail"], queryFn: getSettings });
+  const { data } = useShellStatus();
   if (!data || data.apiKeyAuthEnabled) {
     return null;
   }

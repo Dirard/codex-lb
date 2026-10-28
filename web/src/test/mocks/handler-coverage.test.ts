@@ -31,6 +31,8 @@ const EXPECTED_ENDPOINTS = [
 	"GET /api/dashboard/overview",
 	"GET /api/dashboard/projections",
 	"GET /api/dashboard/status",
+	"GET /api/overview",
+	"GET /api/directory",
 	"GET /api/request-logs",
 	"GET /api/request-logs/options",
 	// conversations
@@ -96,6 +98,7 @@ const EXPECTED_ENDPOINTS = [
 	"DELETE /api/model-sources/:sourceId",
 	// api-keys
 	"GET /api/api-keys/",
+	"GET /api/api-keys/:keyId",
 	"POST /api/api-keys/",
 	"PATCH /api/api-keys/:keyId",
 	"DELETE /api/api-keys/:keyId",

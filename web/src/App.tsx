@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 
 import { AppHeader } from "@/components/layout/app-header";
 import {
@@ -21,8 +21,11 @@ import { useTimeFormatStore } from "@/hooks/use-time-format";
 
 // Route-level code splitting: only the visited page's chunk loads, instead
 // of one entry bundle carrying all six pages' code.
-const DashboardPage = lazy(() =>
-  import("@/features/dashboard/components/dashboard-page").then((m) => ({ default: m.DashboardPage })),
+const OverviewPage = lazy(() =>
+  import("@/features/overview/components/overview-page").then((m) => ({ default: m.OverviewPage })),
+);
+const RequestsPage = lazy(() =>
+  import("@/features/requests/components/requests-page").then((m) => ({ default: m.RequestsPage })),
 );
 const ReportsPage = lazy(() =>
   import("@/features/reports/components/reports-page").then((m) => ({ default: m.ReportsPage })),
@@ -37,6 +40,20 @@ const ApisPage = lazy(() => import("@/features/apis/components/apis-page").then(
 const SettingsPage = lazy(() =>
   import("@/features/settings/components/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
+/** `/apis` became `/keys`; selections and filters in the query survive. */
+function ApisRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/keys${search}`} replace />;
+}
+
+/** Groups are managed in Settings until the Groups page exists. */
+function GroupsRedirect() {
+  const [params] = useSearchParams();
+  const selected = params.get("selected");
+  const query = selected ? `?group=${encodeURIComponent(selected)}` : "";
+  return <Navigate to={`/settings${query}#account-groups`} replace />;
+}
+
 function AppLayout() {
   const { hash, key: locationKey, pathname, search } = useLocation();
   const logout = useAuthStore((state) => state.logout);
@@ -81,12 +98,16 @@ export default function App() {
         <Route path="/key-reports" element={<Navigate to="/" replace />} />
         <Route element={<AuthGate><Outlet /></AuthGate>}>
           <Route element={<AppLayout />}>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/" element={<Navigate to="/overview" replace />} />
+            <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
+            <Route path="/overview" element={<OverviewPage />} />
+            <Route path="/requests" element={<RequestsPage />} />
+            <Route path="/groups" element={<GroupsRedirect />} />
+            <Route path="/keys" element={<ApisPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/automations" element={<AutomationsPage />} />
-            <Route path="/apis" element={<ApisPage />} />
+            <Route path="/apis" element={<ApisRedirect />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/firewall" element={<Navigate to="/settings?advanced=1#firewall" replace />} />
             <Route path="*" element={<NotFoundPage />} />
