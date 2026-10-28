@@ -38,12 +38,12 @@ func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) err
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", cfg.listen)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
 	if err != nil {
 		_ = r.close()
-		return errors.New("cannot bind managed listener")
+		return listenError("managed listener", cfg.listen, err)
 	}
-	control, err := net.Listen("unix", socket)
+	control, err := (&net.ListenConfig{}).Listen(ctx, "unix", socket)
 	if err != nil {
 		listener.Close()
 		_ = r.close()

@@ -308,7 +308,7 @@ func (s *AccountsService) ManualCallback(ctx context.Context, callbackURL string
 			message = "Multiple accounts match the authenticated identity. Remove duplicate accounts and retry OAuth."
 		} else if errors.Is(err, errLoginAccountDeleted) {
 			message = "Account was deleted while this login was pending. Start a new login."
-		} else if err == errSeatMismatch {
+		} else if errors.Is(err, errSeatMismatch) {
 			message = seatMismatchMessage
 		}
 		s.recordFlowError(flow, message)
@@ -344,7 +344,7 @@ func (s *AccountsService) pollDeviceTokens(ctx context.Context, flow *oauthFlow)
 			s.flows.mu.Unlock()
 			if err != nil {
 				message := "An internal error occurred."
-				if err == errSeatMismatch {
+				if errors.Is(err, errSeatMismatch) {
 					message = seatMismatchMessage
 				} else if errors.Is(err, errLoginAccountDeleted) {
 					message = "Account was deleted while this login was pending. Start a new login."

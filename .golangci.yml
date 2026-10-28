@@ -1,0 +1,40 @@
+version: "2"
+
+# Only linters whose findings are actionable for this codebase are enabled, so
+# `make lint` stays a real gate instead of a noise report.
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - errorlint
+    - bodyclose
+    - noctx
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - -ST1000 # package comments
+        - -ST1003 # initialisms in existing exported names
+        - -ST1005 # error strings are user-facing sentences in places
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF1001 # De Morgan rewrites do not improve these conditions
+        - -QF1002
+        - -QF1003 # tagged-switch suggestions for two-way ifs
+        - -QF1008 # embedded field selectors are kept explicit
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [noctx, bodyclose, errorlint]
+      # coder/websocket.Dial returns a handshake response whose body is
+      # already closed by the library.
+      - linters: [bodyclose]
+        source: websocket\.Dial
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

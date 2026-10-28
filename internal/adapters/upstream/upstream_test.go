@@ -217,7 +217,7 @@ func TestExecuteChatTranslatesToolsReasoningImageAndFollowUp(t *testing.T) {
 	for _, raw := range followUp["messages"].([]any) {
 		message := raw.(map[string]any)
 		roles = append(roles, message["role"].(string))
-		if message["role"] == "assistant" && len(message["tool_calls"].(any).([]any)) != 2 {
+		if message["role"] == "assistant" && len(message["tool_calls"].([]any)) != 2 {
 			t.Fatalf("assistant parallel tool calls were not retained: %v", message)
 		}
 	}

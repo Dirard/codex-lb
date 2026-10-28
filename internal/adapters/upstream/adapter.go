@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,10 +27,12 @@ type HTTPAdapter struct {
 	sessions              websocketSessions
 	websocketPingInterval time.Duration
 	websocketPingTimeout  time.Duration
+	pings                 sync.WaitGroup // liveness pings that outlive their stopped probe
 }
 
 func (a *HTTPAdapter) Close() error {
 	a.sessions.close()
+	a.pings.Wait() // closed connections end in-flight pings promptly
 	a.client.CloseIdleConnections()
 	return nil
 }
@@ -258,7 +261,10 @@ func rejectedHTTPResult(status int, body []byte, protocol Protocol) (Result, err
 			return result, err
 		}
 	}
-	err.(*Error).RejectedBeforeExecution = true
+	var rejected *Error
+	if errors.As(err, &rejected) {
+		rejected.RejectedBeforeExecution = true
+	}
 	return result, err
 }
 
@@ -375,8 +381,4 @@ func wrapContext(ctx context.Context, err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: %w", ctx.Err(), err)
-}
-
-func isContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

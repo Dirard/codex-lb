@@ -78,7 +78,7 @@ func TestAccountUsageRoutesSnapshotAndConsume(t *testing.T) {
 		ID: "credit-1", Status: "available", ResetType: "primary", Title: "Bonus",
 		ExpiresAt: &expires,
 	}}}}
-	server, store, handler := newAccountsTestServer(t, &httpStubOAuth{})
+	server, store, _ := newAccountsTestServer(t, &httpStubOAuth{})
 	usage := application.NewAccountUsageService(store, cipherTokenSource{cipher: server.cipher}, stub, store, time.Now)
 	usage.ConfigureQuotaRecovery(store)
 	admin := http.NewServeMux()
@@ -88,7 +88,7 @@ func TestAccountUsageRoutesSnapshotAndConsume(t *testing.T) {
 	root := http.NewServeMux()
 	server.registerAuth(root)
 	root.Handle("/api/", protected)
-	handler = root
+	handler := root
 
 	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
 	setup.Header.Set("Content-Type", "application/json")

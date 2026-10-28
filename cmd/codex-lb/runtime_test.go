@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/credentials"
+	"codex-lb/internal/adapters/webui"
 )
 
 func testConfig(t *testing.T) config {
@@ -92,7 +94,17 @@ func TestRuntimeServesEmbeddedUIAndDrains(t *testing.T) {
 	go func() { done <- r.serveListener(ctx, listener) }()
 	client := &http.Client{Timeout: 5 * time.Second}
 	base := "http://" + listener.Addr().String()
-	for _, path := range []string{"/health/ready", "/health/live", "/health/startup", "/"} {
+	paths := []string{"/health/ready", "/health/live", "/health/startup", "/"}
+	if _, err := fs.Stat(webui.Dist(), "index.html"); err != nil {
+		// A clean checkout compiles without dashboard assets; CI builds them
+		// and sets CODEX_LB_REQUIRE_EMBEDDED_UI so the shipped UI stays covered.
+		if os.Getenv("CODEX_LB_REQUIRE_EMBEDDED_UI") != "" {
+			t.Fatal("dashboard assets are not built")
+		}
+		t.Log("dashboard assets are not built; skipping the embedded UI check")
+		paths = paths[:3]
+	}
+	for _, path := range paths {
 		response, err := client.Get(base + path)
 		if err != nil {
 			t.Fatal(err)

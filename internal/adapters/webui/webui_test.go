@@ -1,8 +1,10 @@
 package webui
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"testing/fstest"
 )
@@ -118,6 +120,17 @@ func TestMissingAssetStays404AndMethodsRestricted(t *testing.T) {
 }
 
 func TestEmbeddedDistServesIndex(t *testing.T) {
+	if _, err := fs.Stat(Dist(), "index.html"); err != nil {
+		// CI builds the dashboard and sets CODEX_LB_REQUIRE_EMBEDDED_UI; a
+		// clean checkout without assets must still compile and test.
+		if os.Getenv("CODEX_LB_REQUIRE_EMBEDDED_UI") != "" {
+			t.Fatal("dashboard assets are not built")
+		}
+		if rec := do(t, Handler(), http.MethodGet, "/"); rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("unbuilt embedded handler status = %d, want 503", rec.Code)
+		}
+		t.Skip("dashboard assets are not built")
+	}
 	rec := do(t, Handler(), http.MethodGet, "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("embedded handler status = %d, want 200", rec.Code)

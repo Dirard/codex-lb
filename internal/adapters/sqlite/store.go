@@ -78,7 +78,7 @@ func Open(path string) (*Store, error) {
 	// must not be altered even by a journal-mode change. FULL keeps committed
 	// accounting durable without recreating the rollback journal on every write.
 	var journal string
-	if err := db.QueryRow("PRAGMA journal_mode=WAL").Scan(&journal); err != nil {
+	if err := db.QueryRowContext(context.Background(), "PRAGMA journal_mode=WAL").Scan(&journal); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

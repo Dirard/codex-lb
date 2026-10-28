@@ -148,6 +148,12 @@ func TestOperationsTranscriptionChatGPTAndExternal(t *testing.T) {
 		if r.URL.Path != "/transcribe" || r.Header.Get("Authorization") != "Bearer chatgpt-access-token" {
 			t.Fatalf("ChatGPT transcription request invalid: %s %+v", r.URL.Path, r.Header)
 		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if files := r.MultipartForm.File["file"]; len(files) != 1 || files[0].Filename != "a.wav" || files[0].Header.Get("Content-Type") != "audio/wav" {
+			t.Fatalf("ChatGPT transcription file part lost its name or media type: %+v", files)
+		}
 		_, _ = w.Write([]byte(`{"text":"hello","duration":3}`))
 	}))
 	defer chatServer.Close()
@@ -192,4 +198,18 @@ func readAll(t *testing.T, reader io.Reader) []byte {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func TestAudioPartContentTypeRejectsMalformedValues(t *testing.T) {
+	for input, want := range map[string]string{
+		"audio/webm; codecs=opus":    "audio/webm; codecs=opus",
+		" audio/mpeg ":               "audio/mpeg",
+		"":                           "application/octet-stream",
+		"audio/wav\r\nX-Injected: 1": "application/octet-stream",
+		"not a media type":           "application/octet-stream",
+	} {
+		if got := audioPartContentType(input); got != want {
+			t.Fatalf("audioPartContentType(%q) = %q, want %q", input, got, want)
+		}
+	}
 }

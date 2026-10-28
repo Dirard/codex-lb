@@ -67,7 +67,7 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	}
 	token := hex.EncodeToString(secret)
 	parentSocket := filepath.Join(privateDir, "parent.sock")
-	listener, err := net.Listen("unix", parentSocket)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", parentSocket)
 	if err != nil {
 		return errors.New("cannot open private runtime control")
 	}
@@ -148,8 +148,13 @@ func prepareManagedBoot(ctx context.Context, store *updatefiles.Store, host *upd
 	if host.Stop(cleanup) != nil {
 		return errors.New("failed startup could not be stopped safely")
 	}
-	if state.Previous == nil || state.Previous.Descriptor.SchemaVersion != state.Current.Descriptor.SchemaVersion {
+	if state.Previous == nil {
 		return errors.New("managed runtime startup failed; no compatible previous version")
+	}
+	if state.Previous.Descriptor.SchemaVersion != state.Current.Descriptor.SchemaVersion {
+		// Traffic may have reached the newer schema, so the pre-update backup is
+		// never restored automatically here.
+		return errors.New("managed runtime startup failed; no compatible previous version (it needs the pre-update database backup in updates/)")
 	}
 	previous := *state.Previous
 	if err := start(previous); err != nil {

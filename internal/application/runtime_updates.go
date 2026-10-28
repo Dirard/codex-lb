@@ -73,12 +73,23 @@ func (s *RuntimeUpdates) statusLocked() domain.RuntimeUpdateStatus {
 	if previous := s.state.Previous; previous != nil {
 		status.PreviousVersion = previous.Descriptor.Version
 		status.CanRollback = status.Supported && previous.SHA256 != s.state.Current.SHA256 && compatibleRuntime(descriptor, previous.Descriptor)
+		if previous.Descriptor.SchemaVersion != descriptor.SchemaVersion {
+			status.RollbackNote = "The previous version uses an older database schema; return to it by restoring the pre-update backup"
+		}
 	}
 	return status
 }
 
+// compatibleRuntime allows switching between versions that share a database
+// schema, which is what rollback and boot recovery require.
 func compatibleRuntime(current, target domain.RuntimeDescriptor) bool {
 	return current.GOOS == target.GOOS && current.GOARCH == target.GOARCH && current.SchemaVersion == target.SchemaVersion && target.UpdateProtocol == domain.RuntimeUpdateProtocol
+}
+
+// compatibleUpdate also accepts a newer schema: the candidate migrates the
+// database at startup, after the pre-switch backup. Older schemas are refused.
+func compatibleUpdate(current, target domain.RuntimeDescriptor) bool {
+	return current.GOOS == target.GOOS && current.GOARCH == target.GOARCH && target.SchemaVersion >= current.SchemaVersion && target.UpdateProtocol == domain.RuntimeUpdateProtocol
 }
 
 func (s *RuntimeUpdates) Check(context.Context) (domain.RuntimeUpdateStatus, error) {
@@ -218,7 +229,7 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 			return
 		}
 		descriptor, err := s.host.Inspect(ctx, binary.Path)
-		if err != nil || descriptor.Version != release.Version || !compatibleRuntime(old.Descriptor, descriptor) {
+		if err != nil || descriptor.Version != release.Version || !compatibleUpdate(old.Descriptor, descriptor) {
 			s.finish("Release is incompatible with this platform, database schema or update protocol")
 			return
 		}
@@ -228,8 +239,12 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 			return
 		}
 	}
+	compatible := compatibleUpdate
+	if rollback != nil {
+		compatible = compatibleRuntime
+	}
 	checked, err := s.host.Inspect(ctx, target.Path)
-	if err != nil || checked != target.Descriptor || !compatibleRuntime(old.Descriptor, checked) {
+	if err != nil || checked != target.Descriptor || !compatible(old.Descriptor, checked) {
 		s.finish("Target executable is incompatible or changed")
 		return
 	}
@@ -266,8 +281,10 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 		s.restore(original, "Verified executable changed; previous version restored")
 		return
 	}
+	// From here a newer-schema candidate may have migrated the database.
+	migrated := target.Descriptor.SchemaVersion != old.Descriptor.SchemaVersion
 	if err = s.host.PrepareStart(ctx, target); err != nil {
-		s.restore(original, "New version failed startup verification; previous version restored")
+		s.restoreAfter(original, migrated, "New version failed startup verification; previous version restored")
 		return
 	}
 	s.mu.Lock()
@@ -283,11 +300,11 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 		s.mu.Lock()
 		s.state = previousState
 		s.mu.Unlock()
-		s.restore(original, "Cannot persist the new version; previous version restored")
+		s.restoreAfter(original, migrated, "Cannot persist the new version; previous version restored")
 		return
 	}
 	if err = s.host.Activate(ctx); err != nil {
-		s.restore(original, "New version failed activation; previous version restored")
+		s.restoreAfter(original, migrated, "New version failed activation; previous version restored")
 		return
 	}
 	s.finish("")
@@ -296,6 +313,13 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 func (s *RuntimeUpdates) clearPending() { s.mu.Lock(); s.state.Pending = nil; s.mu.Unlock() }
 
 func (s *RuntimeUpdates) restore(original domain.RuntimeInstallState, message string) {
+	s.restoreAfter(original, false, message)
+}
+
+// restoreAfter restarts the original version. When the failed candidate may
+// have migrated the database to a newer schema, the pre-switch snapshot is
+// restored first so the original version can open it.
+func (s *RuntimeUpdates) restoreAfter(original domain.RuntimeInstallState, restoreDatabase bool, message string) {
 	if s.ctx.Err() != nil {
 		s.finish("Update interrupted; the committed version will be verified on restart")
 		return
@@ -310,6 +334,12 @@ func (s *RuntimeUpdates) restore(original domain.RuntimeInstallState, message st
 	if err := s.store.Verify(ctx, original.Current); err != nil {
 		s.finish("Previous executable failed integrity verification; manual recovery is required")
 		return
+	}
+	if restoreDatabase {
+		if err := s.host.RestoreBackup(ctx); err != nil {
+			s.finish("Pre-update database backup could not be restored; manual recovery is required")
+			return
+		}
 	}
 	if err := s.host.PrepareStart(ctx, original.Current); err != nil {
 		s.finish("Previous version could not restart; manual recovery is required")
