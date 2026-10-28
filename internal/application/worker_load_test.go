@@ -194,6 +194,92 @@ func TestPeerKeyStreamsCountInFairShare(t *testing.T) {
 	lease.release()
 }
 
+// A key waiting for an account on the other worker is an active key of the
+// union: fair share over two workers must judge a busy key as one process
+// holding both would, and forget the key once its admission stops waiting.
+func TestPeerWaitingKeysCountInFairShare(t *testing.T) {
+	settings := domain.RuntimeSettings{RoutingStrategy: "round_robin", ProxyAccountStreamLimit: 4,
+		ProxyApiKeyFairShareCongestionThresholdPct: 50}
+	choices := admissionTestChoices("a")
+	fairShare := func(p *Proxy) (share, keys int, denied bool) {
+		a := p.accountAdmission
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		_, share, _, _, keys, denied = a.fairShareLocked(choices, settings, "heavy")
+		return share, keys, denied
+	}
+	wait := func(p *Proxy, key string) uint64 {
+		a := p.accountAdmission
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		var id uint64
+		a.waitLocked(&id, key, choices)
+		return id
+	}
+	hold := func(p *Proxy) {
+		for range 2 {
+			if _, _, err := p.admittedAccount(context.Background(), choices, settings, "heavy", false, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	single := admissionTestProxy()
+	hold(single)
+	wait(single, "starved")
+	singleShare, singleKeys, singleDenied := fairShare(single)
+	if singleShare != 2 || singleKeys != 2 || !singleDenied {
+		t.Fatalf("one process: share=%d keys=%d denied=%v", singleShare, singleKeys, singleDenied)
+	}
+
+	active, retiring := admissionTestProxy(), admissionTestProxy()
+	hold(active)
+	waiter := wait(retiring, "starved")
+	wait(retiring, "starved")
+	wait(retiring, "")
+	if load := retiring.Load(); !reflect.DeepEqual(load, WorkerLoad{Accounts: map[string]AccountLoad{"a": {Waiting: []string{"starved"}}}}) {
+		t.Fatalf("waiting keys reported as %+v", load)
+	}
+	relay := func() { la, lr := active.Load(), retiring.Load(); active.SetPeerLoad(lr); retiring.SetPeerLoad(la) }
+	relay()
+	if share, keys, denied := fairShare(active); share != singleShare || keys != singleKeys || denied != singleDenied {
+		t.Fatalf("two workers: share=%d keys=%d denied=%v, one process: share=%d keys=%d denied=%v",
+			share, keys, denied, singleShare, singleKeys, singleDenied)
+	}
+	retiring.accountAdmission.removeWaiter(waiter)
+	relay()
+	if share, keys, denied := fairShare(active); keys != 2 || !denied || share != 2 {
+		t.Fatalf("a key still waiting was forgotten: share=%d keys=%d denied=%v", share, keys, denied)
+	}
+	retiring.accountAdmission.mu.Lock()
+	for id := range retiring.accountAdmission.waiters {
+		delete(retiring.accountAdmission.waiters, id)
+	}
+	retiring.accountAdmission.mu.Unlock()
+	relay()
+	if share, keys, denied := fairShare(active); keys != 1 || denied || share != 4 {
+		t.Fatalf("a key that stopped waiting still counts: share=%d keys=%d denied=%v", share, keys, denied)
+	}
+}
+
+func TestWorkerLoadAddUnitesWaitingKeys(t *testing.T) {
+	left := WorkerLoad{Accounts: map[string]AccountLoad{"a": {Streams: 1, Waiting: []string{"k2", "k1"}}}}
+	right := WorkerLoad{Accounts: map[string]AccountLoad{"a": {Waiting: []string{"k1", "k3", ""}}, "b": {Waiting: []string{"k1"}}}}
+	sum := left.Add(right)
+	want := WorkerLoad{Accounts: map[string]AccountLoad{"a": {Streams: 1, Waiting: []string{"k1", "k2", "k3"}}, "b": {Waiting: []string{"k1"}}}}
+	if !reflect.DeepEqual(sum, want) {
+		t.Fatalf("sum %+v, want %+v", sum, want)
+	}
+	sum.Accounts["b"].Waiting[0] = "changed"
+	if right.Accounts["b"].Waiting[0] != "k1" || left.Accounts["a"].Waiting[0] != "k2" {
+		t.Fatalf("sum aliases its inputs: left=%+v right=%+v", left, right)
+	}
+	encoded, err := json.Marshal(want.Accounts["b"])
+	if err != nil || string(encoded) != `{"creates":0,"streams":0,"waiting":["k1"]}` {
+		t.Fatalf("waiting keys wire form: %s %v", encoded, err)
+	}
+}
+
 func TestPeerLoadHoldsGlobalCapacityUntilCleared(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()

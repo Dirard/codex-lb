@@ -172,6 +172,9 @@ func (a *accountAdmission) fairShareLocked(choices []accountCandidate, settings 
 			for activeKey := range peer.Keys {
 				active[activeKey] = true
 			}
+			for _, waitingKey := range peer.Waiting {
+				active[waitingKey] = true
+			}
 		}
 	}
 	for _, waiting := range a.waiters {
