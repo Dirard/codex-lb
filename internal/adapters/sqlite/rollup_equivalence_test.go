@@ -185,6 +185,17 @@ func rollupEquivalenceCases(t *testing.T, random *rand.Rand) []rollupReadCase {
 	cases = append(cases, rollupKeyCases(random)...)
 	cases = append(cases, rollupRequestLogCases(random)...)
 	cases = append(cases, rollupConversationCases(random)...)
+	if raceDetector {
+		// Every reader and fold state stays covered; the full matrix runs
+		// without the race detector, which slows SQLite about 40x.
+		sampled := cases[:0]
+		for i, c := range cases {
+			if i%4 == 0 {
+				sampled = append(sampled, c)
+			}
+		}
+		cases = sampled
+	}
 	return cases
 }
 
@@ -355,8 +366,17 @@ func TestRollupReadersMatchRawEventsInEveryFoldState(t *testing.T) {
 		if err := s.RebuildUsageRollups(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.FoldUsageRollups(ctx, 1+random.IntN(events-1), 1000); err != nil {
-			t.Fatal(err)
+		// Stop at a random cursor through production-sized batches: one batch
+		// of most of the events exceeds the writer's execution budget under -race.
+		for target, folded := 1+random.IntN(events-1), 0; folded < target; {
+			fold, err := s.FoldUsageRollups(ctx, min(1000, target-folded), 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fold.Rows == 0 {
+				break
+			}
+			folded += fold.Rows
 		}
 		check(fmt.Sprintf("(b) cursor %d", round))
 		foldRollups(t, s, 1000)
