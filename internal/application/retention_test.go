@@ -37,8 +37,11 @@ func (f *fakeRetentionRepo) PruneAccountQuotaHistory(context.Context, time.Time,
 	}
 	return 3, nil
 }
-func (f *fakeRetentionRepo) ThinAccountQuotaHistory(context.Context, time.Time, time.Time, int) (int, error) {
+func (f *fakeRetentionRepo) ThinAccountQuotaHistory(_ context.Context, from, to time.Time, _ int) (int, error) {
 	f.tick("thinning")
+	if !from.Before(to) {
+		return 0, errors.New("empty thinning range") // the SQLite store rejects it too
+	}
 	return 0, nil
 }
 func (f *fakeRetentionRepo) OldestAccountQuotaObservation(context.Context) (time.Time, error) {
