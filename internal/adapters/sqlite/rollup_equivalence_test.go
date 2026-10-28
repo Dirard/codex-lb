@@ -395,7 +395,7 @@ func TestRollupReadersMatchRawEventsInEveryFoldState(t *testing.T) {
 		}
 	}
 	// Repricing journals cost-only rows, which every reader applies itself.
-	if _, err := s.db.Exec(`UPDATE usage_events SET cost_microdollars=cost_microdollars+7 WHERE abs(random())%3=0`); err != nil {
+	if _, err := s.db.Exec(`UPDATE usage_events SET cost_microdollars=cost_microdollars+7 WHERE (rowid*?+?)%3=0`, rowSalt(random)...); err != nil {
 		t.Fatal(err)
 	}
 	insertRollupFixtureAt(t, s, random, 20000, 50, rollupAutumnBase, 34*24*time.Hour)
@@ -495,14 +495,14 @@ func mutateRollupEquivalence(t *testing.T, s *Store, random *rand.Rand, round in
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`UPDATE usage_events SET cost_microdollars=cost_microdollars+?
- WHERE abs(random())%9=0 AND model=?`, 1+random.Int64N(5000), fmt.Sprintf("model-%d", random.IntN(3))); err != nil {
+ WHERE (rowid*?+?)%9=0 AND model=?`, append([]any{1 + random.Int64N(5000)}, append(rowSalt(random), fmt.Sprintf("model-%d", random.IntN(3)))...)...); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`UPDATE usage_events SET conversation_id=?,status=?,useragent_group=NULL
- WHERE abs(random())%40=0`, []any{"conv-b", " conv-c", nil}[round], []string{"success", "error", "cancelled"}[round]); err != nil {
+ WHERE (rowid*?+?)%40=0`, append([]any{[]any{"conv-b", " conv-c", nil}[round], []string{"success", "error", "cancelled"}[round]}, rowSalt(random)...)...); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM usage_events WHERE abs(random())%50=0`); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM usage_events WHERE (rowid*?+?)%50=0`, rowSalt(random)...); err != nil {
 		t.Fatal(err)
 	}
 	switch round {
@@ -516,4 +516,10 @@ func mutateRollupEquivalence(t *testing.T, s *Store, random *rand.Rand, round in
 		}
 	}
 	insertRollupFixtureAt(t, s, random, 10000+round*100, 60, rollupSpringBase, 22*24*time.Hour)
+}
+
+// rowSalt selects a pseudo-random subset of rows as (rowid*a+b)%n=0 from the
+// test's seeded generator: SQLite's random() made runs unrepeatable.
+func rowSalt(random *rand.Rand) []any {
+	return []any{1 + 2*random.Int64N(1<<20), random.Int64N(1 << 20)}
 }
