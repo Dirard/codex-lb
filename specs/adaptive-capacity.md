@@ -122,13 +122,13 @@ Tests:
 
 ## Implementation checklist
 
-1. [ ] OpenSpec change `adapt-capacity-to-host` amending the fixed-number requirements (R4–R11).
-2. [ ] `domain.PlanCapacity` with table tests (R4–R8).
-3. [ ] `hostinfo.Detect` with cgroup v2/v1/physical tests and descriptor limit (R1–R3, R6).
-4. [ ] Configurable bounds: sqlite readers, proxy handler limits, upstream session lanes, admission usage (R5).
-5. [ ] Flags, plan application, `GOMEMLIMIT` handling, startup log (R7–R9).
-6. [ ] Admin capacity route and dashboard card (R10, R11).
-7. [ ] `make check`, web checks; record measured plans for 1 GB and 4 GB profiles in the decision log.
+1. [x] OpenSpec change `adapt-capacity-to-host` amending the fixed-number requirements (R4–R11).
+2. [x] `domain.PlanCapacity` with table tests (R4–R8).
+3. [x] `hostinfo.Detect` with cgroup v2/v1/physical tests and descriptor limit (R1–R3, R6).
+4. [x] Configurable bounds: sqlite readers, proxy handler limits, upstream session lanes, admission usage (R5).
+5. [x] Flags, plan application, `GOMEMLIMIT` handling, startup log (R7–R9).
+6. [x] Admin capacity route and dashboard card (R10, R11).
+7. [x] `make check`, web checks; record measured plans for 1 GB and 4 GB profiles in the decision log.
 
 ## Open questions
 
@@ -138,4 +138,5 @@ None blocking.
 
 - 2026-10-28: Memory tiers instead of a continuous formula keep the measured and administrator-approved 1 GB defaults exactly (512 generations, 128 queue, 4096 sockets) and make limits predictable for operators; a 1 GB VPS typically reports 900–990 MiB MemTotal and stays in the 512 tier.
 - 2026-10-28: The soft memory limit is 75% of usable memory: below it Go GC runs normally; the remaining quarter covers non-heap memory and co-located services. It is soft, so the process never fails merely by reaching it.
+- 2026-10-28: Measured plans: this 32-CPU/92 GiB workstation → 4096 generations, 32768 sockets, 32 readers; `systemd-run --scope -p MemoryMax=900M` → `cgroup_v2`, 943 MiB, 512 generations, 4096 sockets; `GOMEMLIMIT=1GiB` → 512 tier.
 - 2026-10-28: Byte-weighted body budgets for every proxy route (audit NET-14 / security SEC-4) are planned as the next slice once the transport changes land; this slice keeps count-based bounds but sizes them from memory.

@@ -106,7 +106,7 @@ Tests:
 3. [x] Metrics registry, gauges, opt-in listener, reserved paths (R5).
 4. [x] Bootstrap adoption and selection log; systemd and Docker defaults (R6, R7).
 5. [x] OpenSpec change `observe-runtime-operations`.
-6. [-] `make check`; record results.
+6. [x] `go test ./...`, focused `-race`, golangci-lint and spec validation pass; full CI runs on the pull request.
 
 ## Open questions
 
