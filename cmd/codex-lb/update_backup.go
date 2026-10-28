@@ -95,7 +95,7 @@ func (h *updateHost) Backup(ctx context.Context) error {
 
 // databaseSchemaVersion reads PRAGMA user_version through a read-only
 // connection; exists is false for a missing or empty file.
-func databaseSchemaVersion(dbPath string) (version int, exists bool, err error) {
+func databaseSchemaVersion(ctx context.Context, dbPath string) (version int, exists bool, err error) {
 	info, err := os.Lstat(dbPath)
 	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Mode().IsRegular() && info.Size() == 0) {
 		return 0, false, nil
@@ -108,7 +108,7 @@ func databaseSchemaVersion(dbPath string) (version int, exists bool, err error) 
 		return 0, false, err
 	}
 	defer database.Close()
-	if err := database.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	if err := database.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return 0, false, err
 	}
 	return version, true, nil

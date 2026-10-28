@@ -21,7 +21,7 @@ func TestBootMigratesReadsTheDatabaseVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dataDir := filepath.Join(t.TempDir(), "data")
-	if migrating, err := bootMigrates(dataDir, 41); err != nil || migrating {
+	if migrating, err := bootMigrates(ctx, dataDir, 41); err != nil || migrating {
 		t.Fatalf("a missing database is created, not migrated: %v %v", migrating, err)
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -30,7 +30,7 @@ func TestBootMigratesReadsTheDatabaseVersion(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, "codex-lb.sqlite3"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if migrating, err := bootMigrates(dataDir, 41); err != nil || migrating {
+	if migrating, err := bootMigrates(ctx, dataDir, 41); err != nil || migrating {
 		t.Fatalf("an empty database is created, not migrated: %v %v", migrating, err)
 	}
 	if err := os.Remove(filepath.Join(dataDir, "codex-lb.sqlite3")); err != nil {
@@ -45,7 +45,7 @@ func TestBootMigratesReadsTheDatabaseVersion(t *testing.T) {
 	}
 	current := runtimeDescriptor().SchemaVersion
 	for schema, want := range map[int]bool{current - 1: false, current: false, current + 1: true} {
-		if migrating, err := bootMigrates(dataDir, schema); err != nil || migrating != want {
+		if migrating, err := bootMigrates(ctx, dataDir, schema); err != nil || migrating != want {
 			t.Errorf("schema %d: migrating = %v, %v; want %v", schema, migrating, err, want)
 		}
 	}
@@ -123,7 +123,7 @@ func TestFailedMigratingBootRestoresThisBootsBackup(t *testing.T) {
 	previous := state.Current
 	state.Current, state.Previous = installScript(t, ctx, store, failing), &previous
 
-	migrating, err := bootMigrates(dataDir, state.Current.Descriptor.SchemaVersion)
+	migrating, err := bootMigrates(ctx, dataDir, state.Current.Descriptor.SchemaVersion)
 	if err != nil || !migrating {
 		t.Fatalf("the newer selected version must count as migrating: %v %v", migrating, err)
 	}

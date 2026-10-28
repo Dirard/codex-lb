@@ -179,7 +179,7 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	// The selected version migrates an older database when its worker opens it
 	// (a replaced bootstrap, or a first managed start on existing data). Decide
 	// from the database itself, so a start that failed earlier still backs up.
-	migrating, err := bootMigrates(cfg.dataDir, state.Current.Descriptor.SchemaVersion)
+	migrating, err := bootMigrates(ctx, cfg.dataDir, state.Current.Descriptor.SchemaVersion)
 	if err != nil {
 		return errors.New("cannot read the database schema version")
 	}
@@ -238,8 +238,8 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 
 // bootMigrates reports whether a worker of schema will migrate the existing
 // database; a missing or empty database is created, not migrated.
-func bootMigrates(dataDir string, schema int) (bool, error) {
-	version, exists, err := databaseSchemaVersion(filepath.Join(dataDir, "codex-lb.sqlite3"))
+func bootMigrates(ctx context.Context, dataDir string, schema int) (bool, error) {
+	version, exists, err := databaseSchemaVersion(ctx, filepath.Join(dataDir, "codex-lb.sqlite3"))
 	if err != nil || !exists {
 		return false, err
 	}
