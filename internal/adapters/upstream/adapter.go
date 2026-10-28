@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,10 +27,12 @@ type HTTPAdapter struct {
 	sessions              websocketSessions
 	websocketPingInterval time.Duration
 	websocketPingTimeout  time.Duration
+	pings                 sync.WaitGroup // liveness pings that outlive their stopped probe
 }
 
 func (a *HTTPAdapter) Close() error {
 	a.sessions.close()
+	a.pings.Wait() // closed connections end in-flight pings promptly
 	a.client.CloseIdleConnections()
 	return nil
 }
