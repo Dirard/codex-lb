@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
 	"github.com/coder/websocket"
 )
@@ -19,7 +18,7 @@ func TestWebSocketAdmissionRoutesShareGlobalCapacity(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			server, store := heartbeatFixture(t, nil)
 			handler := server.Config.Handler.(*ProxyHandler)
-			if cap(handler.websockets) != 4096 || cap(handler.websocketBodies) != 2*handler.proxy.AdmissionCapacity() {
+			if usage := handler.bodies.Usage(); cap(handler.websockets) != 4096 || usage.LimitBytes != 128<<20 || usage.KeyLimitBytes != 64<<20 {
 				t.Fatal("unexpected default budgets")
 			}
 			handler.websockets = make(chan struct{}, 3)
@@ -87,22 +86,6 @@ func TestWebSocketAdmissionRoutesShareGlobalCapacity(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestWebSocketBodyBudgetFollowsConfiguredRequestCapacity(t *testing.T) {
-	for _, tc := range []struct {
-		config application.ProxyConfig
-		want   int
-	}{
-		{application.ProxyConfig{}, 1280},
-		{application.ProxyConfig{MaxStreams: 3, MaxQueued: 2}, 10},
-	} {
-		proxy := application.NewProxy(nil, nil, nil, tc.config)
-		handler := NewProxyHandler(nil, proxy, nil)
-		if got := cap(handler.websocketBodies); got != tc.want {
-			t.Fatalf("body budget %d, want configured capacity %d", got, tc.want)
-		}
 	}
 }
 

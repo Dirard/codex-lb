@@ -61,7 +61,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 		defer close(readerDone)
 		defer cancel()
 		for {
-			kind, body, releaseBody, err := p.readWebSocketFrame(ctx, connection)
+			kind, body, releaseBody, err := p.readWebSocketFrame(ctx, connection, key.ID)
 			if err != nil {
 				releaseBody()
 				var capacity *application.ProxyError

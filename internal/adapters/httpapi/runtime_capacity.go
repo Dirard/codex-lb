@@ -14,6 +14,8 @@ type CapacityUsage struct {
 	ActiveGenerations int
 	QueuedGenerations int
 	ClientWebSockets  int
+	BodyBytes         int64
+	BodyRejections    uint64
 	ResidentBytes     int64
 }
 
@@ -34,7 +36,8 @@ type runtimeCapacityLimits struct {
 	GoMemoryLimitBytes   int64 `json:"goMemoryLimitBytes"`
 	MaxGenerations       int   `json:"maxGenerations"`
 	MaxQueued            int   `json:"maxQueued"`
-	BodyReaders          int   `json:"bodyReaders"`
+	BodyBudgetBytes      int64 `json:"bodyBudgetBytes"`
+	BodyBudgetKeyBytes   int64 `json:"bodyBudgetKeyBytes"`
 	ClientWebSockets     int   `json:"clientWebSockets"`
 	UpstreamWebSockets   int   `json:"upstreamWebSockets"`
 	UpstreamConnsPerHost int   `json:"upstreamConnectionsPerHost"`
@@ -42,13 +45,15 @@ type runtimeCapacityLimits struct {
 }
 
 type runtimeCapacityUsage struct {
-	ActiveGenerations int   `json:"activeGenerations"`
-	QueuedGenerations int   `json:"queuedGenerations"`
-	ClientWebSockets  int   `json:"clientWebSockets"`
-	GoHeapBytes       int64 `json:"goHeapBytes"`
-	GoTotalBytes      int64 `json:"goTotalBytes"`
-	ResidentBytes     int64 `json:"residentBytes"`
-	Goroutines        int   `json:"goroutines"`
+	ActiveGenerations int    `json:"activeGenerations"`
+	QueuedGenerations int    `json:"queuedGenerations"`
+	ClientWebSockets  int    `json:"clientWebSockets"`
+	BodyBytes         int64  `json:"bodyBytes"`
+	BodyRejections    uint64 `json:"bodyRejections"`
+	GoHeapBytes       int64  `json:"goHeapBytes"`
+	GoTotalBytes      int64  `json:"goTotalBytes"`
+	ResidentBytes     int64  `json:"residentBytes"`
+	Goroutines        int    `json:"goroutines"`
 }
 
 type runtimeCapacityView struct {
@@ -80,7 +85,8 @@ func (s *Server) runtimeCapacity() runtimeCapacityView {
 		Limits: runtimeCapacityLimits{
 			// Report the limit actually in force, including GOMEMLIMIT.
 			GoMemoryLimitBytes: effectiveMemoryLimit(),
-			MaxGenerations:     plan.MaxGenerations, MaxQueued: plan.MaxQueued, BodyReaders: plan.BodyReaders,
+			MaxGenerations:     plan.MaxGenerations, MaxQueued: plan.MaxQueued,
+			BodyBudgetBytes: plan.BodyBudgetBytes, BodyBudgetKeyBytes: plan.BodyBudgetKeyBytes,
 			ClientWebSockets: plan.ClientWebSockets, UpstreamWebSockets: plan.UpstreamWebSockets,
 			UpstreamConnsPerHost: plan.UpstreamConnsPerHost, SQLiteReaders: plan.SQLiteReaders,
 		},
@@ -89,7 +95,8 @@ func (s *Server) runtimeCapacity() runtimeCapacityView {
 	if s.capacity.Usage != nil {
 		usage := s.capacity.Usage()
 		view.Usage = runtimeCapacityUsage{ActiveGenerations: usage.ActiveGenerations, QueuedGenerations: usage.QueuedGenerations,
-			ClientWebSockets: usage.ClientWebSockets, ResidentBytes: usage.ResidentBytes}
+			ClientWebSockets: usage.ClientWebSockets, BodyBytes: usage.BodyBytes, BodyRejections: usage.BodyRejections,
+			ResidentBytes: usage.ResidentBytes}
 	}
 	samples := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}, {Name: "/memory/classes/total:bytes"}}
 	metrics.Read(samples)

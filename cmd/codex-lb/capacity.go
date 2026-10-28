@@ -14,7 +14,8 @@ import (
 // GOMEMLIMIT is kept as the runtime limit and used for sizing unless
 // --memory-limit was given explicitly.
 func planCapacity(cfg config, host domain.HostResources) domain.CapacityPlan {
-	overrides := domain.CapacityOverrides{MemoryLimitBytes: cfg.memoryLimit, MaxGenerations: cfg.maxGenerations, MaxClientWebSockets: cfg.maxClientWebSockets}
+	overrides := domain.CapacityOverrides{MemoryLimitBytes: cfg.memoryLimit, MaxGenerations: cfg.maxGenerations, MaxClientWebSockets: cfg.maxClientWebSockets,
+		BodyBudgetBytes: cfg.bodyMemoryBudget, BodyBudgetKeySharePct: cfg.bodyMemoryKeyShare}
 	if cfg.memoryLimit == 0 && os.Getenv("GOMEMLIMIT") != "" {
 		if current := debug.SetMemoryLimit(-1); current > 0 && current < math.MaxInt64 {
 			overrides.MemoryLimitBytes, overrides.MemoryLimitFromEnv = current, true
@@ -33,7 +34,8 @@ func applyCapacity(plan domain.CapacityPlan, logger *slog.Logger) {
 		"cpus", plan.Host.CPUs, "memory_bytes", plan.Host.MemoryBytes, "memory_source", plan.Host.MemorySource,
 		"file_descriptors", plan.Host.FileDescriptors, "sizing_memory_bytes", plan.SizingMemoryBytes,
 		"go_memory_limit_bytes", debug.SetMemoryLimit(-1), "max_generations", plan.MaxGenerations,
-		"max_queued", plan.MaxQueued, "body_readers", plan.BodyReaders, "client_websockets", plan.ClientWebSockets,
+		"max_queued", plan.MaxQueued, "body_budget_bytes", plan.BodyBudgetBytes, "body_budget_key_bytes", plan.BodyBudgetKeyBytes,
+		"client_websockets", plan.ClientWebSockets,
 		"upstream_websockets", plan.UpstreamWebSockets, "sqlite_readers", plan.SQLiteReaders, "overridden", plan.Overridden)
 }
 

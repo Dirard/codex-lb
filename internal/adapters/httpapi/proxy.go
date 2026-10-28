@@ -25,9 +25,8 @@ type ProxyHandler struct {
 	store                      ProxyRepository
 	proxy                      *application.Proxy
 	trusted                    []netip.Prefix
-	reading                    chan struct{}
+	bodies                     *BodyBudget
 	websockets                 chan struct{}
-	websocketBodies            chan struct{}
 	mux                        *http.ServeMux
 	QuotaHeaders               func(context.Context, string) (map[string]string, error)
 	websocketKeepaliveInterval time.Duration
@@ -37,8 +36,9 @@ type ProxyHandler struct {
 }
 
 // ProxyHandlerLimits sizes ingress budgets; zero values use the 1 GB-host defaults.
+// Bodies is the request-body budget shared with the other proxy routes.
 type ProxyHandlerLimits struct {
-	BodyReaders      int
+	Bodies           *BodyBudget
 	ClientWebSockets int
 }
 
@@ -47,15 +47,14 @@ func NewProxyHandler(store ProxyRepository, proxy *application.Proxy, trusted []
 }
 
 func NewProxyHandlerWithLimits(store ProxyRepository, proxy *application.Proxy, trusted []netip.Prefix, limits ProxyHandlerLimits) *ProxyHandler {
-	if limits.BodyReaders <= 0 {
-		limits.BodyReaders = 128
+	if limits.Bodies == nil {
+		limits.Bodies = NewBodyBudget(0, 0)
 	}
 	if limits.ClientWebSockets <= 0 {
 		limits.ClientWebSockets = 4096
 	}
-	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, limits.BodyReaders),
-		websockets:      make(chan struct{}, limits.ClientWebSockets),
-		websocketBodies: make(chan struct{}, 2*proxy.AdmissionCapacity()), websocketKeepaliveInterval: 10 * time.Second}
+	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, bodies: limits.Bodies,
+		websockets: make(chan struct{}, limits.ClientWebSockets), websocketKeepaliveInterval: 10 * time.Second}
 	mux := http.NewServeMux()
 	p.RegisterRoutes(mux)
 	p.mux = mux
@@ -167,14 +166,11 @@ func (p *ProxyHandler) responses(w http.ResponseWriter, r *http.Request) {
 	if !p.writeQuotaHeaders(w, r, key) {
 		return
 	}
-	select {
-	case p.reading <- struct{}{}:
-	default:
-		writeProxyError(w, &application.ProxyError{Code: "local_capacity_exceeded", Status: 503, Message: "Too many incoming request bodies"})
-		return
-	}
-	body, err := readProxyBody(w, r)
-	<-p.reading
+	// The body stays charged until the response ends: it is retained for
+	// failover, compaction and accounting until then.
+	lease := p.bodies.lease(key.ID)
+	defer lease.release()
+	body, err := readProxyBody(w, r, lease)
 	if err != nil {
 		writeProxyError(w, err)
 		return
@@ -213,30 +209,37 @@ func (p *ProxyHandler) responses(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(result.Response)
 }
 
-func readProxyBody(w http.ResponseWriter, r *http.Request) (json.RawMessage, error) {
-	const maximum = 32 << 20
-	var reader io.Reader = http.MaxBytesReader(w, r.Body, maximum)
+// readProxyBody reads a Responses or Chat body charged to lease: a declared
+// identity body is charged up front and read into one exact buffer; gzip and
+// undeclared bodies are charged by decoded bytes while they are read.
+func readProxyBody(w http.ResponseWriter, r *http.Request, lease *bodyLease) (json.RawMessage, error) {
+	const maximum = domain.MaxRequestBodyBytes
+	compressed := false
 	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))) {
 	case "", "identity":
 	case "gzip":
-		gz, err := gzip.NewReader(reader)
+		compressed = true
+	default:
+		return nil, &application.ProxyError{Code: "unsupported_content_encoding", Status: 415, Message: "Unsupported request encoding"}
+	}
+	prepaid, err := lease.admitDeclared(r, maximum)
+	if err != nil {
+		return nil, err
+	}
+	source := http.MaxBytesReader(w, r.Body, maximum)
+	if !compressed && r.ContentLength >= 0 {
+		return readDeclaredBody(source, r.ContentLength)
+	}
+	var reader io.Reader = source
+	if compressed {
+		gz, err := gzip.NewReader(source)
 		if err != nil {
 			return nil, &application.ProxyError{Code: "invalid_content_encoding", Status: 400, Message: "Invalid compressed request body"}
 		}
 		defer gz.Close()
 		reader = gz
-	default:
-		return nil, &application.ProxyError{Code: "unsupported_content_encoding", Status: 415, Message: "Unsupported request encoding"}
 	}
-	body, err := io.ReadAll(io.LimitReader(reader, maximum+1))
-	var tooLarge *http.MaxBytesError
-	if len(body) > maximum || errors.As(err, &tooLarge) {
-		return nil, &application.ProxyError{Code: "request_too_large", Status: 413, Message: "Request body exceeds size limit"}
-	}
-	if err != nil {
-		return nil, &application.ProxyError{Code: "invalid_request_body", Status: 400, Message: "Could not decode request body"}
-	}
-	return body, nil
+	return readChargedBody(&chargedReader{source: reader, lease: lease, prepaid: prepaid}, maximum)
 }
 
 func proxyError(err error) (int, string, string) {

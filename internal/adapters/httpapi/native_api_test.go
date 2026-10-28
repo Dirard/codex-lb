@@ -62,6 +62,14 @@ func (nativeTokenSource) ForceRefresh(context.Context, domain.Account, string) (
 
 func newNativeTestServer(t *testing.T, embeddings *httptest.Server, responseProvider application.ResponseProvider, limit int64) (*sqlite.Store, *application.CodexResourceOwners, http.Handler) {
 	t.Helper()
+	store, handler := newNativeTestHandler(t, embeddings, responseProvider, limit)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+	return store, nil, mux
+}
+
+func newNativeTestHandler(t *testing.T, embeddings *httptest.Server, responseProvider application.ResponseProvider, limit int64) (*sqlite.Store, *NativeAPIHandler) {
+	t.Helper()
 	ctx := context.Background()
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "native.sqlite"))
 	if err != nil {
@@ -123,9 +131,7 @@ func newNativeTestServer(t *testing.T, embeddings *httptest.Server, responseProv
 	}
 	service := application.NewNativeAPIService(store, embeddingProvider, chatProvider, proxy)
 	service.ConfigureAdmission(nativeAdmission{})
-	mux := http.NewServeMux()
-	RegisterNativeAPIRoutes(mux, store, service, nil)
-	return store, nil, mux
+	return store, NewNativeAPIHandler(store, service, nil)
 }
 
 func TestNativeChatHTTPContractAndSQLiteAccounting(t *testing.T) {
