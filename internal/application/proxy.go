@@ -519,6 +519,13 @@ func (p *Proxy) dispatch(ctx context.Context, target ResponseTarget, body json.R
 // AdmissionCapacity includes active and queued Responses, independent of idle sockets.
 func (p *Proxy) AdmissionCapacity() int { return cap(p.admitted) }
 
+// AdmissionUsage reports currently executing generations and those admitted
+// but still waiting for a stream slot.
+func (p *Proxy) AdmissionUsage() (active, queued int) {
+	active = len(p.streams)
+	return active, max(0, len(p.admitted)-active)
+}
+
 func (p *Proxy) acquire(ctx context.Context) (func(), error) {
 	p.admissionMu.Lock()
 	draining := p.draining

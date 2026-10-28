@@ -2,6 +2,9 @@
 Description=codex-lb Go proxy
 After=network-online.target
 Wants=network-online.target
+# Keep retrying after transient failures (busy port, slow disk) instead of
+# giving up after five quick restarts.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -15,11 +18,41 @@ EnvironmentFile=-/etc/codex-lb.env
 ExecStart=/usr/local/bin/codex-lb serve --data-dir /var/lib/codex-lb --listen 127.0.0.1:2455
 Restart=on-failure
 RestartSec=2s
-TimeoutStopSec=90s
+RestartSteps=5
+RestartMaxDelaySec=60s
+# Drain grace (30s) + accounting cleanup (45s) + launcher margin must fit.
+TimeoutStopSec=120s
+# Capacity is sized from the memory this unit may use: set MemoryMax= (and
+# optionally MemoryHigh=) to reserve room for other services on the host.
+# Client WebSocket capacity is bounded by this descriptor limit.
+LimitNOFILE=65536
+
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+DevicePolicy=closed
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# /proc/meminfo stays readable: memory detection needs it (no ProcSubset=pid).
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

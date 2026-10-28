@@ -438,3 +438,27 @@ func TestStoreNewAndLoadRejectUnsafeLayouts(t *testing.T) {
 		t.Fatalf("oversized state file was accepted: %v", err)
 	}
 }
+
+func TestStoreInitializeAdoptsAManuallyReplacedOlderBootstrap(t *testing.T) {
+	store, _ := newTestStore(t)
+	executable := filepath.Join(t.TempDir(), "bootstrap")
+	newer := []byte("binary-newer")
+	writeExecutable(t, executable, newer)
+	if _, err := store.Initialize(context.Background(), executable, testDescriptor("go-v1.0.4")); err != nil {
+		t.Fatal(err)
+	}
+	older := []byte("binary-older")
+	writeExecutable(t, executable, older)
+	state, err := store.Initialize(context.Background(), executable, testDescriptor("go-v1.0.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Current.SHA256 != digestOf(older) || state.Current.Descriptor.Version != "go-v1.0.2" ||
+		state.Previous == nil || state.Previous.SHA256 != digestOf(newer) || state.BootstrapSHA256 != digestOf(older) {
+		t.Fatalf("emergency downgrade by binary replacement was ignored: %+v", state)
+	}
+	again, err := store.Initialize(context.Background(), executable, testDescriptor("go-v1.0.2"))
+	if err != nil || again.Current.SHA256 != digestOf(older) || again.Previous == nil || again.Previous.SHA256 != digestOf(newer) {
+		t.Fatalf("restart with the same bootstrap changed the selection: %+v %v", again, err)
+	}
+}

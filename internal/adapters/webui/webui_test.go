@@ -51,7 +51,7 @@ func TestAPIPathsNeverBecomeIndex(t *testing.T) {
 	handler := New(testFS())
 
 	for _, target := range []string{
-		"/api/accounts", "/api/", "/api", "/v1/responses", "/backend-api/codex/responses", "/health", "/health/ready",
+		"/api/accounts", "/api/", "/api", "/v1/responses", "/backend-api/codex/responses", "/health", "/health/ready", "/metrics", "/debug/pprof/",
 	} {
 		rec := do(t, handler, http.MethodGet, target)
 		if rec.Code != http.StatusNotFound {

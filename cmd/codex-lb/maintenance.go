@@ -7,26 +7,17 @@ import (
 	"codex-lb/internal/application"
 )
 
-func (r *runtime) maintainReports(ctx context.Context) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	var nextRetention time.Time
-	for {
-		cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if _, err := r.data.store.CleanupDeletedAccounts(cleanup, 1000); err != nil && ctx.Err() == nil {
-			r.logger.Warn("deleted-account cleanup did not complete; will retry next interval")
-		}
-		cancel()
-		if now := time.Now(); !now.Before(nextRetention) {
-			r.maintainReportRetention(ctx)
-			nextRetention = now.Add(time.Hour)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+// maintainReports runs one maintenance pass; RunPeriodic schedules it every
+// minute and reports failures. Retention runs at most hourly.
+func (r *runtime) maintainReports(ctx context.Context) error {
+	cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, err := r.data.store.CleanupDeletedAccounts(cleanup, 1000)
+	cancel()
+	if now := time.Now(); !now.Before(r.nextRetention) {
+		r.maintainReportRetention(ctx)
+		r.nextRetention = now.Add(time.Hour)
 	}
+	return err
 }
 
 func (r *runtime) maintainReportRetention(ctx context.Context) {

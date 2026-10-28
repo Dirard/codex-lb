@@ -54,6 +54,7 @@ type Server struct {
 	archives       *application.ErrorArchives
 	archiveRepo    application.ErrorArchiveRepository
 	runtimeUpdates application.RuntimeUpdater
+	capacity       *RuntimeCapacitySource
 	accountsOnce   sync.Once
 }
 
@@ -108,6 +109,9 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 		s.registerFirewallRoutes(admin)
 	}
 	s.registerRuntimeUpdateRoutes(admin)
+	if s.capacity != nil {
+		s.registerRuntimeCapacityRoutes(admin)
+	}
 	if s.accounts != nil {
 		s.registerAccountRoutes(admin)
 	}

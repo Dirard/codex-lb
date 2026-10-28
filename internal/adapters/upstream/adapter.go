@@ -34,6 +34,14 @@ func (a *HTTPAdapter) Close() error {
 	return nil
 }
 
+// SetWebSocketSessionLimit bounds live upstream WebSocket sessions; call it
+// before the adapter serves requests. Non-positive values keep the default.
+func (a *HTTPAdapter) SetWebSocketSessionLimit(limit int) {
+	a.sessions.mu.Lock()
+	a.sessions.maxLanes = limit
+	a.sessions.mu.Unlock()
+}
+
 func New(client *http.Client, continuations *ContinuationStore) *HTTPAdapter {
 	if client == nil {
 		client = &http.Client{}

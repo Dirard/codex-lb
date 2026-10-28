@@ -774,6 +774,10 @@ export const handlers = [
     });
   }),
 
+  http.get("/api/runtime/capacity", () => {
+    return HttpResponse.json(createRuntimeCapacity());
+  }),
+
   http.get("/api/dashboard/overview", () => {
     return HttpResponse.json(
       createDashboardOverview({
@@ -2183,3 +2187,31 @@ export const handlers = [
     return HttpResponse.json(createApiKeyUsage7Day({ keyId }));
   }),
 ];
+
+export function createRuntimeCapacity() {
+  return {
+    host: { cpus: 6, memoryBytes: 4 * 1024 ** 3, memorySource: "physical", fileDescriptors: 524288 },
+    sizingMemoryBytes: 4 * 1024 ** 3,
+    sizingMemorySource: "physical",
+    limits: {
+      goMemoryLimitBytes: 3 * 1024 ** 3,
+      maxGenerations: 2048,
+      maxQueued: 512,
+      bodyReaders: 512,
+      clientWebSockets: 16384,
+      upstreamWebSockets: 2048,
+      upstreamConnectionsPerHost: 2048,
+      sqliteReaders: 16,
+    },
+    overridden: [],
+    usage: {
+      activeGenerations: 12,
+      queuedGenerations: 0,
+      clientWebSockets: 40,
+      goHeapBytes: 80 * 1024 ** 2,
+      goTotalBytes: 120 * 1024 ** 2,
+      residentBytes: 150 * 1024 ** 2,
+      goroutines: 90,
+    },
+  };
+}

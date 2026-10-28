@@ -110,6 +110,7 @@ type AccountUsageAccounts interface {
 }
 
 type AccountUsageService struct {
+	background    BackgroundSchedule
 	accounts      AccountUsageAccounts
 	tokens        UsageTokenSource
 	usage         UsageClient
@@ -395,16 +396,13 @@ func (s *AccountUsageService) RunUsagePoller(ctx context.Context, interval time.
 	if interval <= 0 {
 		interval = time.Minute
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		_ = s.RefreshAll(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	RunPeriodic(ctx, "account_usage", s.background, interval, nil, s.RefreshAll)
+}
+
+// ConfigureBackground sets the poller's start delay and outcome reporting;
+// call it before RunUsagePoller.
+func (s *AccountUsageService) ConfigureBackground(schedule BackgroundSchedule) {
+	s.background = schedule
 }
 
 // ResetCreditsSnapshot returns the cached snapshot, or nil when the poller has

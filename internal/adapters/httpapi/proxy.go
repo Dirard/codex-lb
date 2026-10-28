@@ -33,14 +33,35 @@ type ProxyHandler struct {
 	websocketKeepaliveInterval time.Duration
 }
 
+// ProxyHandlerLimits sizes ingress budgets; zero values use the 1 GB-host defaults.
+type ProxyHandlerLimits struct {
+	BodyReaders      int
+	ClientWebSockets int
+}
+
 func NewProxyHandler(store ProxyRepository, proxy *application.Proxy, trusted []netip.Prefix) *ProxyHandler {
-	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, 128),
-		websockets:      make(chan struct{}, 4096),
+	return NewProxyHandlerWithLimits(store, proxy, trusted, ProxyHandlerLimits{})
+}
+
+func NewProxyHandlerWithLimits(store ProxyRepository, proxy *application.Proxy, trusted []netip.Prefix, limits ProxyHandlerLimits) *ProxyHandler {
+	if limits.BodyReaders <= 0 {
+		limits.BodyReaders = 128
+	}
+	if limits.ClientWebSockets <= 0 {
+		limits.ClientWebSockets = 4096
+	}
+	p := &ProxyHandler{store: store, proxy: proxy, trusted: trusted, reading: make(chan struct{}, limits.BodyReaders),
+		websockets:      make(chan struct{}, limits.ClientWebSockets),
 		websocketBodies: make(chan struct{}, 2*proxy.AdmissionCapacity()), websocketKeepaliveInterval: 10 * time.Second}
 	mux := http.NewServeMux()
 	p.RegisterRoutes(mux)
 	p.mux = mux
 	return p
+}
+
+// ClientWebSockets reports admitted client WebSockets and the budget.
+func (p *ProxyHandler) ClientWebSockets() (open, limit int) {
+	return len(p.websockets), cap(p.websockets)
 }
 
 // RegisterRoutes keeps exact Responses paths ahead of ancillary call-ID wildcards

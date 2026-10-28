@@ -56,6 +56,12 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	if err != nil {
 		return errors.New("cannot initialize managed runtime version")
 	}
+	selected := []any{"bootstrap_version", version, "selected_version", state.Current.Descriptor.Version,
+		"selected_sha256", state.Current.SHA256, "bootstrap_sha256", state.BootstrapSHA256}
+	if state.Previous != nil {
+		selected = append(selected, "previous_version", state.Previous.Descriptor.Version)
+	}
+	logger.Info("managed runtime selected", selected...)
 	privateDir, err := os.MkdirTemp("", "codex-lb-control-")
 	if err != nil {
 		return errors.New("cannot create private runtime control")

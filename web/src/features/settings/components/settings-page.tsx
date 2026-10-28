@@ -12,6 +12,7 @@ import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { FirewallSection } from "@/features/firewall/components/firewall-section";
 import { ModelSourcesSettings } from "@/features/model-sources/components/model-sources-settings";
 import { ModelPricesSettings } from "@/features/model-prices/model-prices-settings";
+import { RuntimeCapacitySettings } from "@/features/runtime/runtime-capacity-settings";
 import { RuntimeUpdateSettings } from "@/features/runtime/runtime-update-settings";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import { shouldExpandAdvancedSettings } from "@/features/settings/advanced-settings-deeplink";
@@ -130,6 +131,7 @@ export function SettingsPage() {
           <div className="space-y-4">
             <AppearanceSettings />
             <RuntimeUpdateSettings canWrite={canWrite} />
+            <RuntimeCapacitySettings />
             <ImportSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
             <ResetCreditSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
             {canWrite ? <PasswordSettings disabled={busy} /> : null}
