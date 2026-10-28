@@ -27,7 +27,7 @@ var pendingLogBase = time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
 // key names with LIKE wildcards, shared timestamps among pending entries and
 // with events, ordinary live and settled reservations that must stay hidden,
 // and pending reservations that already have a usage event.
-func seedPendingLogEquivalence(t *testing.T, s *Store, random *rand.Rand) {
+func seedPendingLogEquivalence(t *testing.T, s *Store, random *rand.Rand, events, reservations int) {
 	t.Helper()
 	ctx := context.Background()
 	if err := seedPendingLogAccounts(ctx, s, 3); err != nil {
@@ -42,7 +42,7 @@ func seedPendingLogEquivalence(t *testing.T, s *Store, random *rand.Rand) {
 		}
 	}
 	span := 48 * time.Hour
-	insertRollupFixtureAt(t, s, random, 0, 3000, pendingLogBase, span)
+	insertRollupFixtureAt(t, s, random, 0, events, pendingLogBase, span)
 	var eventTimes []int64
 	rows, err := s.db.Query(`SELECT requested_at FROM usage_events ORDER BY rowid LIMIT 200`)
 	if err != nil {
@@ -63,7 +63,7 @@ func seedPendingLogEquivalence(t *testing.T, s *Store, random *rand.Rand) {
 	models := []string{"model-0", "model-1", "model-2", "legacy-model", "pend%model"}
 	statuses := []string{"pending", "pending", "pending", "pending", "live", "finalized", "released", "failed"}
 	tied := millis(pendingLogBase.Add(30 * time.Hour))
-	for i := range 2600 {
+	for i := range reservations {
 		at := millis(pendingLogBase) + random.Int64N(span.Milliseconds())
 		switch i % 13 {
 		case 0:
@@ -242,28 +242,36 @@ func assertPendingLogReadsMatch(t *testing.T, s *Store, state string, filter dom
 
 // The optimized pending entries match the reference reads for every filter
 // with no, few (excluded by id) and many (probed) recorded reservations, with
-// an unfolded tail of events and with folded rollups.
+// an unfolded tail of events and with folded rollups. The race detector gets
+// a smaller fixture without the probed state.
 func TestRequestLogPendingEntriesMatchReference(t *testing.T) {
 	random := rand.New(rand.NewPCG(43, 7))
 	s, _ := testStore(t)
-	seedPendingLogEquivalence(t, s, random)
+	events, reservations, minPending := 3000, 2600, 1100
+	if raceDetector {
+		events, reservations, minPending = 500, 700, 250
+	}
+	seedPendingLogEquivalence(t, s, random, events, reservations)
 	var pending, recorded int
 	if err := s.db.QueryRow(`SELECT count(*),count(x.rowid) FROM usage_reservations r LEFT JOIN usage_events x
  ON x.reservation_id=r.id WHERE r.status='reserved' AND r.needs_reconciliation=1`).Scan(&pending, &recorded); err != nil {
 		t.Fatal(err)
 	}
-	if pending < 1000 || recorded != 60 {
+	if pending < minPending || recorded != 60 {
 		t.Fatalf("fixture has %d pending and %d recorded reservations", pending, recorded)
 	}
 	filters := pendingLogFilters(random)
-	for _, state := range []struct {
+	type state struct {
 		name     string
 		prepare  func()
 		recorded int
-	}{
-		{"folded", func() { foldRollups(t, s, 700) }, 60},
-		{"many recorded", func() { recordPendingLogEvents(t, s, pendingLogRecordedLimit) }, 60 + pendingLogRecordedLimit},
-	} {
+	}
+	states := []state{{"folded", func() { foldRollups(t, s, 700) }, 60}}
+	if !raceDetector {
+		states = append(states, state{"many recorded", func() { recordPendingLogEvents(t, s, pendingLogRecordedLimit) },
+			60 + pendingLogRecordedLimit})
+	}
+	for _, state := range states {
 		state.prepare()
 		reader := newPendingLogReader(s.analyticsDB)
 		if err := reader.load(context.Background()); err != nil {
