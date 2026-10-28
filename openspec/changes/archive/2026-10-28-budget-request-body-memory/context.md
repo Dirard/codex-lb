@@ -36,3 +36,7 @@ These are synthetic results, not a production SLA. Real requests also carry hist
 - `GET /api/runtime/capacity` reports `limits.bodyBudgetBytes`, `limits.bodyBudgetKeyBytes`, `usage.bodyBytes` and `usage.bodyRejections` (`limits.bodyReaders` is gone). Prometheus: `codex_lb_request_body_bytes`, `codex_lb_request_body_budget_bytes`, `codex_lb_request_body_rejections`.
 - Frequent rejections with RSS well below the soft limit mean the budget is too small for the workload: raise `--body-memory-budget` (e.g. `1GiB`) or `--memory-limit`. One noisy key: lower `--body-memory-key-share`. A single-key installation can use `--body-memory-key-share 100`.
 - Realtime live WebSocket messages (4 MiB, relayed one at a time) are not charged yet; they belong with the shared realtime socket budget (NET-22).
+
+## Superseded details
+
+Review found that charging a declared length in full at the headers let clients that send no body hold the budget, and that oversized gzip/chunked bodies could get 503 instead of 413. Both were fixed by [bound-stalled-request-bodies](../2026-10-28-bound-stalled-request-bodies/context.md), which also corrects the 1 GB example: the 512 × 256 KiB profile fits at exactly 1 GiB of sizing memory (as measured here with `--memory-limit 768MiB`); a real 1 GB VPS admits about 480–491 of the 512 at once.

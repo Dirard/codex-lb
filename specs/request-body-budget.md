@@ -67,7 +67,7 @@ Tests:
    requirements: R2
 
 ### 2. Admit a request body against the shared budget
-authenticated proxy request --charge the declared length or charge bytes while reading--> [admitted body held by a lease, 503 local_capacity_exceeded, 413 request_too_large] --finish using the body--> released lease
+authenticated proxy request --check the declared length and charge bytes as they arrive--> [admitted body held by a lease, 503 local_capacity_exceeded, 413 request_too_large, 408 request_body_timeout] --finish using the body--> released lease
 
 Requirements:
 
@@ -75,7 +75,7 @@ Requirements:
 Every proxy route that reads a request body (Responses HTTP, Chat Completions, embeddings, compact, control, file creation, transcription, realtime call creation, public warmup) SHALL charge it to one budget shared by all routes before retaining it, under the authenticated key.
 
   R5:
-When the body has a declared Content-Length, the route SHALL reject a length above the route maximum with 413 before charging and SHALL charge the full length before reading any byte; a body without a declared length, or whose decoded (gzip) size exceeds the declared length, SHALL be charged as bytes are read, never retaining a byte that is not charged.
+When the body has a declared Content-Length, the route SHALL reject a length above the route maximum with 413 and refuse a length the key cannot charge now with 503, both before reading, without reserving it; every body (gzip by decoded bytes) SHALL be charged as its bytes arrive, never retaining a byte that is not charged, so a request that declares a length and sends nothing holds nothing. Past the route maximum the body SHALL get 413 even on a full budget: the byte that proves it is read without charge.
 
   R6:
 When the budget (or the key's share) cannot hold the body, the route SHALL respond with the existing 503 `local_capacity_exceeded` envelope and `Retry-After`, without dispatching upstream, reserving key usage or changing account health; this local pressure MUST NOT be classified as provider quota.
@@ -89,16 +89,19 @@ The per-key share SHALL bound the bytes one API key holds; the internal local-pr
   R9:
 The budget counts request-body bytes, not total process memory, and MUST NOT be presented as a hard process-memory limit.
 
+  R15:
+A request body SHALL keep arriving: each read that returns data moves the connection read deadline 10 s ahead, never past 2 minutes from the start of the body (the server ReadTimeout); a stalled upload SHALL end with 408 `request_body_timeout` and release its charge, and the deadline MUST NOT outlive the body into the response.
+
 Detailed Workflow:
-declared length: request with Content-Length --reject above route maximum--> bounded length --charge the whole length at once--> prepaid lease --read into one exactly sized buffer--> body
-unknown length or gzip: request --wrap the decoded reader in a charging reader--> charging reader --charge each read before it is returned, refunding unread bytes--> body or local capacity
+declared length: request with Content-Length --reject above route maximum or beyond the free budget--> checked length --read through the progress and charging readers--> body
+any body: request --watch read progress on the connection--> progress reader --charge each read before it is returned, refunding unread bytes, up to the route maximum--> [body, local capacity, too large, body timeout]
 
 Implementation Logic:
 1. `BodyBudget` (httpapi) holds `limit`, `keyLimit`, `used`, per-key `keys` map (only when `keyLimit < limit`), and a rejection counter under one mutex; it never blocks.
 2. `bodyLease` belongs to one request and key: `grow(n, all)` grants up to `n` bytes (all-or-nothing when `all`), `refund(n)` returns unused grant, `release()` returns everything and closes the lease; `release` is idempotent so deferred and explicit releases cannot double-free, and a closed lease grants nothing.
-3. `chargedReader` first consumes the prepaid declared length, then grants up to 64 KiB per read; when nothing can be granted it probes one byte: end of body admits the body exactly at the limit, any further byte is refused. Charged bytes therefore always cover the retained body.
-4. `readProxyBody` (Responses, Chat, embeddings): encoding check (identity, gzip, else 415), 413 above 32 MiB declared, prepay declared length, identity with declared length reads with `io.ReadFull` into an exactly sized buffer (removes the `io.ReadAll` doubling, NET-24), otherwise `io.ReadAll` through the charging reader over the decoded stream.
-5. `readOperationBody` (operations ignore Content-Encoding) and `parseTranscription` (multipart over the charging reader) use the same prepaid/charged rules; capacity errors are recognized before generic decode errors.
+3. `chargedReader` grants up to 64 KiB per read and refunds what the read did not return; when nothing can be granted it probes one byte: end of body admits the body exactly at the limit, any further byte is refused. It returns at most the route maximum; one more byte, read without charge, is 413. Its failure is sticky, so one body counts one refusal. Charged bytes therefore always cover the retained body (a blocked read holds at most its pending grant).
+4. `bodyLease.admit` checks a declared length (413 above the maximum, 503 beyond what the key may still charge) without reserving; `bodyLease.open` wraps `MaxBytesReader(r.Body)` in `progressReader`, which moves the connection read deadline 10 s ahead after every read that returns data (capped at 2 minutes from the start) and maps the deadline to 408 `request_body_timeout`; the deadline is not touched for empty bodies or after the body ends.
+5. `readProxyBody` (Responses, Chat, embeddings: identity or gzip, else 415), `readOperationBody` (operations do not decode Content-Encoding) and `parseTranscription` (multipart over the charging reader) all read through `open` and the charging reader; local errors (refusal, too large, timeout) are recognized before generic decode errors, and an invalid transcription field is not drained.
 6. Handlers create the lease after authentication and `defer lease.release()`.
 
 Files And Functions:
@@ -116,6 +119,14 @@ internal/adapters/httpapi/body_budget_test.go
    requirements: R4, R5, R6, R7
  - description: chunked and gzip Responses bodies charged while reading; a body larger than the free budget is refused mid-read and its partial charge released
    requirements: R5, R6, R7
+ - description: review finding 1 — four connections from two keys that declare 32 MiB and send nothing hold no budget, and requests from both keys are served
+   requirements: R5
+ - description: a stalled upload ends with 408 and releases its charge at the idle deadline; a slow but progressing upload is served and its response outlives the deadline (internal route test with a 200 ms idle)
+   requirements: R7, R15
+ - description: review finding 2 — on the 64 MiB/32 MiB-per-key plan, oversized gzip (declared and chunked), identity chunked and chunked transcription audio get 413 without Retry-After and no refusal count
+   requirements: R5, R6
+ - description: unit — exact fit, sticky refusal counted once, the route maximum reports 413 before the budget, a declared length is checked but not reserved
+   requirements: R5, R7
  - description: partial failure — an upstream error, a client cancellation and a validation failure on admitted requests all release their charge exactly once while a concurrent admitted request keeps its own
    requirements: R7
  - description: Chat Completions and transcription (declared and chunked multipart) bodies are charged and refused at the limit
@@ -168,7 +179,7 @@ Files And Functions:
 Tests:
  - description: capacity route returns the budget and live usage for administrators
    requirements: R13
- - description: runtime wiring shares one budget — a declared Responses body that has not arrived refuses compact, Chat Completions and transcription bodies until its client disconnects (cmd/codex-lb/capacity_test.go)
+ - description: runtime wiring shares one budget — a Responses body that has arrived except its last byte refuses compact, Chat Completions and transcription bodies until its client disconnects (cmd/codex-lb/capacity_test.go)
    requirements: R13
  - description: dashboard card renders the body-memory row and override names
    requirements: R14
@@ -187,8 +198,13 @@ Tests:
 10. [x] Measure before/after peak RSS for a burst of large bodies with the release binary and a loopback source; record in the decision log and OpenSpec context.
 11. [x] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync delta into `openspec/specs/go-runtime/`, archive the change, amend `specs/adaptive-capacity.md`.
 
+12. [x] Review fixes (OpenSpec change `bound-stalled-request-bodies`): declared lengths checked, not reserved; progress deadline with 408; 413 before 503 past the maximum; overflow-safe key share; requirement rename and 1 GB wording; regression tests; re-measured bursts.
+
 Deferred:
 - Realtime live WebSocket messages (4 MiB, relayed one at a time) stay outside the budget until realtime sockets join a shared socket budget (NET-22).
+- WebSocket message buffers may have up to 1.25× their length in capacity; the charge counts length (part of the per-byte multiplier).
+- The budget is per process; overlapping workers during a seamless update would each have a full budget (shared tally or halving when that mechanism lands).
+- Handlers constructed without `ConfigureBodyBudget` keep a private 1 GB-host budget; making the budget a required argument is a follow-up.
 
 ## Open questions
 
@@ -200,7 +216,9 @@ None blocking.
 - 2026-10-28: Per-key share defaults to 50% and is a flag, not a runtime setting: it needs no schema change, is visible in the capacity plan, and 100 disables it. Keyless local traffic (one internal principal for all local clients) is exempt, as in stream fair share.
 - 2026-10-28: Rejection instead of waiting: the existing `local_capacity_exceeded` + `Retry-After` contract already tells clients to retry; waiting would hold connections and bodies outside the budget.
 - 2026-10-28: The charge is held until the handler returns, not until the body is read: the body stays referenced for failover, compaction and accounting until the request ends, and the WebSocket path already held permits until the turn ended.
-- 2026-10-28: Charging bytes read, not buffer capacity: the declared-length path allocates exactly; growth slack on chunked/gzip/WebSocket reads is part of the documented per-byte multiplier.
+- 2026-10-28: Charging bytes read, not buffer capacity: growth slack on WebSocket reads is part of the documented per-byte multiplier.
 - 2026-10-28: Realtime live messages deferred with NET-22 (see Deferred).
 - 2026-10-28: Measured with the real binaries (before = go-v1.1.1 `d18a3257`, after = this branch), a loopback Z.AI source whose stub reads each body and holds it 5 s, 4 keys, non-stream `/v1/responses`, burst started at once, idle RSS 24 MiB, peak = VmHWM. 1 GiB profile (`--memory-limit 768MiB`), 200 × 4 MiB: before 200 admitted, 2624 MiB; after 32 admitted, 168 × 503 `local_capacity_exceeded`, 816 MiB. 4 GiB profile (`--memory-limit 3GiB`), 400 × 4 MiB: before 303 OK and 97 × 503 `usage_settlement_failed`, 5244 MiB; after 128 admitted, 272 refused, 3064 MiB. The approved 512 × 256 KiB profile on 1 GiB: 512/512 both, 769 → 786 MiB (noise). Synthetic workload, not a production SLA.
 - 2026-10-28: Validation: `make check` (vet, golangci-lint, test, race, govulncheck, openspec), `make web-check`, `make web-deps build`, `make test-web-contract`. `specs/adaptive-capacity.md` R5 amended; NET-14/SEC-4 deferral notes in `specs/upstream-transport-reliability.md` and `specs/security-hardening.md` point here.
+- 2026-10-28: Review (PR #6) fixes. (1) Charging a declared length at the headers let clients that send no body hold the budget until ReadTimeout (four connections on 1 GB); an idle-only deadline would still let reconnecting clients hold it, so declared lengths are now checked but not reserved and every body is charged as it arrives, with a 10 s no-progress deadline (2 min total, 408 `request_body_timeout`) bounding what a stalled client holds. Declared bodies use `io.ReadAll` instead of an exact buffer allocated at the headers, which would be uncharged memory. (2) The charged stream stops at the route maximum and probes one byte without charge, so oversized bodies get 413 rather than a retryable 503 on small shares. (3) The "approved 512 × 256 KiB profile fully admitted" claim holds only at exactly 1 GiB (as measured with `--memory-limit 768MiB`); a real 1 GB VPS (960–990 MiB) gives a 120–123 MiB budget and admits about 480–491 of the 512 at once — wording corrected rather than adding a tier floor, which would push a full budget past the soft limit on small hosts. Re-measured after the fix: 1 GiB 200 × 4 MiB — 31 admitted, 799 MiB; 4 GiB 400 × 4 MiB — 128 admitted, 3104 MiB; 512 × 256 KiB at 1 GiB — 512 admitted, 768 MiB.
+- 2026-10-28: The requirement «Idle client WebSockets do not consume HTTP body-reader capacity» is renamed to «…request-body capacity». The budget is per process; seamless-update worker overlap would double the host worst case and is recorded as deferred.

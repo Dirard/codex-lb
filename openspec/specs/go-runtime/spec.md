@@ -502,7 +502,7 @@ The runtime SHALL allow independent Responses requests sharing a logical session
 - **THEN** excess work is rejected before provider execution without evicting an active peer
 - **AND** this local rejection neither proves provider quota exhaustion nor authorizes account migration
 
-### Requirement: Idle client WebSockets do not consume HTTP body-reader capacity
+### Requirement: Idle client WebSockets do not consume request-body capacity
 The runtime SHALL admit up to the host-sized client WebSocket budget (4096 on a 1 GB-class host) without adding a lower per-key socket ceiling, independently of the request-body budget, active-generation and upstream-socket admission. Empty client sockets MUST NOT dispatch upstream, reserve generation/key usage or charge the request-body budget. The global connection slot MUST be acquired after authentication and released on every failed upgrade, disconnect and drain. Actual socket exhaustion SHALL return the existing 503/local_capacity_exceeded envelope and Retry-After. The existing 120-second idle timeout and per-request authorization SHALL remain in force.
 
 #### Scenario: HTTP remains usable beside idle subagent connections
@@ -1313,7 +1313,7 @@ The Go soft memory limit SHALL default to 75% of available memory. An exported G
 #### Scenario: The service moves from a 1 GB to a 4 GB host
 - **WHEN** the same binary starts on a 6-CPU host whose process may use 3.8 GiB
 - **THEN** it admits up to 2048 generations with a 512-request queue, 16384 client WebSockets, a ~486 MiB request-body budget and 16 SQLite readers, and sets a 75% Go soft memory limit
-- **AND** on a 1 GB host it keeps 512 generations, a 128-request queue and 4096 client WebSockets with a 128 MiB request-body budget
+- **AND** on a 1 GB host it keeps 512 generations, a 128-request queue and 4096 client WebSockets with a request-body budget of one eighth of its memory (about 120 MiB when it reports 960 MiB)
 
 #### Scenario: A container or systemd unit limits memory
 - **WHEN** the process runs under `MemoryMax=900M` on a larger machine
@@ -1796,9 +1796,11 @@ Deleting an automation job SHALL delete the job and its runs in one transaction 
 
 ### Requirement: Request bodies share a byte-weighted memory budget
 
-Every proxy route that reads a request body — Responses over HTTP and WebSocket, Chat Completions, embeddings, compact, Codex control, file creation, transcription, realtime call creation and public warmup — SHALL charge that body to one request-body budget counted in bytes and shared by all routes, under the authenticated key, before retaining it. A declared Content-Length above the route maximum SHALL be rejected with 413 before charging; a declared length SHALL be charged in full before any byte is read; a body without a declared length, a gzip body whose decoded size exceeds its declared length, and a WebSocket message SHALL be charged as bytes are read, so that no retained byte is uncharged. The charge SHALL be held until the request finishes using the body and MUST be released exactly once on success, validation failure, upstream failure, client cancellation, disconnect and mid-read rejection.
+Every proxy route that reads a request body — Responses over HTTP and WebSocket, Chat Completions, embeddings, compact, Codex control, file creation, transcription, realtime call creation and public warmup — SHALL charge that body to one request-body budget counted in bytes and shared by all routes, under the authenticated key, as its bytes arrive and before retaining them, so that no retained byte is uncharged. A declared Content-Length above the route maximum SHALL be rejected with 413, and a declared length the free budget cannot hold SHALL be refused, both before any byte is read; a declared length MUST NOT be reserved, so a request that declares a length and sends nothing holds nothing. A gzip body SHALL be charged and bounded by its decoded bytes. Past the route maximum a body SHALL receive 413 even when the budget is full: the byte that proves it is too large is read without charge. The charge SHALL be held until the request finishes using the body and MUST be released exactly once on success, validation failure, upstream failure, client cancellation, disconnect and mid-read rejection.
 
-The budget SHALL default to one eighth of the sizing memory and never less than 64 MiB (128 MiB on a 1 GB-class host). One API key SHALL hold at most its share of the budget (50% by default, never less than the smaller of the budget and the 32 MiB maximum body); keyless local traffic is one internal principal bounded only by the whole budget. `--body-memory-budget <size>` (at least 32 MiB) and `--body-memory-key-share <percent>` (1–100, where 100 disables the per-key bound) SHALL override the defaults; invalid values MUST fail startup naming the flag.
+A request body MUST keep arriving: when no byte arrives for 10 seconds, or the body is still incomplete 2 minutes after reading started (the server ReadTimeout), the request SHALL end with 408 `request_body_timeout` and release its charge. A body that keeps arriving more slowly is not cut short, and the deadline MUST NOT outlive the body into the response.
+
+The budget SHALL default to one eighth of the sizing memory and never less than 64 MiB (128 MiB at exactly 1 GiB; about 120 MiB on a VPS reporting 960 MiB). One API key SHALL hold at most its share of the budget (50% by default, never less than the smaller of the budget and the 32 MiB maximum body); keyless local traffic is one internal principal bounded only by the whole budget. `--body-memory-budget <size>` (at least 32 MiB) and `--body-memory-key-share <percent>` (1–100, where 100 disables the per-key bound) SHALL override the defaults; invalid values MUST fail startup naming the flag.
 
 When the budget or the key's share cannot hold a body, the runtime SHALL return the existing 503 `local_capacity_exceeded` envelope with Retry-After without dispatching upstream, reserving key usage or changing account health. This local pressure MUST NOT be classified as provider quota or authorize failover. The budget counts request-body bytes; parsing, prepared payloads, history and outputs have additional workload-dependent costs, so it MUST NOT be presented as a hard process-memory limit. `GET /api/runtime/capacity` SHALL report the budget, the per-key bound, the retained bytes and the rejection count, and the dashboard capacity card SHALL show retained bytes against the budget.
 
@@ -1809,7 +1811,7 @@ When the budget or the key's share cannot hold a body, the runtime SHALL return 
 - **AND** once the requests finish the retained body bytes return to zero
 
 #### Scenario: A chunked or compressed body grows past the free budget
-- **WHEN** a body without a declared length, or a gzip body, decodes to more bytes than the budget has free
+- **WHEN** a body without a declared length, or a gzip body, decodes to more bytes than the budget has free but no more than the route maximum
 - **THEN** reading stops at the budget, the request receives 503 `local_capacity_exceeded` and its partial charge is released
 
 #### Scenario: Admitted requests fail independently
@@ -1824,3 +1826,16 @@ When the budget or the key's share cannot hold a body, the runtime SHALL return 
 #### Scenario: WebSocket and HTTP bodies share the budget
 - **WHEN** HTTP bodies hold the budget and a client sends a large response.create on an admitted WebSocket
 - **THEN** only that message receives local capacity and the socket stays usable
+
+#### Scenario: Declared bodies that never arrive hold nothing
+- **WHEN** clients of two keys send request heads declaring 32 MiB bodies and no body bytes
+- **THEN** the budget holds nothing for them and other requests from both keys are served
+
+#### Scenario: An upload stops arriving
+- **WHEN** a client sends part of a declared body and then nothing for 10 seconds
+- **THEN** the request ends with 408 `request_body_timeout` and its charge is released
+- **AND** a client that keeps sending slowly is served and its streamed response is not cut by the body deadline
+
+#### Scenario: An oversized body on a small budget
+- **WHEN** the key's free share is no larger than the 32 MiB maximum and a gzip or chunked body exceeds the maximum
+- **THEN** the request receives 413 `request_too_large` without Retry-After and is not counted as a budget refusal
