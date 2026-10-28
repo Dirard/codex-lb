@@ -168,7 +168,8 @@ func TestWriterPragmasSurvivePhysicalReconnect(t *testing.T) {
 		if err == nil {
 			err = conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys)
 		}
-		if err != nil || busyTimeout != 5000 || synchronous != 2 || foreignKeys != 1 {
+		// Writes wait for the write lock in retryBusy, not in SQLite.
+		if err != nil || busyTimeout != 0 || synchronous != 2 || foreignKeys != 1 {
 			t.Fatalf("writer reconnect: busy=%d sync=%d fk=%d error=%v", busyTimeout, synchronous, foreignKeys, err)
 		}
 		if err := conn.Close(); err != nil {
