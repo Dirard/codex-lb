@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import i18n, { normalizeSupportedLanguage } from "@/i18n";
+import i18n, { i18nReady, normalizeSupportedLanguage } from "@/i18n";
 
 describe("normalizeSupportedLanguage", () => {
   it("keeps exact supported locales", () => {
@@ -24,5 +24,21 @@ describe("normalizeSupportedLanguage", () => {
     await i18n.changeLanguage(normalizeSupportedLanguage("zh"));
 
     expect(i18n.resolvedLanguage).toBe("zh-CN");
+  });
+});
+
+describe("lazy locale catalogues", () => {
+  it("bundles only English and loads other catalogues on demand", async () => {
+    await i18nReady;
+    await i18n.changeLanguage("en");
+    expect(i18n.hasResourceBundle("en", "translation")).toBe(true);
+    const english = i18n.t("statusBar.serviceReady");
+
+    await i18n.changeLanguage("ko");
+
+    expect(i18n.hasResourceBundle("ko", "translation")).toBe(true);
+    expect(i18n.resolvedLanguage).toBe("ko");
+    expect(i18n.t("statusBar.serviceReady")).not.toBe(english);
+    await i18n.changeLanguage("en");
   });
 });

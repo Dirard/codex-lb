@@ -143,19 +143,11 @@ describe("ApisPage", () => {
 		expect(screen.queryByText("Create API Key")).not.toBeInTheDocument();
 	});
 
-	it("labels the legacy limit bar as API Limit", () => {
-		renderApisPage({
-			apiKeys: [
-				createApiKey({
-					pooledRemainingPercentPrimary: 67.5,
-					pooledRemainingPercentSecondary: 85,
-					pooledCapacityCreditsPrimary: 225,
-				}),
-			],
-		});
+	it("labels the key limit bar as API Limit without pooled account bars", () => {
+		renderApisPage({ apiKeys: [createApiKey()] });
 
-		expect(screen.getByText("Pooled 5h")).toBeInTheDocument();
-		expect(screen.getByText("Pooled Weekly")).toBeInTheDocument();
+		expect(screen.queryByText("Pooled 5h")).not.toBeInTheDocument();
+		expect(screen.queryByText("Pooled Weekly")).not.toBeInTheDocument();
 		expect(screen.getByText("API Limit")).toBeInTheDocument();
 	});
 

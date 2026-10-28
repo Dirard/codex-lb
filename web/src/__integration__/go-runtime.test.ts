@@ -14,7 +14,7 @@ import { AccountGroupListSchema, AccountGroupSchema } from "@/features/account-g
 import { ApiKeyCreateResponseSchema, ApiKeyListSchema, ApiKeySchema, ModelsResponseSchema } from "@/features/api-keys/schemas";
 import { DashboardSettingsSchema } from "@/features/settings/schemas";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
-import { ConversationsResponseSchema, DashboardOverviewSchema, DashboardProjectionsSchema, RequestLogsResponseSchema } from "@/features/dashboard/schemas";
+import { ConversationsResponseSchema, DashboardOverviewSchema, DashboardProjectionsSchema, DashboardStatusSchema, RequestLogsResponseSchema } from "@/features/dashboard/schemas";
 import { ReportsResponseSchema } from "@/features/reports/schemas";
 import { ModelSourceSchema, ModelSourcesResponseSchema } from "@/features/model-sources/schemas";
 import { ModelPriceDeleteSchema, ModelPriceSaveSchema, ModelPricesSchema } from "@/features/model-prices/model-price";
@@ -114,6 +114,7 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     DashboardSettingsSchema.parse(await request("/api/settings"));
     DashboardOverviewSchema.parse(await request("/api/dashboard/overview"));
     DashboardProjectionsSchema.parse(await request("/api/dashboard/projections"));
+    expect(DashboardStatusSchema.parse(await request("/api/dashboard/status")).lastSyncAt).toBeNull();
     RequestLogsResponseSchema.parse(await request("/api/request-logs"));
     ConversationsResponseSchema.parse(await request("/api/conversations"));
     ReportsResponseSchema.parse(await request("/api/reports"));

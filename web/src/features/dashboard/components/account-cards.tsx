@@ -14,11 +14,10 @@ const ACCOUNT_CARD_ROW_GAP_REM = 1;
 
 export type AccountCardsProps = {
   accounts: AccountSummary[];
-  readOnly?: boolean;
   onAction?: AccountCardProps["onAction"];
 };
 
-export function AccountCards({ accounts, readOnly = false, onAction }: AccountCardsProps) {
+export function AccountCards({ accounts, onAction }: AccountCardsProps) {
   const { t } = useTranslation();
 
   if (accounts.length === 0) {
@@ -49,7 +48,6 @@ export function AccountCards({ accounts, readOnly = false, onAction }: AccountCa
           <AccountCard
             account={account}
             showAccountId={account.isEmailDuplicate === true}
-            readOnly={readOnly}
             onAction={onAction}
           />
         </div>

@@ -51,8 +51,10 @@ export function AccountListItem({
     : null;
   const workspaceLabel = account.chatgptAccountId || account.workspaceLabel || account.workspaceId || t("accounts.detail.unknownWorkspace");
   const seatLabel = account.seatType ? ` | ${formatSlug(account.seatType)}` : "";
-  const slotSubtitle = `${formatSlug(account.planType)} | ${workspaceLabel}${seatLabel}`;
-  const idSuffix = showAccountId ? ` | ID ${formatCompactAccountId(account.accountId)}` : "";
+  // A duplicate e-mail is told apart by its account id, so the id goes right
+  // after the plan where the truncated sidebar row still shows it.
+  const idLabel = showAccountId ? ` | ID ${formatCompactAccountId(account.accountId)}` : "";
+  const slotSubtitle = `${formatSlug(account.planType)}${idLabel} | ${workspaceLabel}${seatLabel}`;
   const primaryState = useSmoothPercent(account.usage?.primaryRemainingPercent ?? null);
   const secondaryState = useSmoothPercent(account.usage?.secondaryRemainingPercent ?? null);
   const monthlyState = useSmoothPercent(account.usage?.monthlyRemainingPercent ?? null);
@@ -118,7 +120,7 @@ export function AccountListItem({
             )}
           </p>
           <p className="truncate text-xs text-muted-foreground" title={showAccountId ? t("accounts.detail.accountIdTitle", { accountId: account.accountId }) : undefined}>
-            {emailSubtitle ? <><span className={blurred ? "privacy-blur" : undefined}>{emailSubtitle}</span> | {slotSubtitle}{idSuffix}</> : <>{slotSubtitle}{idSuffix}</>}
+            {emailSubtitle ? <><span className={blurred ? "privacy-blur" : undefined}>{emailSubtitle}</span> | {slotSubtitle}</> : slotSubtitle}
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             <SubscriptionRemaining

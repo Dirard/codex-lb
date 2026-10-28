@@ -4,7 +4,11 @@ import { HttpResponse, http } from "msw";
 import { createElement, type PropsWithChildren } from "react";
 import { describe, expect, it } from "vitest";
 
-import { useDashboard, useDashboardProjections } from "@/features/dashboard/hooks/use-dashboard";
+import {
+  PROJECTIONS_MAX_AGE_MS,
+  useDashboard,
+  useDashboardProjections,
+} from "@/features/dashboard/hooks/use-dashboard";
 import { server } from "@/test/mocks/server";
 import { useDashboardPreferencesStore } from "@/hooks/use-dashboard-preferences";
 
@@ -83,18 +87,42 @@ describe("useDashboard", () => {
     expect(requestedTimeframe).toBe("1d");
   });
 
-  it("applies the selected cadence to projection polling", () => {
+  it("polls projections at most every five minutes regardless of the overview cadence", () => {
     useDashboardPreferencesStore.setState({ refreshSeconds: 5 });
     const queryClient = createTestQueryClient();
 
-    renderHook(() => useDashboardProjections(false), {
+    renderHook(() => useDashboardProjections("2026-01-01T00:00:00Z", false), {
       wrapper: createWrapper(queryClient),
     });
 
-    const query = queryClient.getQueryCache().find({ queryKey: ["dashboard", "projections"] });
+    const query = queryClient.getQueryCache().find({ queryKey: ["dashboard", "projections", "2026-01-01T00:00:00Z"] });
     const refetchInterval = (query?.options as { refetchInterval?: unknown } | undefined)
       ?.refetchInterval;
-    expect(refetchInterval).toBe(5_000);
+    expect(refetchInterval).toBe(PROJECTIONS_MAX_AGE_MS);
+  });
+
+  it("requests projections once per lastSyncAt value", async () => {
+    let requests = 0;
+    server.use(
+      http.get("/api/dashboard/projections", () => {
+        requests += 1;
+        return HttpResponse.json({ depletionPrimary: null, depletionSecondary: null, weeklyCreditPace: null });
+      }),
+    );
+    const queryClient = createTestQueryClient();
+    const { result, rerender } = renderHook(
+      ({ lastSyncAt }: { lastSyncAt: string | null }) => useDashboardProjections(lastSyncAt),
+      { wrapper: createWrapper(queryClient), initialProps: { lastSyncAt: "2026-01-01T00:00:00Z" } },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    rerender({ lastSyncAt: "2026-01-01T00:00:00Z" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(requests).toBe(1);
+
+    rerender({ lastSyncAt: "2026-01-01T00:01:00Z" });
+    await waitFor(() => expect(requests).toBe(2));
+    expect(result.current.data).toEqual({ depletionPrimary: null, depletionSecondary: null, weeklyCreditPace: null });
   });
 
   it("exposes error state on request failure", async () => {

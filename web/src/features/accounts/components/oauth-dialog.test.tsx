@@ -202,6 +202,40 @@ describe("OauthDialog", () => {
     });
   });
 
+  it("cancels the pending copied-state reset when the dialog unmounts", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+
+    const view = render(
+      <OauthDialog
+        open
+        state={browserPendingState}
+        onOpenChange={vi.fn()}
+        onStart={vi.fn().mockResolvedValue(undefined)}
+        onComplete={vi.fn().mockResolvedValue(undefined)}
+        onManualCallback={vi.fn().mockResolvedValue(undefined)}
+        onReset={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await screen.findByText("Copied!");
+    const resetCall = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 2000);
+    expect(resetCall).toBeGreaterThanOrEqual(0);
+    const resetTimer = setTimeoutSpy.mock.results[resetCall]?.value;
+
+    view.unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimer);
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
+  });
+
   it("shows an error toast when browser-stage copy fails", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockRejectedValue(new Error("clipboard blocked"));

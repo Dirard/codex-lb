@@ -20,5 +20,3 @@
 **/.DS_Store
 **/*.tsbuildinfo
 web/coverage
-web/playwright-report
-web/test-results

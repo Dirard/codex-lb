@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Cell, Pie, PieChart, Sector, type PieSectorShapeProps } from "@/components/lazy-recharts";
 
 import { buildDonutPalette } from "@/utils/colors";
 import { formatCompactNumber, formatNumber } from "@/utils/formatters";
@@ -85,6 +84,8 @@ const CHART_SIZE = 152;
 const CHART_MARGIN = 4;
 const PIE_CX = 72;
 const PIE_CY = 72;
+const RING_CX = PIE_CX + CHART_MARGIN;
+const RING_CY = PIE_CY + CHART_MARGIN;
 const INNER_R = 53;
 const OUTER_R = 68;
 const ACTIVE_RADIUS_OFFSET = 4;
@@ -98,6 +99,59 @@ type DonutDatum = {
   value: number;
   fill: string;
 };
+
+type DonutSegment = DonutDatum & { path: string };
+
+/** Point on a circle, with angles measured clockwise from 12 o'clock. */
+function polar(radius: number, angleDeg: number): string {
+  const radians = (angleDeg * Math.PI) / 180;
+  const x = RING_CX + radius * Math.sin(radians);
+  const y = RING_CY - radius * Math.cos(radians);
+  return `${x.toFixed(3)} ${y.toFixed(3)}`;
+}
+
+/**
+ * SVG path of a ring sector between two clockwise angles. A full turn is
+ * drawn as two closed rings so the even-odd fill leaves the hole empty.
+ */
+function annularSectorPath(innerRadius: number, outerRadius: number, startDeg: number, endDeg: number): string {
+  const sweep = endDeg - startDeg;
+  if (sweep >= 359.999) {
+    return [
+      `M ${polar(outerRadius, 0)} A ${outerRadius} ${outerRadius} 0 1 1 ${polar(outerRadius, 180)}`,
+      `A ${outerRadius} ${outerRadius} 0 1 1 ${polar(outerRadius, 360)} Z`,
+      `M ${polar(innerRadius, 0)} A ${innerRadius} ${innerRadius} 0 1 0 ${polar(innerRadius, 180)}`,
+      `A ${innerRadius} ${innerRadius} 0 1 0 ${polar(innerRadius, 360)} Z`,
+    ].join(" ");
+  }
+  const largeArc = sweep > 180 ? 1 : 0;
+  return [
+    `M ${polar(outerRadius, startDeg)}`,
+    `A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${polar(outerRadius, endDeg)}`,
+    `L ${polar(innerRadius, endDeg)}`,
+    `A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${polar(innerRadius, startDeg)} Z`,
+  ].join(" ");
+}
+
+/** Lays the data out clockwise from 12 o'clock, like the previous pie chart. */
+function buildSegments(data: DonutDatum[], highlightedId: string | null): DonutSegment[] {
+  const sum = data.reduce((acc, datum) => acc + datum.value, 0);
+  if (sum <= 0) {
+    return [];
+  }
+  let cursor = 0;
+  const segments: DonutSegment[] = [];
+  for (const datum of data) {
+    if (datum.value <= 0) {
+      continue;
+    }
+    const sweep = (datum.value / sum) * 360;
+    const outer = OUTER_R + (datum.id === highlightedId ? ACTIVE_RADIUS_OFFSET : 0);
+    segments.push({ ...datum, path: annularSectorPath(INNER_R, outer, cursor, cursor + sweep) });
+    cursor += sweep;
+  }
+  return segments;
+}
 
 function formatUsedPercent(percent: number): string {
   if (!Number.isFinite(percent) || percent <= 0) {
@@ -156,21 +210,7 @@ export function DonutChart({ items, total, centerValue, title, subtitle, safeLin
     legendRefs.current[activeLegendId]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeLegendId]);
 
-  const renderDonutShape = (props: PieSectorShapeProps) => {
-    const isHighlighted = props.isActive || (props.payload as DonutDatum | undefined)?.id === activeLegendId;
-    const outerRadius = typeof props.outerRadius === "number"
-      ? props.outerRadius + (isHighlighted ? ACTIVE_RADIUS_OFFSET : 0)
-      : OUTER_R + (isHighlighted ? ACTIVE_RADIUS_OFFSET : 0);
-
-    return (
-      <Sector
-        {...props}
-        outerRadius={outerRadius}
-        stroke={isHighlighted ? "hsl(var(--background))" : "none"}
-        strokeWidth={isHighlighted ? 2 : 0}
-      />
-    );
-  };
+  const segments = buildSegments(chartData, activeLegendId);
 
   return (
     <div className="min-w-0 rounded-xl border bg-card p-5">
@@ -182,48 +222,42 @@ export function DonutChart({ items, total, centerValue, title, subtitle, safeLin
       <div className="flex min-w-0 items-center gap-6">
         <div className="flex shrink-0 flex-col items-center gap-2">
           <div className="relative h-[152px] w-[152px] overflow-visible">
-            <PieChart width={CHART_SIZE} height={CHART_SIZE} margin={{ top: CHART_MARGIN, right: CHART_MARGIN, bottom: CHART_MARGIN, left: CHART_MARGIN }}>
-             <Pie
-               data={chartData}
-               cx={PIE_CX}
-               cy={PIE_CY}
-               innerRadius={INNER_R}
-                outerRadius={OUTER_R}
-                startAngle={90}
-                endAngle={-270}
-                dataKey="value"
-                stroke="none"
-                shape={renderDonutShape}
-                isAnimationActive={!reducedMotion}
-                animationDuration={600}
-                animationEasing="ease-out"
-                onMouseEnter={(data: { payload?: DonutDatum }) => {
-                  const datum = data.payload as DonutDatum | undefined;
-                  if (typeof datum?.id === "string") {
-                    setActiveLegendId(datum.id);
-                  }
-                }}
-                onMouseLeave={() => setActiveLegendId(null)}
-                onMouseOut={() => setActiveLegendId(null)}
-              >
-                {chartData.map((entry) => (
-                  <Cell key={entry.id} fill={entry.fill} />
-               ))}
-             </Pie>
-           </PieChart>
-           {safeLine && safeLine.riskLevel !== "safe" ? (
-            <svg aria-hidden="true" className="pointer-events-none absolute inset-0" width={CHART_SIZE} height={CHART_SIZE} viewBox={`0 0 ${CHART_SIZE} ${CHART_SIZE}`}>
-              <SafeLineTick
-                cx={PIE_CX + CHART_MARGIN}
-                cy={PIE_CY + CHART_MARGIN}
-                safePercent={safeLine.safePercent}
-                riskLevel={safeLine.riskLevel}
-                innerRadius={INNER_R}
-                outerRadius={OUTER_R}
-                isDark={isDark}
-              />
+            <svg
+              aria-hidden="true"
+              className={reducedMotion ? undefined : "animate-in fade-in zoom-in-95 duration-500"}
+              width={CHART_SIZE}
+              height={CHART_SIZE}
+              viewBox={`0 0 ${CHART_SIZE} ${CHART_SIZE}`}
+              onMouseLeave={() => setActiveLegendId(null)}
+            >
+              {segments.map((segment) => {
+                const isHighlighted = segment.id === activeLegendId;
+                return (
+                  <path
+                    key={segment.id}
+                    d={segment.path}
+                    fill={segment.fill}
+                    fillRule="evenodd"
+                    stroke={isHighlighted ? "hsl(var(--background))" : "none"}
+                    strokeWidth={isHighlighted ? 2 : 0}
+                    data-testid="donut-segment"
+                    data-segment-id={segment.id}
+                    onMouseEnter={() => setActiveLegendId(segment.id)}
+                  />
+                );
+              })}
+              {safeLine && safeLine.riskLevel !== "safe" ? (
+                <SafeLineTick
+                  cx={RING_CX}
+                  cy={RING_CY}
+                  safePercent={safeLine.safePercent}
+                  riskLevel={safeLine.riskLevel}
+                  innerRadius={INNER_R}
+                  outerRadius={OUTER_R}
+                  isDark={isDark}
+                />
+              ) : null}
             </svg>
-          ) : null}
           <div className="absolute inset-[22px] flex items-center justify-center rounded-full text-center pointer-events-none">
              <div>
                {centerLayout === "credits" ? (

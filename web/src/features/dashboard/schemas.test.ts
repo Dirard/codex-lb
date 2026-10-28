@@ -195,41 +195,21 @@ describe("RequestLogsResponseSchema", () => {
           apiKeyName: "Key A",
           apiKeyId: "key-1",
           requestId: "req-1",
-          archiveRequestId: "archive-req-1",
-          connectionRequestKind: "prewarm",
           model: "gpt-5.1",
           transport: "websocket",
-          upstreamProxyRouteMode: "account_bound",
-          upstreamProxyPoolId: "pool-1",
-          upstreamProxyEndpointId: "endpoint-1",
-          upstreamProxyFallbackUsed: true,
-          upstreamProxyFailClosedReason: null,
           useragent: "Mozilla/5.0",
           useragentGroup: "Mozilla",
           clientIp: "203.0.113.7",
           status: "ok",
           errorCode: null,
           errorMessage: null,
-          failurePhase: "status",
-          failureDetail: "upstream_5xx",
-          failureExceptionType: "ProxyResponseError",
-          upstreamStatusCode: 503,
-          upstreamErrorCode: "server_error",
-          bridgeStage: "owner_forward_status",
           tokens: 10,
           inputTokens: 8,
           outputTokens: 2,
-          outputTokensRaw: 2,
           reasoningTokens: 1,
           cachedInputTokens: 0,
           reasoningEffort: null,
           costUsd: 0.001,
-          costBreakdown: {
-            inputUsd: 0.0004,
-            cachedInputUsd: 0,
-            outputUsd: 0.0006,
-            totalUsd: 0.001,
-          },
           latencyMs: 42,
         },
       ],
@@ -239,55 +219,15 @@ describe("RequestLogsResponseSchema", () => {
 
     expect(parsed.requests[0]?.apiKeyName).toBe("Key A");
     expect(parsed.requests[0]?.apiKeyId).toBe("key-1");
-    expect(parsed.requests[0]?.archiveRequestId).toBe("archive-req-1");
     expect(parsed.requests[0]?.requestKind).toBe("normal");
-    expect(parsed.requests[0]?.connectionRequestKind).toBe("prewarm");
     expect(parsed.requests[0]?.planType).toBe("plus");
     expect(parsed.requests[0]?.transport).toBe("websocket");
-    expect(parsed.requests[0]?.upstreamProxyRouteMode).toBe("account_bound");
-    expect(parsed.requests[0]?.upstreamProxyPoolId).toBe("pool-1");
-    expect(parsed.requests[0]?.upstreamProxyEndpointId).toBe("endpoint-1");
-    expect(parsed.requests[0]?.upstreamProxyFallbackUsed).toBe(true);
-    expect(parsed.requests[0]?.upstreamProxyFailClosedReason).toBeNull();
     expect(parsed.requests[0]?.useragent).toBe("Mozilla/5.0");
     expect(parsed.requests[0]?.useragentGroup).toBe("Mozilla");
     expect(parsed.requests[0]?.clientIp).toBe("203.0.113.7");
-    expect(parsed.requests[0]?.failurePhase).toBe("status");
-    expect(parsed.requests[0]?.failureDetail).toBe("upstream_5xx");
-    expect(parsed.requests[0]?.failureExceptionType).toBe("ProxyResponseError");
-    expect(parsed.requests[0]?.upstreamStatusCode).toBe(503);
-    expect(parsed.requests[0]?.upstreamErrorCode).toBe("server_error");
-    expect(parsed.requests[0]?.bridgeStage).toBe("owner_forward_status");
     expect(parsed.requests[0]?.inputTokens).toBe(8);
     expect(parsed.requests[0]?.outputTokens).toBe(2);
-    expect(parsed.requests[0]?.outputTokensRaw).toBe(2);
     expect(parsed.requests[0]?.reasoningTokens).toBe(1);
-    expect(parsed.requests[0]?.costBreakdown?.totalUsd).toBe(0.001);
-  });
-
-  it("keeps archiveRequestId optional for older request-log responses", () => {
-    const parsed = RequestLogsResponseSchema.parse({
-      requests: [
-        {
-          requestedAt: ISO,
-          accountId: "acc-1",
-          requestId: "req-1",
-          model: "gpt-5.1",
-          status: "ok",
-          errorCode: null,
-          errorMessage: null,
-          tokens: 10,
-          cachedInputTokens: null,
-          reasoningEffort: null,
-          costUsd: null,
-          latencyMs: 42,
-        },
-      ],
-      total: 1,
-      hasMore: false,
-    });
-
-    expect(parsed.requests[0]?.archiveRequestId).toBeUndefined();
   });
 
   it("accepts legacy limit warmup request kind rows", () => {
@@ -332,39 +272,27 @@ describe("RequestLogsResponseSchema", () => {
           apiKeyName: "Voice Key",
           apiKeyId: "key-live",
           requestId: "req-live",
-          archiveRequestId: null,
           requestKind: "realtime_live",
           model: "gpt-5.1-codex",
           source: "codex",
           modelSourceId: null,
           modelSourceKind: null,
           transport: "websocket",
-          upstreamTransport: "websocket",
           useragent: "Codex Desktop",
           useragentGroup: "Codex",
           clientIp: "203.0.113.8",
           conversationId: null,
           serviceTier: null,
-          requestedServiceTier: null,
-          actualServiceTier: null,
           status: "ok",
           errorCode: null,
           errorMessage: null,
-          failurePhase: null,
-          failureDetail: null,
-          failureExceptionType: null,
-          upstreamStatusCode: 101,
-          upstreamErrorCode: null,
-          bridgeStage: "realtime_live",
           tokens: null,
           inputTokens: null,
           outputTokens: null,
-          outputTokensRaw: null,
           reasoningTokens: null,
           cachedInputTokens: null,
           reasoningEffort: null,
           costUsd: null,
-          costBreakdown: null,
           latencyMs: 12,
           latencyFirstTokenMs: null,
           latencyQueueMs: null,
@@ -405,9 +333,6 @@ describe("RequestLogsResponseSchema", () => {
 
     expect(parsed.requests[0]?.inputTokens).toBeNull();
     expect(parsed.requests[0]?.outputTokens).toBeNull();
-    expect(parsed.requests[0]?.failurePhase).toBeNull();
-    expect(parsed.requests[0]?.upstreamStatusCode).toBeNull();
-    expect(parsed.requests[0]?.costBreakdown).toBeNull();
     expect(parsed.requests[0]?.apiKeyName).toBeNull();
     expect(parsed.requests[0]?.useragent).toBeNull();
     expect(parsed.requests[0]?.useragentGroup).toBeNull();
@@ -544,44 +469,6 @@ describe("RequestLogsResponseSchema", () => {
     });
 
     expect(parsed.conversation).toBeNull();
-  });
-
-  it("defaults omitted nested cost breakdown fields to null", () => {
-    const parsed = RequestLogsResponseSchema.parse({
-      requests: [
-        {
-          requestedAt: ISO,
-          accountId: "acc-1",
-          planType: "plus",
-          apiKeyName: "Key A",
-          apiKeyId: "key-1",
-          requestId: "req-partial-breakdown",
-          model: "gpt-5.1",
-          transport: "websocket",
-          status: "ok",
-          errorCode: null,
-          errorMessage: null,
-          tokens: 10,
-          inputTokens: 8,
-          outputTokens: 2,
-          cachedInputTokens: 0,
-          reasoningEffort: null,
-          costUsd: 0.001,
-          costBreakdown: {
-            inputUsd: 0.0004,
-            totalUsd: 0.001,
-          },
-          latencyMs: 42,
-        },
-      ],
-      total: 1,
-      hasMore: false,
-    });
-
-    expect(parsed.requests[0]?.costBreakdown?.inputUsd).toBe(0.0004);
-    expect(parsed.requests[0]?.costBreakdown?.cachedInputUsd).toBeNull();
-    expect(parsed.requests[0]?.costBreakdown?.outputUsd).toBeNull();
-    expect(parsed.requests[0]?.costBreakdown?.totalUsd).toBe(0.001);
   });
 
   it("parses request-log filter options including API keys", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -32,7 +32,6 @@ import { RecentRequestsTable } from "@/features/dashboard/components/recent-requ
 import { StatsGrid } from "@/features/dashboard/components/stats-grid";
 import { UsageDonuts } from "@/features/dashboard/components/usage-donuts";
 import { WeeklyCreditsPaceCard } from "@/features/dashboard/components/weekly-credits-pace-card";
-import { useAuthStore } from "@/features/auth/hooks/use-auth";
 import { useDashboard, useDashboardProjections } from "@/features/dashboard/hooks/use-dashboard";
 import { useConversations } from "@/features/dashboard/hooks/use-conversations";
 import { useRequestLogTablePreferences } from "@/features/dashboard/hooks/use-request-log-table-preferences";
@@ -81,9 +80,6 @@ export function DashboardPage() {
   const accountListSort = useDashboardPreferencesStore((s) => s.accountListSort);
   const setAccountViewMode = useDashboardPreferencesStore((s) => s.setAccountViewMode);
   const setAccountListSort = useDashboardPreferencesStore((s) => s.setAccountListSort);
-  const canWrite = useAuthStore((state) => state.canWrite);
-  const initialized = useAuthStore((state) => state.initialized);
-  const isAdmin = initialized;
   const overviewTimeframe = useMemo(
     () => parseOverviewTimeframe(searchParams.get("overviewTimeframe")),
     [searchParams],
@@ -96,15 +92,7 @@ export function DashboardPage() {
     () => parseDashboardView(searchParams.get("view")),
     [searchParams],
   );
-  const dashboardView = isAdmin ? requestedDashboardView : "request-logs";
-  useEffect(() => {
-    if (!initialized || isAdmin || searchParams.get("view") !== "conversations") {
-      return;
-    }
-    const next = new URLSearchParams(searchParams);
-    next.delete("view");
-    setSearchParams(next, { replace: true });
-  }, [initialized, isAdmin, searchParams, setSearchParams]);
+  const dashboardView = requestedDashboardView;
   // Conversation stats must follow the timeframe restored for the active
   // view, including when that state came from a bookmarked URL.
   const dashboardTimeframe =
@@ -114,9 +102,12 @@ export function DashboardPage() {
     useState<RetainedDashboardLoadError | null>(null);
   const [overviewRetryTimeframe, setOverviewRetryTimeframe] =
     useState<OverviewTimeframe | null>(null);
-  const projectionsQuery = useDashboardProjections(Boolean(dashboardQuery.data));
+  const projectionsQuery = useDashboardProjections(
+    dashboardQuery.data?.lastSyncAt,
+    Boolean(dashboardQuery.data),
+  );
   const conversationsState = useConversations({
-    enabled: isAdmin && dashboardView === "conversations",
+    enabled: dashboardView === "conversations",
   });
   const { conversationsQuery } = conversationsState;
   const { filters, emptyStateFiltersApplied, logsQuery, optionsQuery, updateFilters } = useRequestLogs({
@@ -157,9 +148,6 @@ export function DashboardPage() {
 
   const handleDashboardViewChange = useCallback(
     (nextView: "request-logs" | "conversations") => {
-      if (nextView === "conversations" && !isAdmin) {
-        return;
-      }
       const next = new URLSearchParams(searchParams);
       if (nextView === "request-logs") {
         next.delete("view");
@@ -168,7 +156,7 @@ export function DashboardPage() {
       }
       setSearchParams(next);
     },
-    [isAdmin, searchParams, setSearchParams],
+    [searchParams, setSearchParams],
   );
 
   const handleAccountAction = useCallback(
@@ -178,20 +166,16 @@ export function DashboardPage() {
           navigate(`/accounts?selected=${account.accountId}`);
           break;
         case "resume":
-          if (canWrite) {
-            void resumeMutation.mutateAsync(account.accountId);
-          }
+          void resumeMutation.mutateAsync(account.accountId);
           break;
         case "reauth":
           navigate(`/accounts?selected=${account.accountId}`);
           break;
         case "warmup-toggle":
-          if (canWrite) {
-            void limitWarmupMutation.mutateAsync({
-              accountId: account.accountId,
-              enabled: !account.limitWarmupEnabled,
-            });
-          }
+          void limitWarmupMutation.mutateAsync({
+            accountId: account.accountId,
+            enabled: !account.limitWarmupEnabled,
+          });
           break;
         case "reset-credit":
           resetCreditDialog.show({
@@ -201,7 +185,7 @@ export function DashboardPage() {
           break;
       }
     },
-    [canWrite, limitWarmupMutation, navigate, resetCreditDialog, resumeMutation],
+    [limitWarmupMutation, navigate, resetCreditDialog, resumeMutation],
   );
 
   const handleConversationClick = useCallback(
@@ -502,13 +486,12 @@ export function DashboardPage() {
             {accountViewMode === "list" ? (
               <AccountList
                 accounts={overview?.accounts ?? []}
-                readOnly={!canWrite}
                 sort={accountListSort}
                 onSortChange={setAccountListSort}
                 onAction={handleAccountAction}
               />
             ) : (
-              <AccountCards accounts={overview?.accounts ?? []} readOnly={!canWrite} onAction={handleAccountAction} />
+              <AccountCards accounts={overview?.accounts ?? []} onAction={handleAccountAction} />
             )}
           </section>
 
@@ -517,7 +500,6 @@ export function DashboardPage() {
               <DashboardViewSelector
                 value={dashboardView}
                 onChange={handleDashboardViewChange}
-                showConversations={isAdmin}
               />
               <div className="h-px min-w-8 flex-1 bg-border" />
               {dashboardView === "request-logs" ? (
@@ -565,7 +547,7 @@ export function DashboardPage() {
                 </>
               ) : null}
             </div>
-            {isAdmin && dashboardView === "conversations" ? (
+            {dashboardView === "conversations" ? (
               <ConversationsView state={conversationsState} accounts={overview?.accounts ?? []} />
             ) : (
               <>

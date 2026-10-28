@@ -34,7 +34,6 @@ const ACCOUNT_LIST_COLUMNS = "minmax(13rem,1.3fr) 7.75rem 5rem minmax(14rem,1.2f
 
 type AccountListProps = {
   accounts: AccountSummary[];
-  readOnly?: boolean;
   sort?: AccountListSort;
   onSortChange?: (sort: AccountListSort) => void;
   onAction?: (account: AccountSummary, action: AccountAction) => void;
@@ -287,7 +286,6 @@ function QuotaMeter({ percent }: { percent: number | null }) {
 
 export function AccountList({
   accounts,
-  readOnly = false,
   sort: controlledSort,
   onSortChange,
   onAction,
@@ -372,7 +370,7 @@ export function AccountList({
           const hasResetCredits = availableResetCredits > 0;
           const resetBadgeLabel = availableResetCredits > 99 ? "99+" : String(availableResetCredits);
           const resetCreditDisabled =
-            readOnly || status === "paused" || status === "reauth" || status === "deactivated";
+            status === "paused" || status === "reauth" || status === "deactivated";
           const resetCountdown = account.resetCreditNearestExpiresAt
             ? formatSingleUnitRemaining(account.resetCreditNearestExpiresAt)
             : null;
@@ -473,7 +471,6 @@ export function AccountList({
 	                      : t("dashboard.accountList.enableWarmupAria", { account: title })
 	                  }
 	                  title={t("settings.routing.limitWarmup.label")}
-                  disabled={readOnly}
                   onClick={() => onAction?.(account, "warmup-toggle")}
                 >
                   <Zap className="h-3.5 w-3.5" aria-hidden="true" />
@@ -486,7 +483,6 @@ export function AccountList({
                     className="h-7 w-7 rounded-md p-0 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
 	                    aria-label={t("dashboard.accountList.resumeAria", { account: title })}
 	                    title={t("common.actions.resume")}
-                    disabled={readOnly}
                     onClick={() => onAction?.(account, "resume")}
                   >
                     <Play className="h-3.5 w-3.5" aria-hidden="true" />
@@ -500,7 +496,6 @@ export function AccountList({
                     className="h-7 w-7 rounded-md p-0 text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
 	                    aria-label={t("dashboard.accountList.reauthAria", { account: title })}
 	                    title={t("common.actions.reauthenticate")}
-                    disabled={readOnly}
                     onClick={() => onAction?.(account, "reauth")}
                   >
                     <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />

@@ -134,7 +134,3 @@ export function deleteAutomation(automationId: string) {
 export function runAutomationNow(automationId: string) {
   return post(`${AUTOMATIONS_PATH}/${automationId}/run-now`, AutomationRunSchema);
 }
-
-export function listAutomationRuns(automationId: string, limit = 20) {
-  return get(`${AUTOMATIONS_PATH}/${automationId}/runs?limit=${limit}`, AutomationRunsListResponseSchema);
-}

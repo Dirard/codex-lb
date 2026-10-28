@@ -22,8 +22,6 @@ const dashboardPasswordSchema = z
   });
 
 export const DashboardAuthModeSchema = z.enum(["standard", "trusted_header", "disabled"]);
-export const DashboardRoleSchema = z.enum(["admin"]);
-export const DashboardPermissionSchema = z.enum(["read", "write"]);
 
 export const AuthSessionSchema = z.object({
   authenticated: z.boolean(),
@@ -37,8 +35,6 @@ export const AuthSessionSchema = z.object({
   authMode: DashboardAuthModeSchema.default("standard"),
   passwordManagementEnabled: z.boolean().default(true),
   passwordSessionActive: z.boolean().default(false),
-  role: DashboardRoleSchema.default("admin"),
-  permissions: z.array(DashboardPermissionSchema).default(["read", "write"]),
 });
 
 export const LoginRequestSchema = z.object({
@@ -80,8 +76,6 @@ export const StatusResponseSchema = z.object({
 
 export type AuthSession = z.infer<typeof AuthSessionSchema>;
 export type DashboardAuthMode = z.infer<typeof DashboardAuthModeSchema>;
-export type DashboardRole = z.infer<typeof DashboardRoleSchema>;
-export type DashboardPermission = z.infer<typeof DashboardPermissionSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 export type PasswordSetupRequest = z.infer<typeof PasswordSetupRequestSchema>;
 export type PasswordChangeRequest = z.infer<typeof PasswordChangeRequestSchema>;

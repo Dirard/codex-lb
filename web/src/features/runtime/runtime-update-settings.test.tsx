@@ -38,7 +38,7 @@ describe("RuntimeUpdateSettings", () => {
         return HttpResponse.json({ ...updateStatus, phase: "downloading", targetVersion: "go-v1.1.0" }, { status: 202 });
       }),
     );
-    renderWithProviders(<RuntimeUpdateSettings canWrite />);
+    renderWithProviders(<RuntimeUpdateSettings />);
 
     expect(await screen.findByText("Current version: go-v1.0.0")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Release notes" })).toHaveAttribute("href", updateStatus.releaseUrl);
@@ -70,7 +70,7 @@ describe("RuntimeUpdateSettings", () => {
       }),
     );
     try {
-      renderWithProviders(<RuntimeUpdateSettings canWrite />);
+      renderWithProviders(<RuntimeUpdateSettings />);
       await user.click(await screen.findByRole("button", { name: "Update to go-v1.1.0" }));
       const dialog = screen.getByRole("alertdialog");
       const confirm = within(dialog).getByRole("button", { name: "Update" });
@@ -93,7 +93,7 @@ describe("RuntimeUpdateSettings", () => {
         return HttpResponse.json({ ...updateStatus, phase: "rolling_back", targetVersion: "go-v0.9.0" }, { status: 202 });
       }),
     );
-    renderWithProviders(<RuntimeUpdateSettings canWrite />);
+    renderWithProviders(<RuntimeUpdateSettings />);
     await screen.findByText("Previous version: go-v0.9.0");
     await user.click(screen.getByRole("button", { name: "Roll back to go-v0.9.0" }));
     const dialog = screen.getByRole("alertdialog");
@@ -104,24 +104,17 @@ describe("RuntimeUpdateSettings", () => {
     await waitFor(() => expect(posted).toEqual([{ version: "go-v0.9.0" }]));
   });
 
-  it("explains unsupported and read-only states without enabling actions", async () => {
+  it("explains unsupported installations without enabling actions", async () => {
     server.use(http.get("/api/runtime/updates", () => HttpResponse.json({
       ...updateStatus,
       supported: false,
       unavailableReason: "Executable storage is read-only",
     })));
-    const first = renderWithProviders(<RuntimeUpdateSettings canWrite />);
+    renderWithProviders(<RuntimeUpdateSettings />);
     expect(await screen.findByText("Executable storage is read-only")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update to go-v1.1.0" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Roll back to go-v0.9.0" })).toBeDisabled();
-    first.unmount();
-
-    server.use(http.get("/api/runtime/updates", () => HttpResponse.json(updateStatus)));
-    renderWithProviders(<RuntimeUpdateSettings canWrite={false} />);
-    await screen.findByText("Current version: go-v1.0.0");
-    expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Update to go-v1.1.0" })).toBeDisabled();
   });
 
   it("shows action errors and keeps observing through network and 503 restart interruptions", async () => {
@@ -139,7 +132,7 @@ describe("RuntimeUpdateSettings", () => {
         HttpResponse.json({ ...updateStatus, phase: "starting", targetVersion: "go-v1.1.0" }, { status: 202 })),
     );
     useAuthStore.setState({ authenticated: true, initialized: true });
-    const { queryClient } = renderWithProviders(<RuntimeUpdateSettings canWrite />);
+    const { queryClient } = renderWithProviders(<RuntimeUpdateSettings />);
     await screen.findByText("Current version: go-v1.0.0");
     await user.click(screen.getByRole("button", { name: "Check for updates" }));
     expect(await screen.findByText("Another operation is in progress")).toBeInTheDocument();
@@ -174,7 +167,7 @@ describe("RuntimeUpdateSettings", () => {
     );
     const refreshSession = vi.fn().mockRejectedValue(new Error("Session expired"));
     useAuthStore.setState({ authenticated: true, initialized: true, refreshSession });
-    const rendered = renderWithProviders(<RuntimeUpdateSettings canWrite />);
+    const rendered = renderWithProviders(<RuntimeUpdateSettings />);
     try {
       await screen.findByText("Current version: go-v1.0.0");
       await user.click(screen.getByRole("button", { name: "Update to go-v1.1.0" }));

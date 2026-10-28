@@ -21,6 +21,7 @@ func (s *Server) registerReportsRoutes(mux *http.ServeMux, repo application.Repo
 		}
 		writeJSON(w, http.StatusOK, response)
 	})
+	s.registerDashboardStatusRoute(mux)
 	mux.HandleFunc("GET /api/dashboard/projections", func(w http.ResponseWriter, r *http.Request) {
 		response, err := service.DashboardProjections(r.Context(), s.store)
 		if err != nil {

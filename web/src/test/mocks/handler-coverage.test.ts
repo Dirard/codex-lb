@@ -6,7 +6,9 @@ import { handlers } from "@/test/mocks/handlers";
  * Structural test that ensures the MSW handler set covers every API endpoint
  * consumed by the frontend. When a new endpoint is added to an api.ts file,
  * add the corresponding method+path here so this test forces the mock handler
- * to be created at the same time.
+ * to be created at the same time. The opposite direction — every /api mock
+ * exists in the Go router — is enforced by
+ * internal/adapters/httpapi/dashboard_routes_test.go.
  */
 
 function extractHandlerPaths(): string[] {
@@ -28,6 +30,7 @@ const EXPECTED_ENDPOINTS = [
 	// dashboard
 	"GET /api/dashboard/overview",
 	"GET /api/dashboard/projections",
+	"GET /api/dashboard/status",
 	"GET /api/request-logs",
 	"GET /api/request-logs/options",
 	// conversations
@@ -46,7 +49,6 @@ const EXPECTED_ENDPOINTS = [
 	"GET /api/accounts/:accountId/trends",
 	"GET /api/accounts/:accountId/usage-reset-credits",
 	"POST /api/accounts/:accountId/usage-reset-credits/consume",
-	"POST /api/accounts/:accountId/export",
 	"POST /api/accounts/:accountId/export/auth",
 	"DELETE /api/accounts/:accountId",
 	// oauth
@@ -109,7 +111,6 @@ const EXPECTED_ENDPOINTS = [
 	"PATCH /api/automations/:automationId",
 	"DELETE /api/automations/:automationId",
 	"POST /api/automations/:automationId/run-now",
-	"GET /api/automations/:automationId/runs",
 ];
 
 describe("MSW handler coverage", () => {

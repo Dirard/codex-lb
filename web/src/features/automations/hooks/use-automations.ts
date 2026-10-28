@@ -1,12 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import {
   createAutomation,
   deleteAutomation,
-  listAutomationRuns,
-  listAutomations,
   runAutomationNow,
   updateAutomation,
 } from "@/features/automations/api";
@@ -15,38 +13,13 @@ import type {
   AutomationUpdateRequest,
 } from "@/features/automations/schemas";
 
-type UseAutomationsOptions = {
-  enableQueries?: boolean;
-};
-
-export function useAutomations(
-  selectedAutomationId: string | null,
-  options: UseAutomationsOptions = {},
-) {
+/**
+ * Create, update, run and delete automation jobs. Listing and run history are
+ * served by useAutomationListing; every mutation invalidates both.
+ */
+export function useAutomationMutations() {
   const { t } = useTranslation();
-  const enableQueries = options.enableQueries ?? true;
   const queryClient = useQueryClient();
-
-  const automationsQuery = useQuery({
-    queryKey: ["automations", "list"],
-    queryFn: () => listAutomations(),
-    enabled: enableQueries,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
-  });
-
-  const effectiveSelectedAutomationId =
-    selectedAutomationId ?? automationsQuery.data?.items[0]?.id ?? null;
-
-  const runsQuery = useQuery({
-    queryKey: ["automations", "runs", effectiveSelectedAutomationId],
-    queryFn: () => listAutomationRuns(effectiveSelectedAutomationId ?? "", 20),
-    enabled: enableQueries && effectiveSelectedAutomationId != null,
-    refetchInterval: 15_000,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
-  });
 
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: ["automations"] });
@@ -98,9 +71,6 @@ export function useAutomations(
   });
 
   return {
-    automationsQuery,
-    runsQuery,
-    effectiveSelectedAutomationId,
     createMutation,
     updateMutation,
     deleteMutation,

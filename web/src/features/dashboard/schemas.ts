@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { AccountAdditionalQuotaSchema, AccountSummarySchema } from "@/features/accounts/schemas";
 import type { AccountSummary } from "@/features/accounts/schemas";
+import { markDuplicateEmails } from "@/features/accounts/email-duplicates";
 
 export { AccountAdditionalQuotaSchema, AccountSummarySchema };
 export type { AccountSummary };
@@ -163,10 +164,15 @@ const WeeklyCreditPaceSchema = z.object({
   confidence: z.enum(["high", "medium", "low"]),
 });
 
+/** `GET /api/dashboard/status`: the overview's `lastSyncAt` without the report. */
+export const DashboardStatusSchema = z.object({
+  lastSyncAt: z.iso.datetime({ offset: true }).nullable(),
+});
+
 export const DashboardOverviewSchema = z.object({
   lastSyncAt: z.iso.datetime({ offset: true }).nullable(),
   timeframe: DashboardOverviewTimeframeSchema,
-  accounts: z.array(AccountSummarySchema),
+  accounts: z.array(AccountSummarySchema).transform(markDuplicateEmails),
   summary: z.object({
     primaryWindow: UsageSummaryWindowSchema,
     secondaryWindow: UsageSummaryWindowSchema.nullable(),
@@ -191,13 +197,6 @@ export const DashboardProjectionsSchema = z.object({
   weeklyCreditPace: WeeklyCreditPaceSchema.nullable().optional(),
 });
 
-const RequestLogCostBreakdownSchema = z.object({
-  inputUsd: z.number().nullable().optional().default(null),
-  cachedInputUsd: z.number().nullable().optional().default(null),
-  outputUsd: z.number().nullable().optional().default(null),
-  totalUsd: z.number().nullable().optional().default(null),
-});
-
 export const RequestLogSchema = z.object({
   requestedAt: z.iso.datetime({ offset: true }),
   accountId: z.string().nullable(),
@@ -205,45 +204,27 @@ export const RequestLogSchema = z.object({
   apiKeyName: z.string().nullable().optional().default(null),
   apiKeyId: z.string().nullable().optional().default(null),
   requestId: z.string(),
-  archiveRequestId: z.string().nullable().optional(),
   requestKind: z.string().optional().default("normal"),
-  connectionRequestKind: z.enum(["normal", "prewarm"]).nullable().optional(),
   model: z.string(),
   source: z.string().nullable().optional().default(null),
   modelSourceId: z.string().nullable().optional(),
   modelSourceKind: z.string().nullable().optional(),
   transport: z.string().nullable().optional().default(null),
-  upstreamTransport: z.string().nullable().optional(),
-  upstreamProxyRouteMode: z.string().nullable().optional(),
-  upstreamProxyPoolId: z.string().nullable().optional(),
-  upstreamProxyEndpointId: z.string().nullable().optional(),
-  upstreamProxyFallbackUsed: z.boolean().nullable().optional(),
-  upstreamProxyFailClosedReason: z.string().nullable().optional(),
   useragent: z.string().nullable().optional().default(null),
   useragentGroup: z.string().nullable().optional().default(null),
   clientIp: z.string().nullable().optional().default(null),
   conversationId: z.string().nullable().optional().default(null),
   serviceTier: z.string().nullable().optional().default(null),
-  requestedServiceTier: z.string().nullable().optional().default(null),
-  actualServiceTier: z.string().nullable().optional().default(null),
   status: z.string(),
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
-  failurePhase: z.string().nullable().optional().default(null),
-  failureDetail: z.string().nullable().optional().default(null),
-  failureExceptionType: z.string().nullable().optional().default(null),
-  upstreamStatusCode: z.number().int().nullable().optional().default(null),
-  upstreamErrorCode: z.string().nullable().optional().default(null),
-  bridgeStage: z.string().nullable().optional().default(null),
   tokens: z.number().nullable(),
   inputTokens: z.number().nullable().optional().default(null),
   outputTokens: z.number().nullable().optional().default(null),
-  outputTokensRaw: z.number().nullable().optional().default(null),
   reasoningTokens: z.number().nullable().optional(),
   cachedInputTokens: z.number().nullable(),
   reasoningEffort: z.string().nullable(),
   costUsd: z.number().nullable(),
-  costBreakdown: RequestLogCostBreakdownSchema.nullable().optional().default(null),
   latencyMs: z.number().nullable(),
   latencyFirstTokenMs: z.number().nullable().optional().default(null),
   latencyQueueMs: z.number().nullable().optional().default(null),
@@ -294,6 +275,7 @@ export const FilterStateSchema = z.object({
 
 export type DashboardMetrics = z.infer<typeof DashboardMetricsSchema>;
 export type DashboardMetricsComparison = z.infer<typeof DashboardMetricsComparisonSchema>;
+export type DashboardStatus = z.infer<typeof DashboardStatusSchema>;
 export type DashboardOverview = z.infer<typeof DashboardOverviewSchema>;
 export type DashboardProjections = z.infer<typeof DashboardProjectionsSchema>;
 export type DashboardOverviewTimeframe = z.infer<typeof DashboardOverviewTimeframeSchema>;

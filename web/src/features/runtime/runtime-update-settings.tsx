@@ -30,7 +30,7 @@ function isRestartInterruption(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 0 || error.status >= 500);
 }
 
-export function RuntimeUpdateSettings({ canWrite }: { canWrite: boolean }) {
+export function RuntimeUpdateSettings() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [observingOperation, setObservingOperation] = useState(false);
@@ -82,7 +82,7 @@ export function RuntimeUpdateSettings({ canWrite }: { canWrite: boolean }) {
     if (currentVersion !== undefined) void queryClient.invalidateQueries({ queryKey: ["runtime", "version"] });
   }, [queryClient, checkedAt, currentVersion, latestVersion]);
   const busy = isBusy(status?.phase) || actionMutation.isPending;
-  const disabled = !canWrite || !status?.supported || busy;
+  const disabled = !status?.supported || busy;
   const reconnecting = isRestartInterruption(statusQuery.error) && (busy || observingOperation);
   const loadError = statusQuery.isError && !reconnecting
     ? getErrorMessageOrNull(statusQuery.error, t("settings.runtime.loadFailed"))

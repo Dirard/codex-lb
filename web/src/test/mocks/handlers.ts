@@ -24,6 +24,7 @@ import {
   createDashboardAuthSession,
   createDashboardOverview,
   createDashboardProjections,
+  createDashboardStatus,
   createDashboardSettings,
   createDefaultAccounts,
   createDefaultAccountGroups,
@@ -786,6 +787,10 @@ export const handlers = [
     );
   }),
 
+  http.get("/api/dashboard/status", () => {
+    return HttpResponse.json(createDashboardStatus());
+  }),
+
   http.get("/api/dashboard/projections", () => {
     return HttpResponse.json(createDashboardProjections());
   }),
@@ -1150,38 +1155,6 @@ export const handlers = [
 		return HttpResponse.json({ status: "deleted" });
 	}),
 
-  http.post("/api/accounts/:accountId/export", ({ params }) => {
-    const accountId = String(params.accountId);
-    const account = findAccount(accountId);
-    if (!account) {
-      return HttpResponse.json(
-        { error: { code: "account_not_found", message: "Account not found" } },
-        { status: 404 },
-      );
-    }
-    return HttpResponse.json({
-      accountId: account.accountId,
-      email: account.email,
-      planType: account.planType,
-      status: account.status,
-      authJson: JSON.stringify(
-        {
-          auth_mode: "chatgpt",
-          OPENAI_API_KEY: null,
-          tokens: {
-            id_token: "id-token",
-            access_token: "access-token",
-            refresh_token: "refresh-token",
-            account_id: accountId,
-          },
-          last_refresh: "2026-01-01T12:00:00.000000Z",
-        },
-        null,
-        2,
-      ),
-    });
-  }),
-
   http.delete("/api/accounts/:accountId", ({ params }) => {
     const accountId = String(params.accountId);
     const exists = state.accounts.some(
@@ -1263,8 +1236,6 @@ export const handlers = [
 		state.authSession = createDashboardAuthSession({
 			...state.authSession,
 			authenticated: !state.authSession.totpRequiredOnLogin,
-			role: "admin",
-			permissions: ["read", "write"],
 		});
 		return HttpResponse.json(state.authSession);
 	}),
@@ -1582,31 +1553,6 @@ export const handlers = [
       totalAccounts: run.accountId ? 1 : 0,
       completedAccounts: run.accountId ? 1 : 0,
       pendingAccounts: 0,
-    });
-  }),
-
-  http.get("/api/automations/:automationId/runs", ({ params, request }) => {
-    const automationId = String(params.automationId);
-    const automation = findAutomation(automationId);
-    if (!automation) {
-      return HttpResponse.json(
-        { error: { code: "automation_not_found", message: "Automation not found" } },
-        { status: 404 },
-      );
-    }
-    const url = new URL(request.url);
-    const limit = Math.max(1, toFiniteNonNegative(url.searchParams.get("limit"), 20));
-    const all = state.automationRuns[automationId] ?? [];
-    const items = all.slice(0, limit).map((run) => ({
-      ...run,
-      jobName: automation.name,
-      model: automation.model,
-      reasoningEffort: run.reasoningEffort ?? automation.reasoningEffort ?? null,
-    }));
-    return HttpResponse.json({
-      items,
-      total: all.length,
-      hasMore: all.length > limit,
     });
   }),
 

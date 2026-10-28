@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders } from "@/test/utils";
@@ -169,9 +169,6 @@ type ConversationsQueryOverrides = {
 describe("DashboardPage", () => {
   beforeEach(() => {
     useAuthStore.setState({
-      role: "admin",
-      permissions: ["read", "write"],
-      canWrite: true,
       initialized: true,
     });
     accountCardsSpy.mockReset();
@@ -437,38 +434,6 @@ describe("DashboardPage", () => {
     await user.click(await screen.findByRole("menuitemradio", { name: "Conversations" }));
 
     expect(screen.getByTestId("conversation-timeframe-select")).toHaveTextContent("30d");
-  });
-
-  it("fails closed during auth hydration and restores a bookmarked conversations view once initialized", async () => {
-    useAuthStore.setState({
-      initialized: false,
-      role: "admin",
-      permissions: ["read", "write"],
-      canWrite: true,
-    });
-    window.history.pushState({}, "", "/dashboard?view=conversations");
-    mockReadyDashboard();
-
-    renderWithProviders(<DashboardPage />);
-
-    expect(screen.getByRole("heading", { name: "Request Logs" })).toBeInTheDocument();
-    expect(screen.queryByTestId("conversations-view")).not.toBeInTheDocument();
-    expect(window.location.search).toContain("view=conversations");
-    expect(useConversationsMock.mock.calls.every(([options]) => options !== undefined && options.enabled === false)).toBe(true);
-
-    act(() => {
-      useAuthStore.setState({
-        initialized: true,
-        role: "admin",
-        permissions: ["read", "write"],
-        canWrite: true,
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("conversations-view")).toBeInTheDocument();
-      expect(window.location.search).toContain("view=conversations");
-    });
   });
 
   it("customizes and restores the request-log table without a global width control", async () => {

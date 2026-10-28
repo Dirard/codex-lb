@@ -30,7 +30,6 @@ import { formatSingleUnitRemaining } from "@/utils/formatters";
 export type AccountActionsProps = {
   account: AccountSummary;
   busy: boolean;
-  readOnly?: boolean;
   onPause: (accountId: string) => void;
   onResume: (accountId: string) => void;
   onProbe: (accountId: string) => void;
@@ -50,7 +49,6 @@ export type AccountActionsProps = {
 export function AccountActions({
   account,
   busy,
-  readOnly = false,
   onPause,
   onResume,
   onProbe,
@@ -67,7 +65,7 @@ export function AccountActions({
   const showOperatorRecoveryAction =
     account.status === "reauth_required" || account.status === "deactivated";
   const probeDisabled =
-    busy || readOnly || account.status === "paused" || showOperatorRecoveryAction;
+    busy || account.status === "paused" || showOperatorRecoveryAction;
   const resetCountdown = showResetCreditExpiryBadge && account.resetCreditNearestExpiresAt
     ? formatSingleUnitRemaining(account.resetCreditNearestExpiresAt)
     : null;
@@ -75,7 +73,6 @@ export function AccountActions({
   const hasResetCredits = availableResetCredits > 0;
   const resetCreditDisabled =
     busy ||
-    readOnly ||
     account.status === "paused" ||
     showOperatorRecoveryAction;
 
@@ -95,7 +92,7 @@ export function AccountActions({
                 value as AccountRoutingPolicy,
               )
             }
-            disabled={busy || readOnly}
+            disabled={busy}
           >
             <SelectTrigger
               aria-label={t("accounts.actions.routingPolicy")}
@@ -125,7 +122,7 @@ export function AccountActions({
           id={`security-work-authorized-${account.accountId}`}
           className="shrink-0"
           checked={account.securityWorkAuthorized ?? false}
-          disabled={busy || readOnly}
+          disabled={busy}
           onCheckedChange={(checked) =>
             onSecurityWorkAuthorizedChange(account.accountId, checked)
           }
@@ -139,7 +136,7 @@ export function AccountActions({
             size="sm"
             className="h-8 gap-1.5 text-xs"
             onClick={() => onResume(account.accountId)}
-            disabled={busy || readOnly}
+            disabled={busy}
           >
             <Play className="h-3.5 w-3.5" />
             {t("common.actions.resume")}
@@ -151,7 +148,7 @@ export function AccountActions({
             variant="outline"
             className="h-8 gap-1.5 text-xs"
             onClick={() => onPause(account.accountId)}
-            disabled={busy || readOnly}
+            disabled={busy}
           >
             <Pause className="h-3.5 w-3.5" />
             {t("common.actions.pause")}
@@ -165,7 +162,7 @@ export function AccountActions({
             variant="outline"
             className="h-8 gap-1.5 text-xs"
             onClick={onReauth}
-            disabled={busy || readOnly}
+            disabled={busy}
           >
             <RefreshCw className="h-3.5 w-3.5" />
             {t("common.actions.reauthenticate")}
@@ -192,7 +189,7 @@ export function AccountActions({
           onClick={() =>
             onLimitWarmupChange(account.accountId, !account.limitWarmupEnabled)
           }
-          disabled={busy || readOnly}
+          disabled={busy}
         >
           <Zap className="h-3.5 w-3.5" />
           {account.limitWarmupEnabled ? t("accounts.actions.disableWarmup") : t("accounts.actions.enableWarmup")}
@@ -204,7 +201,7 @@ export function AccountActions({
           variant="outline"
           className="h-8 gap-1.5 text-xs"
           onClick={() => onExportAuth(account.accountId)}
-          disabled={busy || readOnly}
+          disabled={busy}
         >
           <Download className="h-3.5 w-3.5" />
           {t("common.actions.export")}
@@ -243,7 +240,7 @@ export function AccountActions({
           variant="destructive"
           className="h-8 gap-1.5 text-xs"
           onClick={() => onDelete(account.accountId)}
-          disabled={busy || readOnly}
+          disabled={busy}
         >
           <Trash2 className="h-3.5 w-3.5" />
           {t("common.actions.delete")}

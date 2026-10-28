@@ -26,7 +26,6 @@ import { useOauth } from "@/features/accounts/hooks/use-oauth";
 import { useSettings } from "@/features/settings/hooks/use-settings";
 import { useAccountQuotaDisplayStore } from "@/hooks/use-account-quota-display";
 import type { AccountAuthExportResponse } from "@/features/accounts/schemas";
-import { useAuthStore } from "@/features/auth/hooks/use-auth";
 import { PasswordConfirmDialog } from "@/components/password-confirm-dialog";
 import { usePasswordConfirmationRequired } from "@/features/auth/hooks/use-password-confirmation";
 import { getErrorMessageOrNull } from "@/utils/errors";
@@ -58,7 +57,6 @@ export function AccountsPage() {
   } = useAccounts();
   const { settingsQuery } = useSettings();
   const oauth = useOauth();
-  const canWrite = useAuthStore((state) => state.canWrite);
 
   const importDialog = useDialogState();
   const oauthDialog = useDialogState();
@@ -191,7 +189,6 @@ export function AccountsPage() {
                   setOauthAccountId(null);
                   oauthDialog.show();
                 }}
-                readOnly={!canWrite}
               />
             </div>
           </div>
@@ -200,7 +197,6 @@ export function AccountsPage() {
             account={selectedAccount}
             showAccountId={selectedAccount?.isEmailDuplicate === true}
             busy={mutationBusy}
-            readOnly={!canWrite}
             onPause={(accountId) => void pauseMutation.mutateAsync(accountId)}
             onResume={(accountId) => void resumeMutation.mutateAsync(accountId)}
             onProbe={(accountId) => void probeMutation.mutateAsync({ accountId })}

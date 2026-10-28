@@ -52,11 +52,10 @@ export function SettingsPage() {
   const authMode = useAuthStore((state) => state.authMode);
   const passwordManagementEnabled = useAuthStore((state) => state.passwordManagementEnabled);
   const passwordSessionActive = useAuthStore((state) => state.passwordSessionActive);
-  const canWrite = useAuthStore((state) => state.canWrite);
 
   const settings = settingsQuery.data;
   const busy = updateSettingsMutation.isPending;
-  const controlsDisabled = busy || !canWrite;
+  const controlsDisabled = busy;
   const settingsLoadError = getErrorMessageOrNull(
     settingsQuery.error,
     t("settings.toasts.loadFailed"),
@@ -110,12 +109,6 @@ export function SettingsPage() {
       ) : (
         <>
           {error ? <AlertMessage variant="error">{error}</AlertMessage> : null}
-          {!canWrite ? (
-            <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-foreground">
-              {t("settings.page.readOnlyNotice")}
-            </div>
-          ) : null}
-
           {authMode === "trusted_header" ? (
             <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-foreground">
               {t("settings.page.trustedHeaderNotice")}
@@ -130,15 +123,15 @@ export function SettingsPage() {
 
           <div className="space-y-4">
             <AppearanceSettings />
-            <RuntimeUpdateSettings canWrite={canWrite} />
+            <RuntimeUpdateSettings />
             <RuntimeCapacitySettings />
             <ImportSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
             <ResetCreditSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
-            {canWrite ? <PasswordSettings disabled={busy} /> : null}
-            {canWrite && passwordManagementEnabled ? (
+            <PasswordSettings disabled={busy} />
+            {passwordManagementEnabled ? (
               <SessionSettings settings={settings} busy={busy} onSave={handleSave} />
             ) : null}
-            {canWrite && passwordManagementEnabled && passwordSessionActive ? (
+            {passwordManagementEnabled && passwordSessionActive ? (
               <Suspense fallback={null}>
                 <TotpSettings settings={settings} disabled={busy} />
               </Suspense>

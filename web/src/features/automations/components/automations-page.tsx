@@ -38,7 +38,7 @@ import {
 } from "@/features/automations/components/run-status-utils";
 import { getAutomationRunDetails } from "@/features/automations/api";
 import { useAutomationListing } from "@/features/automations/hooks/use-automation-listing";
-import { useAutomations } from "@/features/automations/hooks/use-automations";
+import { useAutomationMutations } from "@/features/automations/hooks/use-automations";
 import { formatScheduleTimeForInput } from "@/features/automations/time-utils";
 import { PaginationControls } from "@/features/dashboard/components/filters/pagination-controls";
 import { useDialogState } from "@/hooks/use-dialog-state";
@@ -181,7 +181,7 @@ export function AutomationsPage() {
     updateMutation,
     deleteMutation,
     runNowMutation,
-  } = useAutomations(null, { enableQueries: false });
+  } = useAutomationMutations();
   const runDetailsQuery = useQuery({
     queryKey: ["automations", "run-details", selectedRunId],
     queryFn: () => getAutomationRunDetails(selectedRunId ?? ""),
