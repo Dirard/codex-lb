@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,13 +44,31 @@ func silentThenComplete(ctx context.Context, target application.ResponseTarget, 
 	return (localReplyProvider{}).Respond(ctx, target, body, emit)
 }
 
-// continuousDeltas emits a visible delta every 5 ms for 300 ms.
-func continuousDeltas(ctx context.Context, target application.ResponseTarget, body json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+// continuousDeltas emits a visible delta every 5 ms for 300 ms and records
+// when each delta's emit started and returned. Both transports write a delta
+// to the client before emit returns, so the real silence between the writes of
+// deltas i and i+1 is at most returned[i+1] - started[i].
+type continuousDeltas struct {
+	mu    sync.Mutex
+	spans [][2]time.Time
+}
+
+const continuousDeltaCount = 60
+
+func (d *continuousDeltas) respond(ctx context.Context, target application.ResponseTarget, body json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+	d.mu.Lock()
+	d.spans = d.spans[:0]
+	d.mu.Unlock()
 	if err := emit(application.ResponseEvent{Type: "response.created", Data: []byte(`{"type":"response.created","response":{"id":"local-response","status":"in_progress"}}`)}); err != nil {
 		return application.ResponseResult{}, err
 	}
-	for i := range 60 {
-		if err := emit(application.ResponseEvent{Type: "response.output_text.delta", Data: []byte(fmt.Sprintf(`{"type":"response.output_text.delta","item_id":"msg","output_index":0,"content_index":0,"delta":"%d"}`, i))}); err != nil {
+	for i := range continuousDeltaCount {
+		started := time.Now()
+		err := emit(application.ResponseEvent{Type: "response.output_text.delta", Data: []byte(fmt.Sprintf(`{"type":"response.output_text.delta","item_id":"msg","output_index":0,"content_index":0,"delta":"%d"}`, i))})
+		d.mu.Lock()
+		d.spans = append(d.spans, [2]time.Time{started, time.Now()})
+		d.mu.Unlock()
+		if err != nil {
 			return application.ResponseResult{}, err
 		}
 		if err := heartbeatSleep(ctx, 5*time.Millisecond); err != nil {
@@ -57,6 +76,28 @@ func continuousDeltas(ctx context.Context, target application.ResponseTarget, bo
 		}
 	}
 	return (localReplyProvider{}).Respond(ctx, target, body, emit)
+}
+
+// silenceBound is the longest the client can have gone without a write
+// between deltas i and i+1.
+func (d *continuousDeltas) silenceBound(i int) time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.spans[i+1][1].Sub(d.spans[i][0])
+}
+
+// checkHeartbeat fails when a heartbeat arrives between two deltas although
+// the writes around it left less than interval of silence. Heartbeats before
+// the first delta (admission) and after the last one (the terminal waits for
+// settlement) follow real pauses and are not part of the continuous stream.
+func (d *continuousDeltas) checkHeartbeat(t *testing.T, deltasBefore int, interval time.Duration, frame any) {
+	t.Helper()
+	if deltasBefore == 0 || deltasBefore == continuousDeltaCount {
+		return
+	}
+	if bound := d.silenceBound(deltasBefore - 1); bound < interval {
+		t.Fatalf("heartbeat inserted into a continuous stream after delta %d (at most %v of silence): %+v", deltasBefore, bound, frame)
+	}
 }
 
 type sseFrame struct{ comment, event, data string }
@@ -176,36 +217,58 @@ func TestWebSocketTurnCarriesProtocolPings(t *testing.T) {
 	}
 }
 
-// NET-19: heartbeats follow real silence; a continuous stream gets none.
+// NET-19: heartbeats follow real silence; a continuous stream gets none. A
+// heartbeat between deltas is accepted only after a measured stall of at least
+// the interval (the race detector on a loaded runner can stall a goroutine), so
+// a ticker that ignores real writes, firing every interval through 5 ms-spaced
+// deltas, still fails.
 func TestHeartbeatsAreSentOnlyAfterSilence(t *testing.T) {
-	server, _ := heartbeatFixtureInterval(t, continuousDeltas, 60*time.Millisecond)
-	// Admission before the first delta may legitimately be silent; only
-	// heartbeats between real deltas are checked.
+	const interval = 60 * time.Millisecond
+	deltas := &continuousDeltas{}
+	server, _ := heartbeatFixtureInterval(t, deltas.respond, interval)
 	t.Run("sse", func(t *testing.T) {
-		streaming := false
+		seen, completed := 0, false
 		for _, frame := range postSSE(t, server, "/backend-api/codex/responses") {
-			streaming = streaming || frame.event == "response.output_text.delta"
-			if streaming && frame.event != "response.completed" && frame.event != "response.output_text.delta" {
-				t.Fatalf("heartbeat inserted into a continuous stream: %+v", frame)
+			switch frame.event {
+			case "response.output_text.delta":
+				seen++
+			case "response.completed":
+				completed = true
+			case "response.created", "":
+			default:
+				deltas.checkHeartbeat(t, seen, interval, frame)
+			}
+			if frame.comment != "" {
+				deltas.checkHeartbeat(t, seen, interval, frame)
 			}
 		}
-		if !streaming {
-			t.Fatal("no deltas")
+		if seen != continuousDeltaCount || !completed {
+			t.Fatalf("stream incomplete: %d deltas, completed=%v", seen, completed)
 		}
 	})
 	t.Run("websocket", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		conn := heartbeatConnect(t, ctx, server, "/backend-api/codex/responses")
-		streaming := false
+		seen := 0
+		// Checked after the terminal, once every delta's emit has returned.
+		var heartbeats [][2]any
 		for {
 			kind, _ := heartbeatRead(t, ctx, conn)
-			if kind == "response.completed" {
+			switch kind {
+			case "response.completed":
+				if seen != continuousDeltaCount {
+					t.Fatalf("stream incomplete: %d deltas", seen)
+				}
+				for _, heartbeat := range heartbeats {
+					deltas.checkHeartbeat(t, heartbeat[0].(int), interval, heartbeat[1])
+				}
 				return
-			}
-			streaming = streaming || kind == "response.output_text.delta"
-			if streaming && kind != "response.output_text.delta" {
-				t.Fatalf("heartbeat inserted into a continuous stream: %s", kind)
+			case "response.output_text.delta":
+				seen++
+			case "response.created":
+			default:
+				heartbeats = append(heartbeats, [2]any{seen, kind})
 			}
 		}
 	})
