@@ -26,9 +26,11 @@ type RuntimeUpdateStatus struct {
 	UnavailableReason string     `json:"unavailableReason,omitempty"`
 	PreviousVersion   string     `json:"previousVersion,omitempty"`
 	CanRollback       bool       `json:"canRollback"`
-	Phase             string     `json:"phase"`
-	TargetVersion     string     `json:"targetVersion,omitempty"`
-	LastError         string     `json:"lastError,omitempty"`
+	// RollbackNote explains why a retained previous version cannot be selected.
+	RollbackNote  string `json:"rollbackNote,omitempty"`
+	Phase         string `json:"phase"`
+	TargetVersion string `json:"targetVersion,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
 }
 
 type RuntimeRelease struct {

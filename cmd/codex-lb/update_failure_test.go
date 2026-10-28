@@ -136,3 +136,42 @@ func TestManagedBootDoesNotExecuteTamperedCurrent(t *testing.T) {
 		t.Fatal("tampered current executable ran before digest verification")
 	}
 }
+
+func TestRestoreBackupReplacesTheMigratedDatabaseAndDropsItsJournal(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "updates", "backup-test"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dataDir, "codex-lb.sqlite3")
+	for path, content := range map[string]string{
+		dbPath: "migrated-by-failed-version", dbPath + "-wal": "failed-wal", dbPath + "-shm": "failed-shm",
+		filepath.Join(dataDir, "updates", "backup-test", "codex-lb.sqlite3"): "pre-update-snapshot",
+		filepath.Join(dataDir, "updates", "backup-current"):                   "backup-test",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := &updateHost{dataDir: dataDir}
+	if err := host.RestoreBackup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(dbPath)
+	if err != nil || string(restored) != "pre-update-snapshot" {
+		t.Fatalf("database = %q %v", restored, err)
+	}
+	if info, err := os.Stat(dbPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("restored database mode: %v %v", info, err)
+	}
+	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Fatalf("%s survived the restore: %v", sidecar, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "updates", "backup-current"), []byte("../escape"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.RestoreBackup(context.Background()); err == nil {
+		t.Fatal("restore followed an unsafe backup pointer")
+	}
+}

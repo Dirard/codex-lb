@@ -149,7 +149,9 @@ func prepareManagedBoot(ctx context.Context, store *updatefiles.Store, host *upd
 		return errors.New("failed startup could not be stopped safely")
 	}
 	if state.Previous == nil || state.Previous.Descriptor.SchemaVersion != state.Current.Descriptor.SchemaVersion {
-		return errors.New("managed runtime startup failed; no compatible previous version")
+		// Traffic may have reached the newer schema, so the pre-update backup is
+		// never restored automatically here.
+		return errors.New("managed runtime startup failed; the previous version needs the pre-update database backup in updates/ to run")
 	}
 	previous := *state.Previous
 	if err := start(previous); err != nil {

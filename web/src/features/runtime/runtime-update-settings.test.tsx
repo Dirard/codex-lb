@@ -167,3 +167,27 @@ describe("RuntimeUpdateSettings", () => {
     }
   });
 });
+
+describe("RuntimeUpdateSettings rollback note", () => {
+  it("explains why a previous version with an older schema cannot be selected", async () => {
+    server.use(
+      http.get("/api/runtime/updates", () =>
+        HttpResponse.json({
+          currentVersion: "go-v1.1.0",
+          updateAvailable: false,
+          checkedAt: null,
+          source: "github",
+          releaseUrl: "https://github.com/Dirard/codex-lb/releases",
+          supported: true,
+          previousVersion: "go-v1.0.11",
+          canRollback: false,
+          rollbackNote: "The previous version uses an older database schema; return to it by restoring the pre-update backup",
+          phase: "idle",
+        }),
+      ),
+    );
+    renderWithProviders(<RuntimeUpdateSettings />);
+    expect(await screen.findByText(/older database schema/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Roll back to go-v1.0.11" })).toBeDisabled();
+  });
+});

@@ -152,6 +152,11 @@ func (h *fakeUpdateHost) Backup(context.Context) error {
 	return h.backupErr
 }
 
+func (h *fakeUpdateHost) RestoreBackup(context.Context) error {
+	h.record("restore-backup")
+	return nil
+}
+
 func (h *fakeUpdateHost) PrepareStart(_ context.Context, installation domain.RuntimeInstallation) error {
 	h.record("prepare:" + installation.Descriptor.Version)
 	h.mu.Lock()
@@ -376,9 +381,9 @@ func TestRuntimeUpdatesRejectsCandidateWithoutStoppingHost(t *testing.T) {
 		{"wrong version", func(_ *fakeReleaseSource, _ *fakeInstallStore, h *fakeUpdateHost) {
 			h.descriptors["stage-path"] = testDescriptor("go-v9.9.9")
 		}, "Release is incompatible"},
-		{"incompatible schema", func(_ *fakeReleaseSource, _ *fakeInstallStore, h *fakeUpdateHost) {
+		{"older schema", func(_ *fakeReleaseSource, _ *fakeInstallStore, h *fakeUpdateHost) {
 			bad := testDescriptor("go-v1.0.4")
-			bad.SchemaVersion = 99
+			bad.SchemaVersion = 32
 			h.descriptors["stage-path"] = bad
 		}, "Release is incompatible"},
 		{"changed target", func(_ *fakeReleaseSource, _ *fakeInstallStore, h *fakeUpdateHost) {
@@ -545,5 +550,71 @@ func TestRuntimeUpdatesCloseJoinsInFlightJob(t *testing.T) {
 	}
 	if state := store.lastState(); state.Pending != nil {
 		t.Fatalf("cancelled transition left a pending installation: %+v", state)
+	}
+}
+
+func newerSchemaFixture(t *testing.T) (*RuntimeUpdates, *fakeInstallStore, *fakeUpdateHost) {
+	t.Helper()
+	updater, _, store, host := newUpdateFixture(t, RuntimeUpdateConfig{})
+	migrating := testDescriptor("go-v1.0.4")
+	migrating.SchemaVersion = 40
+	host.mu.Lock()
+	host.descriptors["stage-path"], host.descriptors["new-installed"] = migrating, migrating
+	host.mu.Unlock()
+	return updater, store, host
+}
+
+func callIndex(calls []string, prefix string) int {
+	for i, call := range calls {
+		if strings.HasPrefix(call, prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestRuntimeUpdatesInstallNewerSchemaAfterBackup(t *testing.T) {
+	updater, store, host := newerSchemaFixture(t)
+	applyUpdate(t, updater, "go-v1.0.4")
+	status := waitForPhase(t, updater, "succeeded")
+	calls := host.callLog()
+	if backup, prepare := callIndex(calls, "backup"), callIndex(calls, "prepare:go-v1.0.4"); backup < 0 || prepare < backup || hasCall(calls, "restore-backup") {
+		t.Fatalf("migrating update must back up before the new version starts: %+v", calls)
+	}
+	if state := store.lastState(); state.Current.Descriptor.SchemaVersion != 40 || state.Previous == nil {
+		t.Fatalf("state = %+v", state)
+	}
+	if status.CanRollback || status.RollbackNote == "" {
+		t.Fatalf("rollback to an older schema must be explained, not offered: %+v", status)
+	}
+}
+
+func TestRuntimeUpdatesNewerSchemaFailureRestoresBackupBeforePrevious(t *testing.T) {
+	for _, failure := range []func(*fakeUpdateHost){
+		func(h *fakeUpdateHost) { h.prepareErrFor = "go-v1.0.4" },
+		func(h *fakeUpdateHost) { h.activateErrFor = "go-v1.0.4" },
+	} {
+		updater, store, host := newerSchemaFixture(t)
+		failure(host)
+		applyUpdate(t, updater, "go-v1.0.4")
+		status := waitForPhase(t, updater, "failed")
+		calls := host.callLog()
+		restore, previous := callIndex(calls, "restore-backup"), callIndex(calls, "prepare:go-v1.0.0")
+		if restore < 0 || previous < restore || !strings.Contains(status.LastError, "previous version restored") {
+			t.Fatalf("database was not restored before the previous version restarted: %+v %q", calls, status.LastError)
+		}
+		if state := store.lastState(); state.Current.Descriptor.Version != "go-v1.0.0" {
+			t.Fatalf("state = %+v", state)
+		}
+	}
+}
+
+func TestRuntimeUpdatesSameSchemaFailureDoesNotRestoreBackup(t *testing.T) {
+	updater, _, _, host := newUpdateFixture(t, RuntimeUpdateConfig{})
+	host.prepareErrFor = "go-v1.0.4"
+	applyUpdate(t, updater, "go-v1.0.4")
+	waitForPhase(t, updater, "failed")
+	if hasCall(host.callLog(), "restore-backup") {
+		t.Fatalf("same-schema recovery must not replace the database: %+v", host.callLog())
 	}
 }

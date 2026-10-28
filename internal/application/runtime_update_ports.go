@@ -38,6 +38,9 @@ type RuntimeUpdateHost interface {
 	WaitForIdle(context.Context) error
 	Stop(context.Context) error
 	Backup(context.Context) error
+	// RestoreBackup replaces the stopped runtime's database with the snapshot
+	// taken by the last Backup, discarding a migration by a failed newer version.
+	RestoreBackup(context.Context) error
 	PrepareStart(context.Context, domain.RuntimeInstallation) error
 	Activate(context.Context) error
 }
