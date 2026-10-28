@@ -1,20 +1,28 @@
 name: Release
 
-# Pushing a go-vX.Y.Z tag builds, verifies and publishes the Linux archives.
+# Pushing a go-vX.Y.Z tag builds, verifies and publishes the Linux archives;
+# a manual run publishes an existing tag with the workflow from main.
 # Publishing never updates a running installation; operators apply updates.
 on:
   push:
     tags: ["go-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing go-vX.Y.Z tag to publish
+        required: true
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
   CODEX_LB_REQUIRE_EMBEDDED_UI: "1"
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -22,6 +30,33 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # Full history: the verification below compares this code with
+          # commits that CI already checked.
+          fetch-depth: 0
+      - name: Check the tag
+        run: |
+          if [[ ! "$TAG" =~ ^go-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "refs/tags/$TAG^{commit}")" ]]; then
+            echo "$TAG is not a checked-out go-vX.Y.Z tag" >&2
+            exit 1
+          fi
+      # The gates already ran when CI passed on a commit with the same code
+      # (the pull request head or its merge on main); repeating them only
+      # delays the release. Only this workflow file may differ.
+      - name: Find a green CI run for this code
+        id: verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for sha in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --status success --limit 100 --json headSha --jq '.[].headSha' | sort -u); do
+            if git cat-file -e "$sha^{commit}" 2>/dev/null && git diff --quiet "$sha" HEAD -- . ':(exclude).github/workflows/release.yml'; then
+              echo "commit=$sha" >> "$GITHUB_OUTPUT"
+              echo "CI already passed on $sha with this code; skipping repeated gates"
+              exit 0
+            fi
+          done
+          echo "no green CI run for this code; running the gates"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -29,35 +64,38 @@ jobs:
         with:
           node-version: 24
       - run: npm --prefix web run install:deps
-      - run: npm --prefix web run test
+      - if: steps.verified.outputs.commit == ''
+        run: npm --prefix web run test
       - run: npm --prefix web run build
       - run: go vet ./...
-      - run: go test ./...
-      - run: go test -race -timeout 30m ./...
+      - if: steps.verified.outputs.commit == ''
+        run: go test ./...
+      - if: steps.verified.outputs.commit == ''
+        run: go test -race -timeout 30m ./...
       - name: Build archives
         env:
           SKIP_WEB_BUILD: "1"
-        run: scripts/release.sh "${GITHUB_REF_NAME}" "dist/${GITHUB_REF_NAME}"
+        run: scripts/release.sh "$TAG" "dist/$TAG"
       # Signs SHA256SUMS with the offline-generated ed25519 key. Without the
       # secret this succeeds only while no trusted key is embedded in the build
       # (transition releases); afterwards an unsigned release fails here.
       - name: Sign checksums
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: go run ./cmd/release-sign sign "dist/${GITHUB_REF_NAME}/SHA256SUMS"
+        run: go run ./cmd/release-sign sign "dist/$TAG/SHA256SUMS"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="openspec/specs/go-runtime/releases/${GITHUB_REF_NAME}.md"
+          notes="openspec/specs/go-runtime/releases/$TAG.md"
           if [[ ! -s "$notes" ]]; then
             echo "missing release notes $notes" >&2
             exit 1
           fi
           title="$(head -n 1 "$notes" | sed 's/^# *//')"
-          assets=("dist/${GITHUB_REF_NAME}"/codex-lb-*.tar.gz "dist/${GITHUB_REF_NAME}/SHA256SUMS")
-          if [[ -f "dist/${GITHUB_REF_NAME}/SHA256SUMS.sig" ]]; then
-            assets+=("dist/${GITHUB_REF_NAME}/SHA256SUMS.sig")
+          assets=("dist/$TAG"/codex-lb-*.tar.gz "dist/$TAG/SHA256SUMS")
+          if [[ -f "dist/$TAG/SHA256SUMS.sig" ]]; then
+            assets+=("dist/$TAG/SHA256SUMS.sig")
           fi
           # A release that older installations cannot apply (for example a new
           # schema before they have the migrating updater) ships as a
@@ -66,4 +104,4 @@ jobs:
           if grep -qx '<!-- prerelease -->' "$notes"; then
             channel=(--prerelease)
           fi
-          gh release create "${GITHUB_REF_NAME}" --verify-tag "${channel[@]}" --title "$title" --notes-file "$notes" "${assets[@]}"
+          gh release create "$TAG" --verify-tag "${channel[@]}" --title "$title" --notes-file "$notes" "${assets[@]}"
