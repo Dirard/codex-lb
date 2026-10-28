@@ -100,7 +100,11 @@ func TestUsageRollupsDrainALongRollback(t *testing.T) {
 		settleRollupEvent(t, old, fmt.Sprintf("rollback-%d", i), "acct", fmt.Sprintf("conv-%d", i%4),
 			fixedTime.Add(time.Duration(i)*time.Minute), "success")
 	}
-	for _, price := range []pricing.Rates{{Input: 2, Output: 9}, {Input: 3, Output: 1}} {
+	// Rates are microdollars per million tokens: both prices change the cost
+	// of every event, so each journals one cost row per folded event. (Rates
+	// of a few microdollars per million round every event to 0, and the second
+	// change would reprice nothing.)
+	for _, price := range []pricing.Rates{{Input: 2_000_000, Output: 9_000_000}, {Input: 3_000_000, Output: 1_000_000}} {
 		if _, err := old.ApplyModelPriceChange(ctx, "gpt-6-sol", &pricing.Price{Standard: price}, fixedTime); err != nil {
 			t.Fatal(err)
 		}
@@ -114,7 +118,9 @@ func TestUsageRollupsDrainALongRollback(t *testing.T) {
  (SELECT count(*) FROM usage_events WHERE rowid>(SELECT folded_rowid FROM usage_rollup_state))`).Scan(&journal, &tail); err != nil {
 		t.Fatal(err)
 	}
-	if journal < 400 || tail != 49 {
+	// 300 folded events repriced twice and 100 folded events pruned; the
+	// pruned rollback event and the repriced ones were never folded.
+	if journal != 700 || tail != 49 {
 		t.Fatalf("rollback left journal %d tail %d", journal, tail)
 	}
 	if fold := foldRollups(t, active, 64); fold.Journal != journal || fold.Rows != tail {
