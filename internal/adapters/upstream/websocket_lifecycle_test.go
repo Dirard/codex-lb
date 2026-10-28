@@ -33,7 +33,7 @@ func TestWebSocketContinuationWaiterDoesNotBorrowSiblingOrStaleAnchor(t *testing
 			target.SessionID = "shared-session"
 			acquire := func(previous string) *websocketSession {
 				t.Helper()
-				entry, _, err := adapter.sessions.acquire(ctx, target, previous, server.Client())
+				entry, _, err := adapter.sessions.acquire(ctx, target, previous, server.Client(), websocketReuseFence{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -50,7 +50,7 @@ func TestWebSocketContinuationWaiterDoesNotBorrowSiblingOrStaleAnchor(t *testing
 			defer stopWait()
 			done := make(chan error, 1)
 			go func() {
-				entry, _, err := adapter.sessions.acquire(waitCtx, target, "seed", server.Client())
+				entry, _, err := adapter.sessions.acquire(waitCtx, target, "seed", server.Client(), websocketReuseFence{})
 				if err == nil {
 					adapter.sessions.release(entry, true, "", true)
 				}
@@ -98,7 +98,7 @@ func TestWebSocketContinuationWaiterDoesNotBorrowSiblingOrStaleAnchor(t *testing
 			adapter.sessions.release(sibling, true, "sibling", true)
 			cancelled, cancelNow := context.WithCancel(ctx)
 			cancelNow()
-			_, _, err := adapter.sessions.acquire(cancelled, target, "", server.Client())
+			_, _, err := adapter.sessions.acquire(cancelled, target, "", server.Client(), websocketReuseFence{})
 			if !errors.As(err, &failure) || !failure.RejectedBeforeExecution || !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancelled fresh lease was acquired: %v", err)
 			}
@@ -127,7 +127,7 @@ func TestRequiredCapabilityRetiresEveryIdleSibling(t *testing.T) {
 	target.SessionID, target.RequiredCapability = "shared-required", true
 	entries := make([]*websocketSession, 4)
 	for i := range entries {
-		entry, _, err := adapter.sessions.acquire(ctx, target, "", server.Client())
+		entry, _, err := adapter.sessions.acquire(ctx, target, "", server.Client(), websocketReuseFence{})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -34,11 +34,13 @@ func TestChatGPTLiveClientVersionPreservesExistingConnections(t *testing.T) {
 				return
 			}
 			defer conn.CloseNow()
-			for {
+			for turn := 1; ; turn++ {
 				if _, _, err := conn.Read(r.Context()); err != nil {
 					return
 				}
-				if err := conn.Write(r.Context(), websocket.MessageText, []byte(event)); err != nil {
+				// A provider never reuses a response ID on one socket.
+				turnEvent := strings.Replace(event, `"id":"probe"`, fmt.Sprintf(`"id":"probe_%d"`, turn), 1)
+				if err := conn.Write(r.Context(), websocket.MessageText, []byte(turnEvent)); err != nil {
 					return
 				}
 			}

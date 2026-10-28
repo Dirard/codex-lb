@@ -92,7 +92,7 @@ func TestResponsesLiteHTTPAndCompactWire(t *testing.T) {
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	compact := httptest.NewServer(mux)
 	defer compact.Close()
 	for _, route := range []struct {
@@ -260,7 +260,7 @@ func TestResponsesLiteEnforcedModelGuardCoversResponsesAndCompact(t *testing.T) 
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	compact := httptest.NewServer(mux)
 	defer compact.Close()
 	for _, path := range []string{"/v1/responses", "/backend-api/codex/responses", "/v1/responses/compact/", "/backend-api/codex/responses/compact"} {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -178,6 +179,46 @@ func TestRuntimeTransportAllows512ActiveStreamsToOneHost(t *testing.T) {
 	cancel()
 	for range 512 {
 		<-finished
+	}
+}
+
+// NET-9/NET-16: the upstream transport health-checks HTTP/2 connections and
+// resumes TLS sessions on new connections.
+func TestRuntimeTransportProbesHTTP2AndResumesTLS(t *testing.T) {
+	r, err := openRuntime(context.Background(), testConfig(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.close()
+	h2 := r.transport.HTTP2
+	if h2 == nil || h2.SendPingTimeout != 30*time.Second || h2.PingTimeout != 10*time.Second || h2.WriteByteTimeout != 30*time.Second || h2.MaxReceiveBufferPerStream != 1<<20 {
+		t.Fatalf("HTTP/2 health configuration missing: %+v", h2)
+	}
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	upstream.EnableHTTP2 = true
+	upstream.StartTLS()
+	defer upstream.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(upstream.Certificate())
+	r.transport.TLSClientConfig.RootCAs = roots
+	client := &http.Client{Transport: r.transport}
+	get := func() *http.Response {
+		t.Helper()
+		request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, upstream.URL, nil)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		return response
+	}
+	if first := get(); first.ProtoMajor != 2 || first.TLS.DidResume {
+		t.Fatalf("first connection: proto=%d resumed=%v", first.ProtoMajor, first.TLS.DidResume)
+	}
+	r.transport.CloseIdleConnections()
+	if second := get(); !second.TLS.DidResume {
+		t.Fatal("new upstream connection did not resume the TLS session")
 	}
 }
 

@@ -225,7 +225,7 @@ func TestAffinityWriteFailureSettlesUnusedReservationBeforeHTTPDispatch(t *testi
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	mux.Handle("/", httpapi.NewProxyHandler(store, proxy, nil))
 	server := httptest.NewServer(mux)
 	defer server.Close()

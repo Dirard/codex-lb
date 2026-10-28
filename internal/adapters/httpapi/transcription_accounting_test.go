@@ -82,7 +82,7 @@ func TestTranscriptionAccountsOnlyConfirmedBillingUnits(t *testing.T) {
 			operations := application.NewCodexOperations(store, store, adapter, time.Hour)
 			operations.ConfigureAdmission(proxy)
 			mux := http.NewServeMux()
-			httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+			httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 			post := func() *httptest.ResponseRecorder {
 				var body bytes.Buffer
 				form := multipart.NewWriter(&body)

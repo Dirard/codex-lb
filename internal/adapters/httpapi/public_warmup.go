@@ -67,7 +67,7 @@ func (h *CodexOperationsHandler) publicWarmup(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	options := operationOptions(r, key.ID)
+	options := h.operationOptions(r, key.ID)
 	options.SessionID, options.TurnState, options.ConversationID = "", "", ""
 	summary, err := h.ops.PublicWarmup(r.Context(), options, mode)
 	if err != nil {

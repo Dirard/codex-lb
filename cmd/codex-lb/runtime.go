@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -85,6 +86,12 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		ResponseHeaderTimeout: 60 * time.Second, ExpectContinueTimeout: time.Second,
 		MaxIdleConns: 128, MaxIdleConnsPerHost: 64, MaxConnsPerHost: capacity.UpstreamConnsPerHost,
 		IdleConnTimeout: 90 * time.Second,
+		// Resume TLS for WebSocket dials and new HTTP/1.1 connections.
+		TLSClientConfig: &tls.Config{ClientSessionCache: tls.NewLRUClientSessionCache(512)},
+		// SSE has no application ping: detect a dead multiplexed HTTP/2
+		// connection by transport liveness, not by model progress.
+		HTTP2: &http.HTTP2Config{SendPingTimeout: 30 * time.Second, PingTimeout: 10 * time.Second,
+			WriteByteTimeout: 30 * time.Second, MaxReceiveBufferPerStream: 1 << 20},
 	}
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		// OAuth bodies and provider tokens must not follow a redirect to a new host.
@@ -178,7 +185,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		}
 		return price, err
 	})
-	httpapi.RegisterCodexOperationRoutes(proxyMux, data.store, operations)
+	httpapi.RegisterCodexOperationRoutes(proxyMux, data.store, operations, cfg.trusted)
 	native := application.NewNativeAPIService(data.store, adapter, adapter, proxy)
 	native.ConfigureAdmission(proxy)
 	native.ConfigureDiagnostics(proxy.Diagnostics)

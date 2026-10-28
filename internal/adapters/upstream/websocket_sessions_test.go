@@ -197,13 +197,13 @@ func TestRequiredCapabilityRejectsPendingOrdinaryUpstreamSocket(t *testing.T) {
 	target.SessionID = "pending-session"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ordinary, _, err := adapter.sessions.acquire(ctx, target, "", server.Client())
+	ordinary, _, err := adapter.sessions.acquire(ctx, target, "", server.Client(), websocketReuseFence{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer adapter.sessions.release(ordinary, false, "", true)
 	target.RequiredCapability = true
-	_, _, err = adapter.sessions.acquire(ctx, target, "", server.Client())
+	_, _, err = adapter.sessions.acquire(ctx, target, "", server.Client(), websocketReuseFence{})
 	var failure *Error
 	if !errors.As(err, &failure) || failure.Code != "capability_routing_unavailable" {
 		t.Fatalf("pending ordinary socket was reused: %v", err)
@@ -228,7 +228,7 @@ func TestRequiredCapabilityRetirementWaitsForPendingWork(t *testing.T) {
 	target.RequiredCapability = true
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	entry, _, err := adapter.sessions.acquire(ctx, target, "", server.Client())
+	entry, _, err := adapter.sessions.acquire(ctx, target, "", server.Client(), websocketReuseFence{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@ func TestCompactRoutesTrimBeforeFileOwnershipAndAccounting(t *testing.T) {
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	standalone := httptest.NewServer(mux)
 	defer standalone.Close()
 	old := `{"role":"assistant","content":[{"type":"input_text","text":"` + strings.Repeat("x", 500_000) + `"},{"type":"input_file","file_id":"old-file"}]}`

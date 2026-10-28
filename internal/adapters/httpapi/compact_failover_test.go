@@ -131,7 +131,7 @@ func TestCompactQuotaFailoverOnAuthenticatedRoutes(t *testing.T) {
 			operations.ConfigureAccountSelection(proxy)
 			proxy.ConfigureCompaction(operations)
 			mux := http.NewServeMux()
-			httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+			httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 			compact := httptest.NewServer(mux)
 			defer compact.Close()
 			anchor := ""
@@ -305,7 +305,7 @@ func TestCompactDoesNotRetryNonQuotaUnsafeHistoryOrAccountingFailure(t *testing.
 			operations.ConfigureAdmission(proxy)
 			operations.ConfigureAccountSelection(proxy)
 			mux := http.NewServeMux()
-			httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+			httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 			server := httptest.NewServer(mux)
 			defer server.Close()
 			anchor := ""
