@@ -417,15 +417,14 @@ func readOperationJSON(w http.ResponseWriter, r *http.Request, lease *bodyLease,
 // readOperationBody reads an operation body as sent (operations do not decode
 // Content-Encoding), charged to lease like a Responses body.
 func readOperationBody(w http.ResponseWriter, r *http.Request, lease *bodyLease, maximum int64) ([]byte, error) {
-	prepaid, err := lease.admitDeclared(r, maximum)
-	if err != nil {
+	if _, err := lease.admitDeclared(r, maximum); err != nil {
 		return nil, err
 	}
 	source := http.MaxBytesReader(w, r.Body, maximum)
 	if r.ContentLength >= 0 {
 		return readDeclaredBody(source, r.ContentLength)
 	}
-	return readChargedBody(&chargedReader{source: source, lease: lease, prepaid: prepaid}, maximum)
+	return readChargedBody(&chargedReader{source: source, lease: lease}, maximum)
 }
 
 func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease, requireModel bool) (application.CodexTranscriptionRequest, error) {
