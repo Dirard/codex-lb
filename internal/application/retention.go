@@ -180,7 +180,9 @@ func (s *RetentionService) thinningTask(ctx context.Context, retained, fullResol
 		s.thinned = retained.Truncate(time.Hour)
 	}
 	return retentionTask{name: "quota_history_thinning", step: func(ctx context.Context) (int, bool, error) {
-		if s.thinned.IsZero() || !s.thinned.Before(fullResolution) {
+		// Chunks are millisecond-aligned like the stored timestamps; comparing
+		// full-precision times would leave an empty [x, x) final chunk.
+		if s.thinned.IsZero() || s.thinned.UnixMilli() >= fullResolution.UnixMilli() {
 			return 0, false, nil
 		}
 		end := min(s.thinned.Add(time.Hour).UnixMilli(), fullResolution.UnixMilli())
@@ -192,7 +194,7 @@ func (s *RetentionService) thinningTask(ctx context.Context, retained, fullResol
 		if n < RetentionBatch {
 			s.thinned = chunkEnd
 		}
-		return n, s.thinned.Before(fullResolution), nil
+		return n, s.thinned.UnixMilli() < fullResolution.UnixMilli(), nil
 	}}, nil
 }
 
