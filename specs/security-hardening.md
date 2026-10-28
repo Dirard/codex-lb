@@ -389,3 +389,4 @@ None blocking. The administrator generates the release signing key, embeds its p
 - 2026-10-28: Password re-entry failures answer 403 `reauthentication_required` rather than 401 so the dashboard's unauthorized handler does not end a valid session on a mistyped password.
 - 2026-10-28: Model-source egress is enforced by marking the context in `provider.beginSource` (the single admission point of all four source protocols) and wrapping the runtime transport's dial and proxy functions; this is the only edit in the provider and runtime wiring zones besides passing `cfg.apiConfig` and calling `Server.Prepare`.
 - 2026-10-28: Verification: `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -count=1 ./...`, race tests of touched packages, dashboard lint/typecheck/vitest, strict OpenSpec validation.
+- 2026-10-28: SEC-4 implemented by `specs/request-body-budget.md` (shared request-body budget with a per-key share).

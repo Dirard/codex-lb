@@ -1513,6 +1513,9 @@
   "settings.capacity.memory": "Process memory, MiB",
   "settings.capacity.goMemoryLimit": "Go memory limit",
   "settings.capacity.goHeap": "Go heap",
+  "settings.capacity.bodies": "Request-body memory",
+  "settings.capacity.bodyKeyLimit": "Request-body limit per key",
+  "settings.capacity.bodyRejections": "Refused request bodies",
   "settings.capacity.upstream": "Upstream sessions",
   "settings.capacity.sqliteReaders": "SQLite readers",
   "settings.capacity.unset": "not set",
@@ -1521,6 +1524,8 @@
   "settings.capacity.overrides.memory_limit": "memory limit",
   "settings.capacity.overrides.max_generations": "generations",
   "settings.capacity.overrides.max_client_websockets": "client WebSockets",
+  "settings.capacity.overrides.body_memory_budget": "request-body budget",
+  "settings.capacity.overrides.body_memory_key_share": "per-key request-body share",
   "settings.capacity.loading": "Loading capacity…",
   "settings.capacity.loadFailed": "Could not load runtime capacity"
 }

@@ -1513,6 +1513,9 @@
   "settings.capacity.memory": "进程内存，MiB",
   "settings.capacity.goMemoryLimit": "Go 内存限制",
   "settings.capacity.goHeap": "Go 堆",
+  "settings.capacity.bodies": "请求体内存",
+  "settings.capacity.bodyKeyLimit": "每个密钥的请求体上限",
+  "settings.capacity.bodyRejections": "被拒绝的请求体",
   "settings.capacity.upstream": "上游会话",
   "settings.capacity.sqliteReaders": "SQLite 读取连接",
   "settings.capacity.unset": "未设置",
@@ -1521,6 +1524,8 @@
   "settings.capacity.overrides.memory_limit": "内存限制",
   "settings.capacity.overrides.max_generations": "生成",
   "settings.capacity.overrides.max_client_websockets": "客户端 WebSocket",
+  "settings.capacity.overrides.body_memory_budget": "请求体预算",
+  "settings.capacity.overrides.body_memory_key_share": "每个密钥的请求体份额",
   "settings.capacity.loading": "正在加载容量…",
   "settings.capacity.loadFailed": "无法加载运行时容量"
 }

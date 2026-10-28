@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/hostinfo"
+	"codex-lb/internal/adapters/httpapi"
 	registry "codex-lb/internal/adapters/metrics"
 )
 
 // registerGauges exposes load against the capacity plan, process memory,
 // account states and database size. Collectors run only at scrape time.
-func (r *runtime) registerGauges(responses interface{ ClientWebSockets() (int, int) }) {
+func (r *runtime) registerGauges(responses interface{ ClientWebSockets() (int, int) }, bodies *httpapi.BodyBudget) {
 	one := func(value float64) []registry.Sample { return []registry.Sample{{Value: value}} }
 	r.metrics.Gauge("codex_lb_build_info", "Build version of the running server.", func() []registry.Sample {
 		return []registry.Sample{{Labels: map[string]string{"version": version}, Value: 1}}
@@ -45,6 +46,15 @@ func (r *runtime) registerGauges(responses interface{ ClientWebSockets() (int, i
 	r.metrics.Gauge("codex_lb_client_websockets_limit", "Configured client WebSocket bound.", func() []registry.Sample {
 		_, limit := responses.ClientWebSockets()
 		return one(float64(limit))
+	})
+	r.metrics.Gauge("codex_lb_request_body_bytes", "Request-body bytes retained by in-flight proxy requests.", func() []registry.Sample {
+		return one(float64(bodies.Usage().UsedBytes))
+	})
+	r.metrics.Gauge("codex_lb_request_body_budget_bytes", "Configured request-body budget.", func() []registry.Sample {
+		return one(float64(bodies.Usage().LimitBytes))
+	})
+	r.metrics.Gauge("codex_lb_request_body_rejections", "Request bodies refused by the body budget since start.", func() []registry.Sample {
+		return one(float64(bodies.Usage().Rejected))
 	})
 	r.metrics.Gauge("codex_lb_process_resident_memory_bytes", "Resident set size of the server process.", func() []registry.Sample {
 		return one(float64(hostinfo.ResidentBytes()))

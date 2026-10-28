@@ -1513,6 +1513,9 @@
   "settings.capacity.memory": "프로세스 메모리, MiB",
   "settings.capacity.goMemoryLimit": "Go 메모리 한도",
   "settings.capacity.goHeap": "Go 힙",
+  "settings.capacity.bodies": "요청 본문 메모리",
+  "settings.capacity.bodyKeyLimit": "키별 요청 본문 한도",
+  "settings.capacity.bodyRejections": "거부된 요청 본문",
   "settings.capacity.upstream": "업스트림 세션",
   "settings.capacity.sqliteReaders": "SQLite 리더",
   "settings.capacity.unset": "설정 안 됨",
@@ -1521,6 +1524,8 @@
   "settings.capacity.overrides.memory_limit": "메모리 한도",
   "settings.capacity.overrides.max_generations": "생성",
   "settings.capacity.overrides.max_client_websockets": "클라이언트 WebSocket",
+  "settings.capacity.overrides.body_memory_budget": "요청 본문 예산",
+  "settings.capacity.overrides.body_memory_key_share": "키별 요청 본문 비율",
   "settings.capacity.loading": "용량 불러오는 중…",
   "settings.capacity.loadFailed": "런타임 용량을 불러오지 못했습니다"
 }

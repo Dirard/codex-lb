@@ -14,6 +14,14 @@ const (
 // 1 GiB VPS, the smallest supported production profile.
 const AssumedHostMemoryBytes int64 = 1 << 30
 
+// MaxRequestBodyBytes is the largest request body or WebSocket message a proxy
+// route accepts.
+const MaxRequestBodyBytes int64 = 32 << 20
+
+// DefaultBodyBudgetKeySharePct is the share of the request-body budget one API
+// key may hold unless the operator overrides it.
+const DefaultBodyBudgetKeySharePct = 50
+
 // HostResources describes what the process may use, not what the machine has:
 // cgroup limits win over physical memory.
 type HostResources struct {
@@ -31,6 +39,10 @@ type CapacityOverrides struct {
 	MemoryLimitFromEnv  bool // GOMEMLIMIT was exported; MemoryLimitBytes holds its value
 	MaxGenerations      int
 	MaxClientWebSockets int
+	// BodyBudgetBytes overrides the request-body budget; 0 derives it.
+	BodyBudgetBytes int64
+	// BodyBudgetKeySharePct overrides the per-key share (1–100); 0 keeps the default.
+	BodyBudgetKeySharePct int
 }
 
 // CapacityPlan holds the effective runtime limits derived from a host.
@@ -40,10 +52,13 @@ type CapacityPlan struct {
 	SizingMemorySource string
 	// GoMemoryLimitBytes is the soft limit to apply; 0 leaves the runtime
 	// setting untouched (disabled, or already provided through GOMEMLIMIT).
-	GoMemoryLimitBytes   int64
-	MaxGenerations       int
-	MaxQueued            int
-	BodyReaders          int
+	GoMemoryLimitBytes int64
+	MaxGenerations     int
+	MaxQueued          int
+	// BodyBudgetBytes bounds request-body bytes retained by in-flight proxy
+	// requests across every route; BodyBudgetKeyBytes bounds one API key's part.
+	BodyBudgetBytes      int64
+	BodyBudgetKeyBytes   int64
 	ClientWebSockets     int
 	UpstreamWebSockets   int
 	UpstreamConnsPerHost int
@@ -118,7 +133,19 @@ func PlanCapacity(host HostResources, overrides CapacityOverrides) CapacityPlan 
 		}
 	}
 	plan.MaxQueued = min(1024, max(64, plan.MaxGenerations/4))
-	plan.BodyReaders = max(64, plan.MaxGenerations/4)
+	plan.BodyBudgetBytes = max(2*MaxRequestBodyBytes, plan.SizingMemoryBytes/8)
+	if overrides.BodyBudgetBytes > 0 {
+		plan.BodyBudgetBytes = overrides.BodyBudgetBytes
+		plan.Overridden = append(plan.Overridden, "body_memory_budget")
+	}
+	share := DefaultBodyBudgetKeySharePct
+	if overrides.BodyBudgetKeySharePct > 0 {
+		share = min(100, overrides.BodyBudgetKeySharePct)
+		plan.Overridden = append(plan.Overridden, "body_memory_key_share")
+	}
+	// An idle key can always send one maximum-size body.
+	keyBytes := plan.BodyBudgetBytes/100*int64(share) + plan.BodyBudgetBytes%100*int64(share)/100 // no overflow for huge overrides
+	plan.BodyBudgetKeyBytes = max(keyBytes, min(plan.BodyBudgetBytes, MaxRequestBodyBytes))
 	plan.UpstreamWebSockets = plan.MaxGenerations
 	plan.UpstreamConnsPerHost = plan.MaxGenerations
 	plan.SQLiteReaders = min(32, max(8, 2*host.CPUs+4))

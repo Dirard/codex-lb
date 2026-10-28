@@ -236,22 +236,30 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		}
 		return price, err
 	})
-	httpapi.RegisterCodexOperationRoutes(proxyMux, data.store, operations, cfg.trusted)
+	// One request-body budget is shared by every proxy route that reads a body.
+	bodies := httpapi.NewBodyBudget(capacity.BodyBudgetBytes, capacity.BodyBudgetKeyBytes)
+	operationRoutes := httpapi.NewCodexOperationsHandler(data.store, operations, cfg.trusted)
+	operationRoutes.ConfigureBodyBudget(bodies)
+	operationRoutes.RegisterRoutes(proxyMux)
 	native := application.NewNativeAPIService(data.store, adapter, adapter, proxy)
 	native.ConfigureAdmission(proxy)
 	native.ConfigureDiagnostics(proxy.Diagnostics)
 	native.ConfigurePrice(proxy.ResolvePrice)
-	httpapi.RegisterNativeAPIRoutes(proxyMux, data.store, native, cfg.trusted)
+	nativeRoutes := httpapi.NewNativeAPIHandler(data.store, native, cfg.trusted)
+	nativeRoutes.ConfigureBodyBudget(bodies)
+	nativeRoutes.RegisterRoutes(proxyMux)
 	httpapi.NewModelCatalogHandler(data.store, catalog).RegisterPublicRoutes(proxyMux)
-	responses := httpapi.NewProxyHandlerWithLimits(data.store, proxy, cfg.trusted, httpapi.ProxyHandlerLimits{BodyReaders: capacity.BodyReaders, ClientWebSockets: capacity.ClientWebSockets})
+	responses := httpapi.NewProxyHandlerWithLimits(data.store, proxy, cfg.trusted, httpapi.ProxyHandlerLimits{Bodies: bodies, ClientWebSockets: capacity.ClientWebSockets})
 	api.ConfigureRuntimeCapacity(httpapi.RuntimeCapacitySource{Plan: capacity, Usage: func() httpapi.CapacityUsage {
 		active, queued := proxy.AdmissionUsage()
 		sockets, _ := responses.ClientWebSockets()
-		return httpapi.CapacityUsage{ActiveGenerations: active, QueuedGenerations: queued, ClientWebSockets: sockets, ResidentBytes: hostinfo.ResidentBytes()}
+		body := bodies.Usage()
+		return httpapi.CapacityUsage{ActiveGenerations: active, QueuedGenerations: queued, ClientWebSockets: sockets,
+			BodyBytes: body.UsedBytes, BodyRejections: body.Rejected, ResidentBytes: hostinfo.ResidentBytes()}
 	}})
 	responses.QuotaHeaders = keyUsage.QuotaHeaders
 	responses.RegisterRoutes(proxyMux)
-	r.registerGauges(responses)
+	r.registerGauges(responses, bodies)
 	handler := api.Handler(proxyMux, webui.Handler())
 	mux := http.NewServeMux()
 	for _, path := range []string{"/health", "/health/live", "/health/startup", "/health/ready"} {
@@ -261,7 +269,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	r.server = &http.Server{Addr: cfg.listen, Handler: accessLog(r.requests.track(mux), logger, registry, cfg.trusted),
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 		BaseContext:       func(net.Listener) context.Context { return baseCtx },
-		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, IdleTimeout: 90 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: httpapi.RequestBodyTimeout, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 64 << 10,
 		// No whole-response WriteTimeout: SSE/WS may legitimately run for hours.
 	}
