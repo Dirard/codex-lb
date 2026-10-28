@@ -488,7 +488,7 @@ describe("FilterStateSchema", () => {
   it("parses optional string conversationId from URL params", () => {
     const state = {
       search: "",
-      timeframe: "all" as const,
+      timeframe: "24h" as const,
       accountIds: [],
       apiKeyIds: [],
       modelOptions: [],
@@ -504,7 +504,7 @@ describe("FilterStateSchema", () => {
   it("defaults conversationId to null when absent", () => {
     const state = {
       search: "",
-      timeframe: "all" as const,
+      timeframe: "24h" as const,
       accountIds: [],
       apiKeyIds: [],
       modelOptions: [],
@@ -997,7 +997,7 @@ describe("ConversationFilterStateSchema", () => {
       search: "x",
       limit: 25,
       offset: 0,
-      timeframe: "24h",
+      timeframe: "1d",
       accountId: ["acc_1"],
     });
 

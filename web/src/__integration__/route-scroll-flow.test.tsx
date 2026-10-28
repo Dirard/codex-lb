@@ -31,9 +31,9 @@ describe("route scroll flow integration", () => {
     setScrollY(1400);
     scrollTo.mockClear();
 
-    await user.click(screen.getAllByRole("link", { name: "Dashboard" })[0]);
+    await user.click(screen.getAllByRole("link", { name: "Overview" })[0]);
 
-    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     await waitFor(() => expect(window.scrollY).toBe(0));
     expect(scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
   });

@@ -1067,7 +1067,7 @@
   "nav.openMenu": "打开菜单",
   "nav.showEmails": "显示邮箱",
   "nav.hideEmails": "隐藏邮箱",
-  "routeRecovery.goToDashboard": "前往仪表盘",
+  "routeRecovery.goToDashboard": "前往概览",
   "routeRecovery.loadErrorDescription": "仪表盘更新或网络中断可能阻止了此页面加载。",
   "routeRecovery.loadErrorTitle": "无法加载此页面",
   "routeRecovery.notFoundDescription": "请求的仪表盘页面不存在或已移动。",

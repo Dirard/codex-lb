@@ -8,7 +8,7 @@ import type { FilterState } from "@/features/dashboard/schemas";
 const EMPTY_OPTIONS: RequestFiltersProps["accountOptions"] = [];
 const BASE_FILTERS: FilterState = {
   search: "",
-  timeframe: "all",
+  timeframe: "24h",
   accountIds: [],
   apiKeyIds: [],
   modelOptions: [],
@@ -30,7 +30,7 @@ function renderFilters(
     modelOptions: EMPTY_OPTIONS,
     statusOptions,
     onSearchChange: vi.fn(),
-    onTimeframeChange: vi.fn(),
+    onOptionsRequested: vi.fn(),
     onAccountChange: vi.fn(),
     onApiKeyChange: vi.fn(),
     onModelChange: vi.fn(),

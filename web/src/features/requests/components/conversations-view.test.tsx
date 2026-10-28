@@ -46,7 +46,7 @@ describe("ConversationsView", () => {
         HttpResponse.json({ error: { message: "Conversation list unavailable" } }, { status: 503 }),
       ),
     );
-    await result.queryClient.refetchQueries({ queryKey: ["dashboard", "conversations"] });
+    await result.queryClient.refetchQueries({ queryKey: ["requests", "conversations"] });
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("Conversation list unavailable");
@@ -71,7 +71,7 @@ describe("ConversationsView", () => {
         { client: queryClient },
         createElement(
           MemoryRouter,
-          { initialEntries: ["/dashboard?view=conversations&conversationTimeframe=7d"] },
+          { initialEntries: ["/requests?view=conversations&timeframe=7d"] },
           children,
         ),
       );

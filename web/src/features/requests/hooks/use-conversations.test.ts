@@ -53,7 +53,7 @@ describe("useConversations", () => {
     const queryClient = createTestQueryClient();
     const wrapper = createWrapper(
       queryClient,
-      "/dashboard?view=conversations&conversationSearch=opencode&conversationLimit=10&conversationOffset=20&conversationTimeframe=30d",
+      "/dashboard?view=conversations&conversationSearch=opencode&conversationLimit=10&conversationOffset=20&timeframe=30d",
     );
 
     const { result } = renderHook(() => useConversations({ enabled: true }), {
@@ -70,7 +70,7 @@ describe("useConversations", () => {
     });
 
     const query = queryClient.getQueryCache().findAll({
-      queryKey: ["dashboard", "conversations"],
+      queryKey: ["requests", "conversations"],
     })[0];
     const key = query?.queryKey as
       | [string, string, { search: string; limit: number; offset: number; timeframe: string }]
@@ -253,7 +253,7 @@ describe("useConversations", () => {
     const queryClient = createTestQueryClient();
     const wrapper = createWrapper(
       queryClient,
-      "/dashboard?view=conversations&conversationTimeframe=30d",
+      "/dashboard?view=conversations&timeframe=30d",
     );
     const { result } = renderHook(() => useConversations({ enabled: true }), {
       wrapper,
@@ -277,7 +277,7 @@ describe("useConversations", () => {
     const queryClient = createTestQueryClient();
     const wrapper = createWrapper(
       queryClient,
-      "/dashboard?view=conversations&conversationTimeframe=7d",
+      "/dashboard?view=conversations&timeframe=7d",
     );
     const { result } = renderHook(() => useConversations({ enabled: true }), {
       wrapper,
@@ -307,7 +307,7 @@ describe("useConversations", () => {
     const queryClient = createTestQueryClient();
     const wrapper = createWrapper(
       queryClient,
-      "/dashboard?view=conversations&conversationTimeframe=7d",
+      "/dashboard?view=conversations&timeframe=7d",
     );
     const { result } = renderHook(() => useConversations({ enabled: true }), {
       wrapper,
@@ -343,7 +343,7 @@ describe("useConversations", () => {
       const queryClient = createTestQueryClient();
       const wrapper = createWrapper(
         queryClient,
-        "/dashboard?view=conversations&conversationTimeframe=7d",
+        "/dashboard?view=conversations&timeframe=7d",
       );
       const { result } = renderHook(() => useConversations({ enabled: true }), {
         wrapper,
@@ -378,7 +378,7 @@ describe("useConversations", () => {
     });
 
     await waitFor(() => expect(result.current.filters.timeframe).toBe("30d"));
-    expect(locationSearch).toContain("conversationTimeframe=30d");
+    expect(locationSearch).toContain("timeframe=30d");
     expect(locationSearch).toContain("conversationOffset=0");
   });
 });

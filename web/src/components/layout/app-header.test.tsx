@@ -1,23 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppHeader } from "@/components/layout/app-header";
+import { SHELL_STATUS_QUERY_KEY } from "@/components/layout/shell-status";
 import { server } from "@/test/mocks/server";
-import { createAccountSummary, createDashboardSettings } from "@/test/mocks/factories";
+import { createShellStatus } from "@/test/mocks/overview-factories";
 
-function renderHeader(initialEntry = "/dashboard") {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-
+function renderHeader(initialEntry = "/settings", queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}>
@@ -27,109 +19,90 @@ function renderHeader(initialEntry = "/dashboard") {
   );
 }
 
+function mockShell(overrides: Parameters<typeof createShellStatus>[0]) {
+  server.use(http.get("/api/dashboard/status", () => HttpResponse.json(createShellStatus(overrides))));
+}
+
+function desktopNav() {
+  return screen.getAllByRole("navigation")[0];
+}
+
 describe("AppHeader", () => {
-  it("shows the summed Accounts reset-credit badge capped at 99+", async () => {
-    server.use(
-      http.get("/api/accounts", () =>
-        HttpResponse.json({
-          accounts: [
-            createAccountSummary({ availableResetCredits: 70 }),
-            createAccountSummary({ accountId: "acc-2", availableResetCredits: 40 }),
-          ],
-        }),
-      ),
-    );
+  it("shows the available reset credits from the shell status, capped at 99+", async () => {
+    mockShell({ availableResetCredits: 110 });
 
     renderHeader();
 
-    expect(await screen.findAllByText("99+")).not.toHaveLength(0);
+    expect(await within(desktopNav()).findByTestId("accounts-badge")).toHaveTextContent("99+");
   });
 
-  it("sums reset-credit badge across accounts and treats missing counts as zero", async () => {
-    server.use(
-      http.get("/api/accounts", () =>
-        HttpResponse.json({
-          accounts: [
-            createAccountSummary({ availableResetCredits: 5 }),
-            createAccountSummary({ accountId: "acc-2" }),
-            createAccountSummary({ accountId: "acc-3", availableResetCredits: null }),
-            createAccountSummary({ accountId: "acc-4", availableResetCredits: 3 }),
-          ],
-        }),
-      ),
-    );
+  it("shows accounts needing re-login before reset credits", async () => {
+    mockShell({ reauthRequiredAccounts: 2, availableResetCredits: 8 });
 
     renderHeader();
 
-    expect(await screen.findAllByText("8")).not.toHaveLength(0);
+    const badge = await within(desktopNav()).findByTestId("accounts-badge");
+    expect(badge).toHaveTextContent("2");
+    expect(badge).toHaveAttribute("title", "2 accounts need re-login");
   });
 
-  it("hides the Accounts reset-credit badge when no resets are available", async () => {
-    server.use(
-      http.get("/api/accounts", () =>
-        HttpResponse.json({
-          accounts: [
-            createAccountSummary({ availableResetCredits: 0 }),
-            createAccountSummary({ accountId: "acc-2", availableResetCredits: 0 }),
-          ],
-        }),
-      ),
-    );
+  it("hides the badge without re-login accounts and reset credits, or with reset badges disabled", async () => {
+    mockShell({ availableResetCredits: 5, showResetCreditBadges: false });
 
     renderHeader();
 
-    await screen.findByRole("link", { name: /Accounts/i });
-    expect(screen.queryByText("99+")).not.toBeInTheDocument();
-  });
-
-  it("hides the Accounts reset-credit badge when settings disable reset-credit badges", async () => {
-    server.use(
-      http.get("/api/accounts", () =>
-        HttpResponse.json({
-          accounts: [createAccountSummary({ availableResetCredits: 5 })],
-        }),
-      ),
-      http.get("/api/settings", () =>
-        HttpResponse.json(createDashboardSettings({ showResetCreditBadges: false })),
-      ),
-    );
-
-    renderHeader();
-
-    await screen.findByRole("link", { name: /Accounts/i });
-    await waitFor(() => {
-      expect(screen.queryByText("5")).not.toBeInTheDocument();
+    await screen.findAllByRole("link", { name: /Accounts/i });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
     });
+    expect(screen.queryByTestId("accounts-badge")).not.toBeInTheDocument();
   });
 
-  it("renders core destinations as top-level links and keeps Automations out of the pill bar", async () => {
+  it("lists the destinations in operator order with Automations in the bar", () => {
     renderHeader();
 
-    expect(await screen.findByRole("link", { name: /Dashboard/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Reports/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Accounts/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /APIs/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Settings/i })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Automations" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Advanced" })).toBeInTheDocument();
+    const links = within(desktopNav()).getAllByRole("link").map((link) => link.textContent);
+    expect(links).toEqual(["Overview", "Groups", "Accounts", "Keys", "Reports", "Automations", "Settings"]);
+    expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Codex LB/ })).toHaveAttribute("href", "/overview");
   });
 
-  it("reveals Automations after opening the Advanced menu", async () => {
-    const user = userEvent.setup();
-    renderHeader();
+  it("makes no request of its own on the overview, whose poll carries the shell status (R1)", async () => {
+    const requests: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      requests.push(new URL(request.url).pathname);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(SHELL_STATUS_QUERY_KEY, createShellStatus({ availableResetCredits: 3 }));
 
-    await user.click(screen.getByRole("button", { name: "Advanced" }));
+    renderHeader("/overview", queryClient);
 
-    expect(await screen.findByRole("menuitem", { name: "Automations" })).toBeInTheDocument();
+    expect(await within(desktopNav()).findByTestId("accounts-badge")).toHaveTextContent("3");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    server.events.removeAllListeners("request:start");
+    expect(requests).toEqual([]);
   });
 
-  it("marks the Advanced trigger active only while an advanced route is current", () => {
+  it("polls only the status endpoint on other pages, never the accounts or the readiness probe", async () => {
+    const requests: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      requests.push(new URL(request.url).pathname);
+    });
+
     renderHeader("/automations");
-    expect(screen.getByRole("button", { name: "Advanced" })).toHaveAttribute("data-active", "true");
+
+    await waitFor(() => expect(requests).toContain("/api/dashboard/status"));
+    server.events.removeAllListeners("request:start");
+    expect(requests).not.toContain("/api/accounts");
+    expect(requests).not.toContain("/health/ready");
+    expect(requests).not.toContain("/api/settings");
   });
 
-  it("keeps the Advanced trigger inactive on core routes", () => {
-    renderHeader("/dashboard");
-    expect(screen.getByRole("button", { name: "Advanced" })).toHaveAttribute("data-active", "false");
+  it("offers the global search", () => {
+    renderHeader();
+
+    expect(screen.getAllByRole("button", { name: "Search keys, groups and accounts" }).length).toBeGreaterThan(0);
   });
 });
