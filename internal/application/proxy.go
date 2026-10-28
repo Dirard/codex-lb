@@ -574,21 +574,47 @@ func (p *Proxy) acquire(ctx context.Context) (func(), error) {
 		defer p.admissionMu.Unlock()
 		select {
 		case <-draining:
-			<-p.streams
-			<-p.admitted
+			p.releaseSlotsLocked(true)
 			return nil, drainingError()
 		default:
 		}
-		return func() { <-p.streams; <-p.admitted }, nil
+		return func() { p.releaseSlots(true) }, nil
 	case <-draining:
-		<-p.admitted
+		p.releaseSlots(false)
 		return nil, drainingError()
 	case <-ctx.Done():
-		<-p.admitted
+		p.releaseSlots(false)
 		return nil, ctx.Err()
 	case <-timer.C:
-		<-p.admitted
+		p.releaseSlots(false)
 		return nil, &ProxyError{Code: "local_capacity_exceeded", Status: 503, Message: "Timed out waiting for local stream capacity"}
+	}
+}
+
+func (p *Proxy) releaseSlots(stream bool) {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	p.releaseSlotsLocked(stream)
+}
+
+// releaseSlotsLocked gives back one local admission's admission token and,
+// when stream is set, its stream token. While the peers' load wants more peer
+// tokens than this process holds, a released token stays in its channel as a
+// peer token instead of going to a local waiter, which would otherwise always
+// win against the non-blocking top-up in holdPeerSlotsLocked. The receives
+// never block: the channel still holds the caller's own token.
+func (p *Proxy) releaseSlotsLocked(stream bool) {
+	if stream {
+		if p.peerStreams < p.peerStreamsWanted {
+			p.peerStreams++
+		} else {
+			<-p.streams
+		}
+	}
+	if p.peerAdmitted < p.peerAdmittedWanted {
+		p.peerAdmitted++
+	} else {
+		<-p.admitted
 	}
 }
 

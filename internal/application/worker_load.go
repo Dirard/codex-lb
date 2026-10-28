@@ -81,11 +81,12 @@ func (p *Proxy) Load() WorkerLoad {
 // Globally, peer slots are held as tokens in the local stream and admission
 // channels: peer active work occupies stream slots, peer active plus queued
 // work occupies admission slots. Tokens are taken without blocking, so a full
-// channel holds fewer and the next call tops them up; released tokens hand
-// their slot to a waiting local admission at once. Per account, peer creates
-// and streams count against the account limits; peer key streams count against
-// API-key fair share, where keys waiting on a peer are active keys too. Every
-// change wakes waiting account admissions.
+// channel holds fewer; a local token released while fewer are held than wanted
+// becomes a peer token, and the next call tops up the rest. Released peer
+// tokens hand their slot to a waiting local admission at once. Per account,
+// peer creates and streams count against the account limits; peer key streams
+// count against API-key fair share, where keys waiting on a peer are active
+// keys too. Every change wakes waiting account admissions.
 func (p *Proxy) SetPeerLoad(peer WorkerLoad) {
 	streams := min(max(0, peer.Active), cap(p.streams))
 	admitted := cap(p.admitted)
@@ -98,9 +99,10 @@ func (p *Proxy) SetPeerLoad(peer WorkerLoad) {
 }
 
 // holdPeerSlotsLocked moves the peer tokens toward the wanted counts. Only this
-// method adds or removes peer tokens, under admissionMu; local holders remove
-// only tokens they added, so the channels always contain the peer tokens and
-// the receives below never block.
+// method removes peer tokens and, besides a local release turning its own
+// token into one (releaseSlotsLocked), adds them, always under admissionMu;
+// local holders remove only tokens they added, so the channels always contain
+// the peer tokens and the receives below never block.
 func (p *Proxy) holdPeerSlotsLocked() {
 	for p.peerStreams > p.peerStreamsWanted {
 		<-p.streams
