@@ -372,4 +372,3 @@ func TestCapabilityWebSocketBinaryFrameIsRejected(t *testing.T) {
 		t.Fatalf("binary frame reached provider or lacked typed error: %s %v calls=%d", payload, err, calls.Load())
 	}
 }
-
