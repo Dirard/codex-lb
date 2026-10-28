@@ -186,7 +186,7 @@ describe("RuntimeUpdateSettings rollback note", () => {
         }),
       ),
     );
-    renderWithProviders(<RuntimeUpdateSettings />);
+    renderWithProviders(<RuntimeUpdateSettings canWrite />);
     expect(await screen.findByText(/older database schema/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Roll back to go-v1.0.11" })).toBeDisabled();
   });
