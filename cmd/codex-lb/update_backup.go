@@ -121,3 +121,59 @@ func copyPrivateKey(source, target string) error {
 	}
 	return errors.Join(err, output.Close())
 }
+
+// RestoreBackup puts the snapshot recorded by the last Backup back in place of
+// the database while no worker runs. A newer version that migrated the
+// database and then failed leaves its WAL behind; it is removed first so it
+// can never be replayed onto the restored file.
+func (h *updateHost) RestoreBackup(ctx context.Context) error {
+	if h.current() != nil {
+		return errors.New("cannot restore beneath an active runtime")
+	}
+	root := filepath.Join(h.dataDir, "updates")
+	pointer, err := os.ReadFile(filepath.Join(root, "backup-current"))
+	name := string(pointer)
+	if err != nil || filepath.Base(name) != name || !strings.HasPrefix(name, "backup-") {
+		return errors.New("pre-update backup is missing")
+	}
+	source := filepath.Join(root, name, "codex-lb.sqlite3")
+	if info, err := os.Lstat(source); err != nil || !info.Mode().IsRegular() {
+		return errors.New("pre-update backup is missing or unsafe")
+	}
+	dbPath := filepath.Join(h.dataDir, "codex-lb.sqlite3")
+	lock, created, err := lockDatabase(dbPath)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if created {
+		return errors.New("runtime database is missing")
+	}
+	staged, err := os.CreateTemp(h.dataDir, ".restore-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(staged.Name())
+	input, err := os.Open(source)
+	if err != nil {
+		staged.Close()
+		return err
+	}
+	_, err = io.Copy(staged, input)
+	input.Close()
+	if err == nil {
+		err = staged.Sync()
+	}
+	if err = errors.Join(err, staged.Close(), ctx.Err()); err != nil {
+		return errors.New("cannot stage the pre-update backup")
+	}
+	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.New("cannot discard the failed version's journal")
+		}
+	}
+	if err := os.Rename(staged.Name(), dbPath); err != nil {
+		return errors.New("cannot restore the pre-update backup")
+	}
+	return syncUpdatePath(h.dataDir)
+}

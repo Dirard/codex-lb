@@ -113,6 +113,7 @@ export function RuntimeUpdateSettings() {
           {status.previousVersion ? (
             <p>{t("settings.runtime.previousVersion", { version: status.previousVersion })}</p>
           ) : null}
+          {status.rollbackNote ? <p className="text-xs text-muted-foreground">{status.rollbackNote}</p> : null}
           {status.releaseUrl ? (
             <a href={status.releaseUrl} target="_blank" rel="noreferrer" className="inline-block text-primary underline-offset-4 hover:underline">
               {t("settings.runtime.releaseNotes")}

@@ -22,6 +22,7 @@ export const RuntimeUpdateStatusSchema = z.object({
   unavailableReason: z.string().optional(),
   previousVersion: z.string().optional(),
   canRollback: z.boolean(),
+  rollbackNote: z.string().optional(),
   phase: z.string(),
   targetVersion: z.string().optional(),
   lastError: z.string().optional(),
