@@ -60,6 +60,7 @@ func TestDashboardMocksMatchGoRoutes(t *testing.T) {
 	server.archives = &application.ErrorArchives{}
 	server.firewall = &application.Firewall{}
 	server.capacity = &RuntimeCapacitySource{}
+	server.backups = &application.BackupService{}
 	outer := http.NewServeMux()
 	server.registerAuth(outer)
 	server.registerKeyReportSession(outer)
