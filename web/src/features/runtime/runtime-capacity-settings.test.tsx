@@ -24,13 +24,16 @@ describe("RuntimeCapacitySettings", () => {
     expect(screen.getByText("12 / 2,048")).toBeInTheDocument();
     expect(screen.getByText("40 / 16,384")).toBeInTheDocument();
     expect(screen.getByText("3.0 GiB")).toBeInTheDocument();
+    expect(screen.getByText("Request-body memory")).toBeInTheDocument();
+    expect(screen.getByText("24 MiB / 512 MiB")).toBeInTheDocument();
+    expect(screen.getByText("256 MiB")).toBeInTheDocument();
     expect(screen.getByText("All limits are derived automatically.")).toBeInTheDocument();
   });
 
   it("names operator overrides", async () => {
-    server.use(http.get("/api/runtime/capacity", () => HttpResponse.json({ ...createRuntimeCapacity(), overridden: ["max_generations"] })));
+    server.use(http.get("/api/runtime/capacity", () => HttpResponse.json({ ...createRuntimeCapacity(), overridden: ["max_generations", "body_memory_budget"] })));
     renderCard();
-    expect(await screen.findByText("Set by the operator: generations")).toBeInTheDocument();
+    expect(await screen.findByText("Set by the operator: generations, request-body budget")).toBeInTheDocument();
   });
 
   it("hides itself on servers without the capacity endpoint", async () => {
