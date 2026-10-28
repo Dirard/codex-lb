@@ -14,7 +14,7 @@ import (
 // filters, groups and orders them by, so facets, totals and pages read the
 // index alone. Partial: ordinary reservations and their settlement never
 // touch it. Additive: one index older code ignores; building it reads the
-// reservations table once (about 0.2 s for 1.6 M rows, 74 k of them pending).
+// reservations table once (0.16-0.24 s warm, 0.31-0.40 s cold for 1.6 M rows).
 const schemaV43 = `
 CREATE INDEX idx_usage_reservations_pending ON usage_reservations(account_id,account_generation,api_key_id,model,created_at,id)
  WHERE status='reserved' AND needs_reconciliation=1;
