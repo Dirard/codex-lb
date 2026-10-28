@@ -54,7 +54,7 @@ The overview, reports, key reports, key usage and trends, request-log options an
 Exact metrics SHALL equal the raw evaluation; daily medians SHALL be within 1/64 relative plus rounding; costs SHALL be integer-microdollar sums in both paths.
 
   R7:
-When the tail or journal exceeds 20 000 rows, or the layout or status does not match, reads SHALL use the raw path.
+When the tail or journal exceeds 20 000 rows, or the layout, status, cursor anchor or import watermark does not match, reads SHALL use the raw path; so SHALL request-log search and conversation filters and conversation reads while removals of conversation events are pending.
 
 ### 3. Verify and measure
 
@@ -74,7 +74,7 @@ On a production copy the seven-day overview, a thirty-day report and request-log
 2. [x] Histogram codec; raw path uses histogram medians and integer costs (R6).
 3. [x] Migration 42, triggers and state; floor tests (R1, R3).
 4. [x] Folder, rebuild, verifier and service wiring; fold, crash, late-event, rowid-reuse and two-store tests (R2, R4; R8 table check, its read-path comparisons land with item 5).
-5. [ ] Window planner, sources and rollup readers for every endpoint; randomized equivalence tests (R5–R7).
+5. [x] Window planner, sources and rollup readers for every endpoint; randomized equivalence tests (R5–R7).
 6. [ ] Benchmarks and production-copy latency run (R9).
 7. [ ] Gates, PR, CI, release.
 
@@ -87,3 +87,4 @@ None blocking; Q1–Q7 of the design are answered during implementation or recor
 - 2026-10-28: Owner decisions D1–D7 are recorded in the design: approximate histogram medians, integer-microdollar costs, exact fractional zones through raw split hours, current-membership group attribution, at most one fold interval of first/last staleness, rebuild on verifier mismatch, long-range legacy rollups later.
 - 2026-10-28: Capture by a cursor-advancing folder plus update/delete triggers instead of updating rollups in settlement: an older worker inserts during an update overlap without rollup code, and triggers in the schema run in every version's transactions.
 - 2026-10-28: No rollup switch setting: the raw fallback and the verifier cover failures without a new operator setting.
+- 2026-10-28: Conversation reads use the raw path while removals of conversation events are pending, instead of showing first and last up to one fold interval stale (stricter than D5): the fallback lasts about one fold interval after retention or account deletion and keeps every reader exact.

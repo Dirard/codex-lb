@@ -16,11 +16,15 @@ Admin report responses SHALL be computed with a number of database statements in
 
 ### Requirement: Analytics read incremental usage rollups
 
-The dashboard overview, admin reports, key reports, key usage and trends, request-log filter options and totals, and the conversation list and details SHALL be computed from hour-bucket rollups combined, in one read snapshot, with journal rows not yet folded, events after the fold cursor and raw events of partial hours, so their cost is bounded by the rollup rows of the window rather than by the number of events. When the unfolded tail or journal exceeds its bound, or the rollup layout or status does not match, they SHALL use the raw-event evaluation, which SHALL return identical results.
+The dashboard overview, admin reports, key reports, key usage and trends, request-log filter options and totals, and the conversation list and details SHALL be computed from hour-bucket rollups combined, in one read snapshot, with journal rows not yet folded, events after the fold cursor and raw events of partial hours, so their cost is bounded by the rollup rows of the window rather than by the number of events. When the unfolded tail or journal exceeds its bound, or the rollup layout, status, cursor anchor or import watermark does not match, they SHALL use the raw-event evaluation, which SHALL return identical results; request-log search and conversation filters, and conversation reads while removals of conversation events are pending, SHALL use it too.
 
 #### Scenario: Seven-day dashboard on production volume
 - **WHEN** the dashboard overview is requested for seven days with about 200 thousand events in that window
 - **THEN** it reads rollup rows of the window and the raw events of at most four partial hours
+
+#### Scenario: Retention removed conversation events
+- **WHEN** journal rows that remove events of a conversation are not folded yet
+- **THEN** the conversation list and details come from the raw evaluation, with exact first and last requests
 
 #### Scenario: Folder behind after an upgrade
 - **WHEN** existing events have not been backfilled yet

@@ -10,9 +10,9 @@
 
 ## 3. Read paths
 
-- [ ] 3.1 Window planner and snapshot sources (rollups, journal, tail, edges, split hours).
-- [ ] 3.2 Rollup readers for dashboard traffic, reports, key reports, key usage and trends, request-log options and totals, conversations list and details.
-- [ ] 3.3 Randomized equivalence tests rollup versus raw across filters, time zones and fold states.
+- [x] 3.1 Window planner and snapshot sources (rollups, journal, tail, edges, split hours).
+- [x] 3.2 Rollup readers for dashboard traffic, reports, key reports, key usage and trends, request-log options and totals, conversations list and details.
+- [x] 3.3 Randomized equivalence tests rollup versus raw across filters, time zones and fold states.
 
 ## 4. Verification
 
