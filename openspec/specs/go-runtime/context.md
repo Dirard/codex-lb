@@ -634,22 +634,21 @@ pool size is not assumed. Slots are acquired only after auth and released after
 failed upgrades/disconnect/drain. Existing key/account generation controls and
 120-second idle cleanup remain unchanged.
 
-Idle readers still occupy neither HTTP body-reader slots nor generation admission.
+Idle readers still occupy neither request-body budget nor generation admission.
 To keep a larger empty-connection pool from multiplying queued body memory, each
 reader first accepts only a 4 KiB prefix (plus one size-detection byte). Larger
-messages share twice the configured active-plus-queued response budget (1280 by
-default), allowing the current and one staged next message through reading,
-queueing and request handling. There is no new aggregate payload-byte cutoff:
-64 MiB would already reject otherwise permitted 256 KiB contexts at 256 clients.
-The existing 32 MiB per-message validation remains. Short controls can still
-cancel work when body permits are full. Actual count exhaustion discards only
-the excess message under that same size limit and reports local capacity without
-closing the socket or cancelling its active turn. Failed reads and oversized
-messages still close the connection. This pressure is not provider quota proof
-and cannot authorize replay. Input counts are not a hard total-RSS bound: buffer
-growth, parsing, history and outputs have additional workload-dependent costs.
-Active-generation and upstream-socket limits are unchanged. No new setting or
-schema migration is needed. Large contexts still require the sizing checks below.
+messages are charged by bytes to the request-body budget shared with every HTTP
+proxy route (releases up to go-v1.1.1 counted 1280 permits instead),
+allowing the current and one staged next message through reading, queueing and
+request handling. The existing 32 MiB per-message validation remains. Short
+controls can still cancel work when the budget is full. Budget exhaustion
+discards only the excess message under that same size limit and reports local
+capacity without closing the socket or cancelling its active turn. Failed reads
+and oversized messages still close the connection. This pressure is not provider
+quota proof and cannot authorize replay. The budget counts body bytes, not total
+RSS: buffer growth, parsing, history and outputs have additional
+workload-dependent costs. Active-generation and upstream-socket limits are
+unchanged. Large contexts still require the sizing checks below.
 
 An October 9 isolated run of the socket-capacity change held 4096 idle native
 WebSockets on one synthetic key beside 256 HTTP/SSE Responses streams,
@@ -785,3 +784,7 @@ A verified online snapshot (`VACUUM INTO`, `quick_check`, schema and key validat
 ## Dashboard trust model (go-v1.1.0)
 
 No request is trusted for being "local". First setup needs a one-time bootstrap token (environment or `<data-dir>/dashboard-bootstrap-token`), keyless proxy access needs an explicit `--unauthenticated-client` network resolved through `--trusted-proxy`, Secure cookies and HSTS follow `--public-origin`, a configured TOTP is always required, sessions are revocable with a 12-hour idle timeout and a 30-day cap, and model sources may not reach private addresses without `--allow-private-model-sources`. Operator migration notes: [harden-dashboard-trust-and-update-integrity](../../changes/archive/2026-10-28-harden-dashboard-trust-and-update-integrity/context.md).
+
+## Request-body memory budget
+
+Request bodies on every proxy route — Responses over HTTP and WebSocket, Chat Completions, embeddings, compact, Codex control, files, transcription, realtime call creation and public warmup — share one budget counted in bytes, replacing the HTTP body-reader count and the WebSocket large-body permits (audit NET-14, SEC-4). A declared length is charged before reading; chunked, gzip and WebSocket bodies are charged while read; the charge lasts until the request ends. The budget is one eighth of sizing memory (128 MiB on 1 GiB, ~486 MiB on a 4 GB VPS) with a 50% per-key share; `--body-memory-budget` and `--body-memory-key-share` override it. Exhaustion returns 503 `local_capacity_exceeded` with Retry-After. Measured peak RSS is about 6× the retained body bytes, so a full budget reaches roughly the 75% Go soft limit: a 200 × 4 MiB burst on the 1 GiB profile peaked at 816 MiB instead of 2624 MiB, a 400 × 4 MiB burst on the 4 GiB profile at 3064 MiB instead of 5244 MiB, and the approved 512 × 256 KiB profile is still fully admitted. Details and tuning: [budget-request-body-memory](../../changes/archive/2026-10-28-budget-request-body-memory/context.md).

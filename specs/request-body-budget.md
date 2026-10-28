@@ -61,9 +61,9 @@ Files And Functions:
 Tests:
  - description: each tier and the assumed 1 GiB host get sizing/8 with the 64 MiB floor and a 50% key share
    requirements: R1
- - description: overrides win and are listed; a 10% share is floored at 32 MiB; 100% equals the budget
+ - description: overrides win and are listed; a 5% share is floored at 32 MiB; 100% equals the budget
    requirements: R1, R2
- - description: flags reject a budget below 32 MiB and shares outside 1–100
+ - description: flags parse `512MiB` and `25%`, reject a budget below 32 MiB and shares outside 1–100, and the plan lists both overrides
    requirements: R2
 
 ### 2. Admit a request body against the shared budget
@@ -118,7 +118,7 @@ internal/adapters/httpapi/body_budget_test.go
    requirements: R5, R6, R7
  - description: partial failure — an upstream error, a client cancellation and a validation failure on admitted requests all release their charge exactly once while a concurrent admitted request keeps its own
    requirements: R7
- - description: Chat Completions and transcription bodies are charged and refused at the limit
+ - description: Chat Completions and transcription (declared and chunked multipart) bodies are charged and refused at the limit
    requirements: R4, R6
  - description: per-key share on the route — one key at its share gets 503 while another key's request is served
    requirements: R6, R8
@@ -168,24 +168,24 @@ Files And Functions:
 Tests:
  - description: capacity route returns the budget and live usage for administrators
    requirements: R13
- - description: runtime wiring shares one budget between Responses, native and operations routes
+ - description: runtime wiring shares one budget — a declared Responses body that has not arrived refuses compact, Chat Completions and transcription bodies until its client disconnects (cmd/codex-lb/capacity_test.go)
    requirements: R13
  - description: dashboard card renders the body-memory row and override names
    requirements: R14
 
 ## Implementation checklist
 
-1. [-] Solution spec and OpenSpec change `budget-request-body-memory` (proposal, tasks, delta amending the three requirements, new requirement).
-2. [ ] Domain plan: `MaxRequestBodyBytes`, `BodyBudgetBytes`, `BodyBudgetKeyBytes`, overrides, remove `BodyReaders`; table tests (R1–R3).
-3. [ ] `BodyBudget`, `bodyLease`, `chargedReader` with unit tests (R5, R7–R9).
-4. [ ] Responses HTTP and native routes on the budget; identity bodies read into an exact buffer (R4–R7).
-5. [ ] Operations and public warmup routes, transcription multipart on the budget (R4–R7).
-6. [ ] WebSocket frames charged by bytes; remove `websocketBodies`; rewrite frame tests (R10–R12).
-7. [ ] Flags, plan wiring, startup log, capacity API, gauges (R2, R13, R14).
-8. [ ] Dashboard schema, card row, mocks, locales and test (R14).
-9. [ ] Route-level tests: compact burst, chunked/gzip mid-read refusal, partial failure release, per-key share, shared WebSocket/HTTP budget, Chat and transcription (R4–R8, R10).
-10. [ ] Measure before/after peak RSS for a burst of large bodies with the release binary and a loopback source; record in the decision log and OpenSpec context.
-11. [ ] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync delta into `openspec/specs/go-runtime/`, archive the change, amend `specs/adaptive-capacity.md`.
+1. [x] Solution spec and OpenSpec change `budget-request-body-memory` (proposal, tasks, delta amending the three requirements, new requirement).
+2. [x] Domain plan: `MaxRequestBodyBytes`, `BodyBudgetBytes`, `BodyBudgetKeyBytes`, overrides, remove `BodyReaders`; table tests (R1–R3).
+3. [x] `BodyBudget`, `bodyLease`, `chargedReader` with unit tests (R5, R7–R9).
+4. [x] Responses HTTP and native routes on the budget; identity bodies read into an exact buffer (R4–R7).
+5. [x] Operations and public warmup routes, transcription multipart on the budget (R4–R7).
+6. [x] WebSocket frames charged by bytes; remove `websocketBodies`; rewrite frame tests (R10–R12).
+7. [x] Flags, plan wiring, startup log, capacity API, gauges (R2, R13, R14).
+8. [x] Dashboard schema, card row, mocks, locales and test (R14).
+9. [x] Route-level tests: compact burst, chunked/gzip mid-read refusal, partial failure release, per-key share, shared WebSocket/HTTP budget, Chat and transcription (R4–R8, R10).
+10. [x] Measure before/after peak RSS for a burst of large bodies with the release binary and a loopback source; record in the decision log and OpenSpec context.
+11. [x] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync delta into `openspec/specs/go-runtime/`, archive the change, amend `specs/adaptive-capacity.md`.
 
 Deferred:
 - Realtime live WebSocket messages (4 MiB, relayed one at a time) stay outside the budget until realtime sockets join a shared socket budget (NET-22).
@@ -196,9 +196,11 @@ None blocking.
 
 ## Decision log
 
-- 2026-10-28: One eighth of sizing memory: the 1 GB host keeps the measured 512 × 256 KiB contexts (128 MiB) inside the budget, and with the observed 4–5× retention per body byte (prepared payload, upstream encoding, transport buffers) a full budget stays under the 75% Go soft limit. The 64 MiB floor keeps two maximum-size bodies admissible on small hosts.
+- 2026-10-28: One eighth of sizing memory: the 1 GB host keeps the measured 512 × 256 KiB contexts (128 MiB) inside the budget, and the measured peak RSS is about 6× the retained body bytes (roughly three live copies — body, prepared payload, upstream encoding — doubled by the Go GC goal), so a full budget drives RSS to about the 75% Go soft limit and not past host memory. The 64 MiB floor keeps two maximum-size bodies admissible on small hosts.
 - 2026-10-28: Per-key share defaults to 50% and is a flag, not a runtime setting: it needs no schema change, is visible in the capacity plan, and 100 disables it. Keyless local traffic (one internal principal for all local clients) is exempt, as in stream fair share.
 - 2026-10-28: Rejection instead of waiting: the existing `local_capacity_exceeded` + `Retry-After` contract already tells clients to retry; waiting would hold connections and bodies outside the budget.
 - 2026-10-28: The charge is held until the handler returns, not until the body is read: the body stays referenced for failover, compaction and accounting until the request ends, and the WebSocket path already held permits until the turn ended.
 - 2026-10-28: Charging bytes read, not buffer capacity: the declared-length path allocates exactly; growth slack on chunked/gzip/WebSocket reads is part of the documented per-byte multiplier.
 - 2026-10-28: Realtime live messages deferred with NET-22 (see Deferred).
+- 2026-10-28: Measured with the real binaries (before = go-v1.1.1 `d18a3257`, after = this branch), a loopback Z.AI source whose stub reads each body and holds it 5 s, 4 keys, non-stream `/v1/responses`, burst started at once, idle RSS 24 MiB, peak = VmHWM. 1 GiB profile (`--memory-limit 768MiB`), 200 × 4 MiB: before 200 admitted, 2624 MiB; after 32 admitted, 168 × 503 `local_capacity_exceeded`, 816 MiB. 4 GiB profile (`--memory-limit 3GiB`), 400 × 4 MiB: before 303 OK and 97 × 503 `usage_settlement_failed`, 5244 MiB; after 128 admitted, 272 refused, 3064 MiB. The approved 512 × 256 KiB profile on 1 GiB: 512/512 both, 769 → 786 MiB (noise). Synthetic workload, not a production SLA.
+- 2026-10-28: Validation: `make check` (vet, golangci-lint, test, race, govulncheck, openspec), `make web-check`, `make web-deps build`, `make test-web-contract`. `specs/adaptive-capacity.md` R5 amended; NET-14/SEC-4 deferral notes in `specs/upstream-transport-reliability.md` and `specs/security-hardening.md` point here.

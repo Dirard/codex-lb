@@ -59,7 +59,7 @@ Requirements:
 Limits SHALL follow memory tiers of usable memory: below 768 MiB — 256 generations and 2048 client WebSockets; below 1.75 GiB — 512 and 4096 (the measured 1 GB defaults); below 3.5 GiB — 1024 and 8192; below 7 GiB — 2048 and 16384; otherwise 4096 and 32768.
 
   R5:
-The queue SHALL be a quarter of the generation bound (minimum 64, maximum 1024); concurrently read HTTP bodies a quarter of the generation bound (minimum 64); upstream WebSocket sessions and upstream connections per host SHALL equal the generation bound; SQLite readers SHALL be `2×CPU+4` within 8…32. WebSocket large-body permits stay twice the admission capacity.
+The queue SHALL be a quarter of the generation bound (minimum 64, maximum 1024); upstream WebSocket sessions and upstream connections per host SHALL equal the generation bound; SQLite readers SHALL be `2×CPU+4` within 8…32. Request bodies on every proxy route share a byte budget of one eighth of the sizing memory (see `specs/request-body-budget.md`), which replaced the count-based body readers and WebSocket large-body permits.
 
   R6:
 Client WebSockets SHALL be reduced so that sockets plus twice the generation bound plus 256 reserved descriptors fit the descriptor limit, never below 64.
@@ -68,18 +68,18 @@ Client WebSockets SHALL be reduced so that sockets plus twice the generation bou
 The Go soft memory limit SHALL default to 75% of usable memory. An exported `GOMEMLIMIT` takes precedence and its value is used for sizing; `--memory-limit off` leaves the runtime limit unset; `--memory-limit <size>` sets it explicitly and sizes from it.
 
   R8:
-`--max-generations` and `--max-client-websockets` SHALL override the derived values; queue, body readers, upstream sessions and connections are derived from the effective generation bound. Invalid values SHALL fail startup naming the flag.
+`--max-generations` and `--max-client-websockets` SHALL override the derived values; queue, upstream sessions and connections are derived from the effective generation bound. Invalid values SHALL fail startup naming the flag.
 
 Data:
 tiers:
 
-| usable memory | generations | queue | body readers | client WebSockets |
-|---|---|---|---|---|
-| < 768 MiB | 256 | 64 | 64 | 2048 |
-| < 1.75 GiB | 512 | 128 | 128 | 4096 |
-| < 3.5 GiB | 1024 | 256 | 256 | 8192 |
-| < 7 GiB | 2048 | 512 | 512 | 16384 |
-| ≥ 7 GiB | 4096 | 1024 | 1024 | 32768 |
+| usable memory | generations | queue | client WebSockets |
+|---|---|---|---|
+| < 768 MiB | 256 | 64 | 2048 |
+| < 1.75 GiB | 512 | 128 | 4096 |
+| < 3.5 GiB | 1024 | 256 | 8192 |
+| < 7 GiB | 2048 | 512 | 16384 |
+| ≥ 7 GiB | 4096 | 1024 | 32768 |
 
 Files And Functions:
  - planned: internal/domain/capacity.go#PlanCapacity - pure function
@@ -140,3 +140,4 @@ None blocking.
 - 2026-10-28: The soft memory limit is 75% of usable memory: below it Go GC runs normally; the remaining quarter covers non-heap memory and co-located services. It is soft, so the process never fails merely by reaching it.
 - 2026-10-28: Measured plans: this 32-CPU/92 GiB workstation → 4096 generations, 32768 sockets, 32 readers; `systemd-run --scope -p MemoryMax=900M` → `cgroup_v2`, 943 MiB, 512 generations, 4096 sockets; `GOMEMLIMIT=1GiB` → 512 tier.
 - 2026-10-28: Byte-weighted body budgets for every proxy route (audit NET-14 / security SEC-4) are planned as the next slice once the transport changes land; this slice keeps count-based bounds but sizes them from memory.
+- 2026-10-28: Amended by `specs/request-body-budget.md`: body readers and WebSocket large-body permits are replaced by one byte budget (sizing memory / 8, 50% per key); R5 and the tier table no longer list body readers. Status: active, updated by that plan.
