@@ -152,6 +152,13 @@ func TestManagedSeamlessSwitchKeepsServing(t *testing.T) {
 	}
 	probe := startTrafficProbe(address)
 	inflight := startSlowRequest(t, address)
+	// Accepted by the previous worker before the switch, its request is sent
+	// only afterwards: retirement must answer it, not drop the connection.
+	accepted, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { accepted.Close() })
 	time.Sleep(200 * time.Millisecond)
 
 	managedAction(t, address, "/api/runtime/updates/check", "")
@@ -163,6 +170,18 @@ func TestManagedSeamlessSwitchKeepsServing(t *testing.T) {
 	}
 	// The new worker answers while the previous one still holds the request.
 	time.Sleep(300 * time.Millisecond)
+	if _, err := io.WriteString(accepted, "GET /health/ready HTTP/1.1\r\nHost: "+address+"\r\n\r\n"); err != nil {
+		t.Fatalf("an accepted connection was closed by the switch: %v", err)
+	}
+	_ = accepted.SetReadDeadline(time.Now().Add(10 * time.Second))
+	answer, err := http.ReadResponse(bufio.NewReader(accepted), nil)
+	if err != nil {
+		t.Fatalf("a request on a connection accepted before the switch got no answer: %v", err)
+	}
+	answer.Body.Close()
+	if answer.StatusCode != http.StatusOK {
+		t.Fatalf("a request on a connection accepted before the switch got %d", answer.StatusCode)
+	}
 	inflight.complete(t)
 	deadline := time.Now().Add(15 * time.Second)
 	for retiringWorkers(runtime.host) != 0 {

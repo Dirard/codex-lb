@@ -108,17 +108,27 @@ func (c *Client) Rollback(ctx context.Context, version string) (domain.RuntimeUp
 	return c.status(ctx, "POST", "/rollback", version)
 }
 
+// Protect authenticates the update API with request bodies of at most 4 KiB.
 func Protect(token string, next http.Handler) http.Handler {
+	return ProtectWithLimit(token, 4096, next)
+}
+
+// ProtectWithLimit is Protect with a caller-chosen body limit, for a worker's
+// control listener whose peer-load bodies grow with accounts and keys.
+func ProtectWithLimit(token string, limit int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }
+
+// MaxResponseBytes bounds a control response and, for workers, a request.
+const MaxResponseBytes = maxResponseBytes
 
 func Handler(service application.RuntimeUpdater) http.Handler {
 	mux := http.NewServeMux()

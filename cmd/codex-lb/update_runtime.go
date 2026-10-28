@@ -127,11 +127,14 @@ func serveManagedRuntime(ctx context.Context, cfg config, args []string, stdout,
 	}
 	delegated := os.Getenv(delegatedEnv)
 	var state domain.RuntimeInstallState
-	if delegated != "" && updatefiles.MatchesExecutable(ctx, executable, delegated) {
+	if delegated != "" {
 		// A bootstrap already initialized the state and selected this binary.
+		// Initializing here would record this binary as the bootstrap.
+		if !updatefiles.MatchesExecutable(ctx, executable, delegated) {
+			return errors.New("delegated launcher does not match the selected version")
+		}
 		state, err = store.Load(ctx)
 	} else {
-		delegated = ""
 		state, err = store.Initialize(ctx, executable, runtimeDescriptor())
 	}
 	if err != nil {

@@ -132,7 +132,7 @@ func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) err
 		go func() { defer expiry.Done(); r.expirePeerLoad(ctx) }()
 		defer func() { stop(); expiry.Wait() }()
 	}
-	server := &http.Server{Handler: updatecontrol.Protect(token, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 75 * time.Second, MaxHeaderBytes: 4096}
+	server := &http.Server{Handler: updatecontrol.ProtectWithLimit(token, updatecontrol.MaxResponseBytes, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 75 * time.Second, MaxHeaderBytes: 4096}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = server.Serve(control) }()
 	defer func() { _ = server.Close(); <-done }()
@@ -228,7 +228,7 @@ func (r *runtime) registerHandoffControl(mux *http.ServeMux, started <-chan stru
 	})
 	mux.HandleFunc("PUT /peer-load", func(w http.ResponseWriter, request *http.Request) {
 		var report workerLoadReport
-		if json.NewDecoder(io.LimitReader(request.Body, 4<<20)).Decode(&report) != nil {
+		if json.NewDecoder(request.Body).Decode(&report) != nil {
 			http.Error(w, "Invalid load", http.StatusBadRequest)
 			return
 		}

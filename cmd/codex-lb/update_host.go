@@ -22,6 +22,7 @@ import (
 	"codex-lb/internal/adapters/updatecontrol"
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
+	"golang.org/x/sys/unix"
 )
 
 const workerSocketEnv = "CODEX_LB_INTERNAL_WORKER_SOCKET"
@@ -79,7 +80,9 @@ type updateHost struct {
 	relaying                               bool
 	relayStop                              chan struct{}
 	relayDone                              sync.WaitGroup
-	exitReports                            sync.WaitGroup
+	// tasks joins exit reports and background retries; they end with the
+	// workers they address.
+	tasks sync.WaitGroup
 }
 
 type limitedOutput struct{ bytes.Buffer }
@@ -139,13 +142,7 @@ func (h *updateHost) own() error {
 	if err != nil {
 		return listenError("managed listener", h.listen, err)
 	}
-	tcp, ok := listener.(*net.TCPListener)
-	if !ok {
-		listener.Close()
-		return errors.New("managed listener is not TCP")
-	}
-	// The duplicate keeps the socket and its accept queue; the original closes.
-	shared, err := tcp.File()
+	shared, err := shareListener(listener)
 	listener.Close()
 	if err != nil {
 		return errors.New("cannot share the managed listener")
@@ -183,6 +180,29 @@ func (h *updateHost) release() {
 	if info, err := os.Lstat(dbPath); owned && err == nil && info.Mode().IsRegular() && info.Size() == 0 {
 		_ = os.Remove(dbPath)
 	}
+}
+
+// shareListener duplicates the listening descriptor so the socket and its
+// accept queue outlive the original. TCPListener.File would hand exec a file
+// whose Fd() clears O_NONBLOCK on the shared open file description, leaving a
+// serving worker's next accept blocked in the kernel.
+func shareListener(listener net.Listener) (*os.File, error) {
+	tcp, ok := listener.(*net.TCPListener)
+	if !ok {
+		return nil, errors.New("managed listener is not TCP")
+	}
+	raw, err := tcp.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	duplicate, dupErr := -1, error(nil)
+	if err := raw.Control(func(fd uintptr) { duplicate, dupErr = unix.FcntlInt(fd, unix.F_DUPFD_CLOEXEC, 0) }); err != nil {
+		return nil, err
+	}
+	if dupErr != nil {
+		return nil, dupErr
+	}
+	return os.NewFile(uintptr(duplicate), "managed-listener"), nil
 }
 
 func randomInstance() (string, error) {
@@ -285,7 +305,7 @@ func (h *updateHost) childExited(child *updateChild, err error) {
 	if report {
 		// Counted before done closes: whoever joins this worker also joins
 		// the report about it.
-		h.exitReports.Add(1)
+		h.tasks.Add(1)
 	}
 	close(child.done)
 	h.mu.Unlock()
@@ -304,7 +324,7 @@ func (h *updateHost) childExited(child *updateChild, err error) {
 // reportExit asks the serving worker to mark the exited worker's unsettled
 // reservations, retrying for about a minute while that worker lives.
 func (h *updateHost) reportExit(active, exited *updateChild) {
-	defer h.exitReports.Done()
+	defer h.tasks.Done()
 	delay := time.Second
 	for attempt := 0; attempt < 6; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -504,19 +524,45 @@ func (h *updateHost) Handover(ctx context.Context) error {
 		h.log().Warn("previous worker did not acknowledge retirement; terminating it", "version", previous.version)
 		h.terminate(previous)
 	}
-	for attempt := 0; attempt < 3; attempt++ {
-		call, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		err = candidate.control.Call(call, "POST", "/background", nil, nil)
-		cancel()
-		if err == nil {
-			break
-		}
+	select {
+	case <-candidate.done:
+		// Its exit is fatal for the launcher; never report this switch as done.
+		return errors.New("new worker exited during the switch")
+	default:
 	}
-	if err != nil {
-		h.log().Error("new worker did not start background work", "version", candidate.version)
+	if !h.startBackground(ctx, candidate) {
+		// /background is idempotent: keep asking while the worker lives.
+		h.log().Error("new worker did not start background work yet; retrying", "version", candidate.version)
+		h.tasks.Add(1)
+		go func() {
+			defer h.tasks.Done()
+			for {
+				select {
+				case <-candidate.done:
+					return
+				case <-time.After(5 * time.Second):
+				}
+				if h.startBackground(context.Background(), candidate) {
+					h.log().Info("new worker started background work", "version", candidate.version)
+					return
+				}
+			}
+		}()
 	}
 	h.log().Info("seamless switch complete", "version", candidate.version, "retiring_version", previous.version)
 	return nil
+}
+
+func (h *updateHost) startBackground(ctx context.Context, child *updateChild) bool {
+	for attempt := 0; attempt < 3; attempt++ {
+		call, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		err := child.control.Call(call, "POST", "/background", nil, nil)
+		cancel()
+		if err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // terminate stops a worker through SIGTERM (its ordinary bounded drain) and
@@ -730,8 +776,7 @@ func (h *updateHost) Shutdown() error {
 		go func() { defer wait.Done(); h.terminate(child) }()
 	}
 	wait.Wait()
-	// Exit reports end with the workers they address.
-	h.exitReports.Wait()
+	h.tasks.Wait()
 	h.mu.Lock()
 	h.child, h.candidate = nil, nil
 	h.mu.Unlock()
@@ -805,6 +850,7 @@ func (h *updateHost) startRelay() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		last := map[*updateChild]workerLoadReport{}
+		warned := map[*updateChild]bool{}
 		for {
 			workers := h.liveWorkers()
 			if len(workers) < 2 {
@@ -830,17 +876,30 @@ func (h *updateHost) startRelay() {
 				h.mu.Unlock()
 				return
 			}
+			// Calls run in parallel so one slow worker bounds an iteration at
+			// two call timeouts, well inside the workers' peer-load TTL.
+			fresh := make([]workerLoadReport, len(workers))
+			ok := make([]bool, len(workers))
+			var calls sync.WaitGroup
+			for i, child := range workers {
+				calls.Add(1)
+				go func() {
+					defer calls.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					ok[i] = child.control.Call(ctx, "GET", "/load", nil, &fresh[i]) == nil
+				}()
+			}
+			calls.Wait()
 			reports := make(map[*updateChild]workerLoadReport, len(workers))
-			for _, child := range workers {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				var report workerLoadReport
-				if err := child.control.Call(ctx, "GET", "/load", nil, &report); err == nil {
-					last[child] = report
+			for i, child := range workers {
+				if ok[i] {
+					last[child] = fresh[i]
 				}
-				cancel()
 				reports[child] = last[child]
 			}
-			for _, child := range workers {
+			failed := make([]bool, len(workers))
+			for i, child := range workers {
 				var peers workerLoadReport
 				for other, report := range reports {
 					if other != child {
@@ -848,9 +907,20 @@ func (h *updateHost) startRelay() {
 						peers = peers.add(report)
 					}
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				_ = child.control.Call(ctx, "PUT", "/peer-load", peers, nil)
-				cancel()
+				calls.Add(1)
+				go func() {
+					defer calls.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					failed[i] = child.control.Call(ctx, "PUT", "/peer-load", peers, nil) != nil
+				}()
+			}
+			calls.Wait()
+			for i, child := range workers {
+				if failed[i] && !warned[child] {
+					warned[child] = true
+					h.log().Warn("could not send peer load to a worker; it uses its own limits until the next update", "version", child.version)
+				}
 			}
 			select {
 			case <-stop:

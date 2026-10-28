@@ -72,6 +72,10 @@ type runtime struct {
 	// peerLoadAt is when it last did (Unix nanoseconds).
 	peerWorkers atomic.Int32
 	peerLoadAt  atomic.Int64
+	// openConns counts accepted connections that are not hijacked; retirement
+	// waits for it instead of http.Server.Shutdown, which would drop an
+	// accepted connection whose request it had not read yet.
+	openConns atomic.Int64
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
@@ -284,8 +288,14 @@ func (r *runtime) startBackground() {
 			return
 		default:
 		}
-		r.backupFiles.RemoveStaleTemps()
-		r.background.Add(6)
+		r.background.Add(7)
+		go func() {
+			defer r.background.Done()
+			// A retiring worker may still write a requested backup's temp file.
+			if r.waitForSoleWorker(r.backgroundCtx) {
+				r.backupFiles.RemoveStaleTemps()
+			}
+		}()
 		go func() {
 			defer r.background.Done()
 			application.RunPeriodic(r.backgroundCtx, "maintenance", application.BackgroundSchedule{Report: r.reporter.report}, time.Minute, nil, r.maintainReports)
@@ -355,6 +365,14 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 	if r.config.handoff == nil || !r.config.handoff.overlap {
 		r.startBackground()
 	}
+	r.server.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			r.openConns.Add(1)
+		case http.StateHijacked, http.StateClosed:
+			r.openConns.Add(-1)
+		}
+	}
 	served := make(chan error, 1)
 	go func() {
 		if r.onServing != nil {
@@ -370,7 +388,7 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 	case <-ctx.Done():
 	case serveErr = <-served:
 	case <-r.retireStart:
-		r.retireServing(ctx)
+		r.retireServing(ctx, listener)
 	}
 	drainStarted := time.Now()
 	activeAtDrain, queuedAtDrain := r.proxy.AdmissionUsage()
@@ -424,19 +442,35 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 // retireServing stops accepting and background work, then lets every accepted
 // request — queued admissions and current WebSocket turns included — finish
 // before the ordinary drain, bounded by retirementDeadline.
-func (r *runtime) retireServing(ctx context.Context) {
+func (r *runtime) retireServing(ctx context.Context, listener net.Listener) {
 	retiredAt := time.Now()
 	active, queued := r.proxy.AdmissionUsage()
 	r.logger.Info("retiring: new connections go to the replacement worker", "active_generations", active, "queued_generations", queued)
 	deadline, cancel := context.WithTimeout(context.Background(), retirementDeadline)
 	defer cancel()
-	// Stop accepting first: Shutdown closes this worker's copy of the shared
-	// listener and its idle connections, and the replacement already accepts
-	// on the same socket. Only then join background work and acknowledge.
+	// Stop accepting first, without http.Server.Shutdown: it would drop an
+	// accepted connection whose request is still unread. Closing this worker's
+	// copy of the shared listener leaves the socket to the replacement; idle
+	// keep-alive connections close and later responses carry Connection: close.
 	r.proxy.BeginRetire()
-	go func() { _ = r.server.Shutdown(deadline) }()
+	r.server.SetKeepAlivesEnabled(false)
+	_ = listener.Close()
 	r.haltBackground()
 	close(r.retired)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for r.openConns.Load() > 0 {
+		select {
+		case <-ticker.C:
+		case <-deadline.Done():
+			r.logger.Warn("retirement deadline reached; draining remaining requests", "deadline", retirementDeadline.String())
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+	// Only hijacked WebSockets remain, and no connection can start a new
+	// request, so waiting for the request lifecycle cannot race an Add.
 	joined := make(chan struct{})
 	go func() { r.requests.active.Wait(); close(joined) }()
 	select {
