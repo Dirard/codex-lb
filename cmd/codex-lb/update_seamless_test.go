@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -336,20 +337,26 @@ func TestBootstrapDelegatesToNewerInstalledLauncher(t *testing.T) {
 	if executable != installed.Path {
 		t.Fatalf("launcher runs %s, want the installed newer version %s\n%s", executable, installed.Path, output)
 	}
-	stop(command)
-	reopened, err := updatefiles.New(dataDir)
-	if err != nil {
-		t.Fatal(err)
+	// The worker serves before its launcher finished activation and recorded
+	// the confirmation; stopping earlier would test an interrupted start.
+	var delegation updatefiles.LauncherDelegation
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		data, err := os.ReadFile(filepath.Join(dataDir, "updates", "launcher.json"))
+		if err == nil && json.Unmarshal(data, &delegation) == nil && delegation.Confirmed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delegation was not confirmed: %+v, %v\n%s", delegation, err, output)
+		}
 	}
-	delegation, err := reopened.LoadDelegation()
-	reopened.Close()
-	if err != nil || delegation.SHA256 != installed.SHA256 || !delegation.Confirmed {
-		t.Fatalf("delegation was not confirmed: %+v, %v\n%s", delegation, err, output)
+	stop(command)
+	if delegation.SHA256 != installed.SHA256 {
+		t.Fatalf("confirmed delegation names %s, want %s", delegation.SHA256, installed.SHA256)
 	}
 
 	// Delegations that repeatedly ended unconfirmed are not retried: the
 	// bootstrap serves itself.
-	reopened, err = updatefiles.New(dataDir)
+	reopened, err := updatefiles.New(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
