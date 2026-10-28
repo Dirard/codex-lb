@@ -152,15 +152,15 @@ Files And Functions:
 
 ## Implementation checklist
 
-1. [ ] Pin `toolchain go1.26.10`, run `go mod tidy`, update `golang.org/x/crypto` and `golang.org/x/sys` patch versions, Dockerfile Go image (R1, R2, R3).
-2. [ ] Add tracked `internal/adapters/webui/dist/.gitkeep` and `.gitignore` exception (R6).
-3. [ ] Add `.golangci.yml`, fix the actionable findings it reports (dead code, `errors.Is`, ignored `ConfigureAccounts` error, `noctx` in production code) (R5).
-4. [ ] Extend `Makefile` with `check`, `lint`, `vuln`, `spec-validate`, `web-check`, `release` (R4).
-5. [ ] Add `scripts/release.sh` and verify reproducibility and updater acceptance locally (R9, R10, R12).
-6. [ ] Add `.github/workflows/ci.yml` and `.github/workflows/release.yml` (R7, R8, R11).
-7. [ ] Rewrite `AGENTS.md`, clean `.agents/`, fix `.gitattributes` (R13, R14, R16).
-8. [ ] Relocate legacy OpenSpec changes/capabilities to `openspec/legacy/` with README; run `openspec validate --specs` (R15).
-9. [ ] Run `make check` and `make web-check`; record results in the decision log.
+1. [x] Pin `toolchain go1.26.10`, run `go mod tidy`, update `golang.org/x/crypto` and `golang.org/x/sys` patch versions, Dockerfile Go image (R1, R2, R3).
+2. [x] Add tracked `internal/adapters/webui/dist/.gitkeep` and `.gitignore` exception (R6).
+3. [x] Add `.golangci.yml`, fix the actionable findings it reports (dead code, `errors.Is`, ignored `ConfigureAccounts` error, `noctx` in production code) (R5).
+4. [x] Extend `Makefile` with `check`, `lint`, `vuln`, `spec-validate`, `web-check`, `release` (R4).
+5. [x] Add `scripts/release.sh` and verify reproducibility and updater acceptance locally (R9, R10, R12).
+6. [x] Add `.github/workflows/ci.yml` and `.github/workflows/release.yml` (R7, R8, R11).
+7. [x] Rewrite `AGENTS.md`, clean `.agents/`, fix `.gitattributes` (R13, R14, R16).
+8. [x] Relocate legacy OpenSpec changes/capabilities to `openspec/legacy/` with README; run `openspec validate --specs` (R15).
+9. [x] Run `make check` and `make web-check`; record results in the decision log.
 
 ## Open questions
 
@@ -173,3 +173,4 @@ None blocking.
 - 2026-10-28: Solution specs in `specs/` plan implementation slices; OpenSpec `openspec/specs/` stays the normative product contract. `AGENTS.md` documents this split.
 - 2026-10-28: `-race` stays in CI despite ~9 minutes because the proxy relies on concurrent ownership and settlement invariants.
 - 2026-10-28: The CI Go job builds the dashboard first: `TestRuntimeServesEmbeddedUIAndDrains` verifies the embedded UI exactly as released, so a clean checkout compiles (R6) but that runtime test needs built assets.
+- 2026-10-28: Verification: `go vet`, golangci-lint (0 issues), `go test ./...`, `go test -race ./...` (30-minute CI timeout), govulncheck (0 reachable), dashboard lint/typecheck/vitest and `openspec validate --specs` pass locally and in CI; a clean clone compiles and tests without built assets.
