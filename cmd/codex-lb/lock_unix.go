@@ -37,3 +37,21 @@ func lockDatabase(path string) (*os.File, bool, error) {
 	}
 	return file, created, nil
 }
+
+// verifyDatabaseLock proves that an inherited descriptor is the database file
+// and holds its lock: flock on the shared open file description succeeds only
+// for the owner, while another installation's lock would refuse it.
+func verifyDatabaseLock(file *os.File, path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		return errors.New("database must be a private regular file (mode 0600)")
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return errors.New("inherited database lock is not the database file")
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return errors.New("inherited database lock is not held")
+	}
+	return nil
+}

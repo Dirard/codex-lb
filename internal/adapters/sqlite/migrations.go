@@ -328,3 +328,15 @@ CREATE TRIGGER codex_resource_owners_count_delete AFTER DELETE ON codex_resource
  UPDATE codex_resource_owner_stats SET owner_count=owner_count-1 WHERE id=1;
 END;
 `
+
+// schemaV41 lets workers of one installation share the database during an
+// update: reservations record the process that owns them, so startup marks
+// only the reservations of processes that are gone, and the database records
+// the lowest code schema that may operate on it. Additive: schema 40 code
+// ignores both and its reservations default to no owner.
+const schemaV41 = `
+ALTER TABLE usage_reservations ADD COLUMN owner_instance TEXT NOT NULL DEFAULT '';
+CREATE TABLE schema_compatibility (
+ id INTEGER PRIMARY KEY CHECK(id=1), reader_floor INTEGER NOT NULL
+);
+`

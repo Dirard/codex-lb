@@ -20,7 +20,7 @@ func (s *Store) RevokeDashboardSession(ctx context.Context, sessionDigest string
 	if !validDigest(sessionDigest) {
 		return fmt.Errorf("dashboard session digest: %w", ErrInvalid)
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM dashboard_session_revocations WHERE expires_at<=?`, time.Now().Unix()); err != nil {
 			return err
 		}
@@ -41,7 +41,7 @@ func (s *Store) DashboardSessionRevoked(ctx context.Context, sessionDigest strin
 
 // AdvanceDashboardSessionEpoch rejects every session issued before the call.
 func (s *Store) AdvanceDashboardSessionEpoch(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_secret SET session_epoch=session_epoch+1 WHERE id=1`)
+	_, err := s.exec(ctx, `UPDATE admin_secret SET session_epoch=session_epoch+1 WHERE id=1`)
 	return err
 }
 
@@ -58,7 +58,7 @@ func (s *Store) ConsumeBootstrapToken(ctx context.Context, tokenDigest string, a
 	if !validDigest(tokenDigest) {
 		return fmt.Errorf("bootstrap token digest: %w", ErrInvalid)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO dashboard_bootstrap_consumed(token_hash,consumed_at) VALUES(?,?)
+	_, err := s.exec(ctx, `INSERT INTO dashboard_bootstrap_consumed(token_hash,consumed_at) VALUES(?,?)
  ON CONFLICT(token_hash) DO NOTHING`, tokenDigest, at.Unix())
 	return err
 }

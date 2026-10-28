@@ -35,8 +35,9 @@ func TestFencedUnresponsiveCandidateIsKilledBeforePreviousStarts(t *testing.T) {
 	if err := os.WriteFile(candidate, []byte(script), 0500); err != nil {
 		t.Fatal(err)
 	}
+	address := managedTestAddress(t)
 	host := &updateHost{
-		args:    []string{"--data-dir", dataDir, "--listen", managedTestAddress(t), "--dashboard-auth-mode", "disabled"},
+		args: []string{"--data-dir", dataDir, "--listen", address, "--dashboard-auth-mode", "disabled"}, listen: address,
 		dataDir: dataDir, privateDir: privateDir, parentSocket: filepath.Join(privateDir, "parent.sock"),
 		token: strings.Repeat("a", 64), stdout: io.Discard, stderr: io.Discard,
 		fatal: make(chan struct{}, 1), shutdownTimeout: 200 * time.Millisecond,
@@ -146,7 +147,7 @@ func TestRestoreBackupReplacesTheMigratedDatabaseAndDropsItsJournal(t *testing.T
 	for path, content := range map[string]string{
 		dbPath: "migrated-by-failed-version", dbPath + "-wal": "failed-wal", dbPath + "-shm": "failed-shm",
 		filepath.Join(dataDir, "updates", "backup-test", "codex-lb.sqlite3"): "pre-update-snapshot",
-		filepath.Join(dataDir, "updates", "backup-current"):                   "backup-test",
+		filepath.Join(dataDir, "updates", "backup-current"):                  "backup-test",
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)

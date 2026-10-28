@@ -4,26 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"codex-lb/internal/adapters/hostinfo"
 	"codex-lb/internal/adapters/updatecontrol"
 	"codex-lb/internal/application"
+	"codex-lb/internal/domain"
 )
 
 type workerUpdateStatus struct {
 	Prepared bool   `json:"prepared"`
 	Serving  bool   `json:"serving"`
 	Version  string `json:"version"`
+	Handoff  int    `json:"handoff,omitempty"`
+	Instance string `json:"instance,omitempty"`
 }
 
 // serveUpdateWorker prepares the data and listener while fenced, then waits for
 // the owning launcher to commit activation. Control requests never enter track.
+// A handoff worker serves on the launcher's listener and lock; others bind and
+// lock themselves for launchers that lend nothing.
 func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) error {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -31,15 +39,29 @@ func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) err
 	if socket == "" || parent == "" || len(token) != 64 {
 		return errors.New("invalid private runtime control configuration")
 	}
+	handoff, err := inheritedHandoff(cfg.dataDir)
+	if err != nil {
+		return err
+	}
+	if handoff != nil {
+		defer handoff.lifeline.Close()
+		handoff.watchLifeline(stop)
+	}
+	cfg.handoff = handoff
 	client := updatecontrol.NewClient(parent, token)
 	defer client.Close()
 	cfg.updater = client
 	r, err := openRuntime(ctx, cfg, logger)
 	if err != nil {
+		if handoff != nil {
+			handoff.listener.Close()
+		}
 		return err
 	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
-	if err != nil {
+	var listener net.Listener
+	if handoff != nil {
+		listener = handoff.listener
+	} else if listener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen); err != nil {
 		_ = r.close()
 		return listenError("managed listener", cfg.listen, err)
 	}
@@ -66,7 +88,11 @@ func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) err
 			http.Error(w, "Not ready", http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(workerUpdateStatus{Prepared: true, Serving: serving.Load(), Version: version})
+		status := workerUpdateStatus{Prepared: true, Serving: serving.Load(), Version: version}
+		if handoff != nil {
+			status.Handoff, status.Instance = domain.RuntimeHandoffProtocol, handoff.instance
+		}
+		_ = json.NewEncoder(w).Encode(status)
 	})
 	mux.HandleFunc("POST /activate", func(w http.ResponseWriter, request *http.Request) {
 		activateOnce.Do(func() { close(activate) })
@@ -99,7 +125,14 @@ func serveUpdateWorker(ctx context.Context, cfg config, logger *slog.Logger) err
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	server := &http.Server{Handler: updatecontrol.Protect(token, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, MaxHeaderBytes: 4096}
+	if handoff != nil {
+		r.registerHandoffControl(mux, started)
+		var expiry sync.WaitGroup
+		expiry.Add(1)
+		go func() { defer expiry.Done(); r.expirePeerLoad(ctx) }()
+		defer func() { stop(); expiry.Wait() }()
+	}
+	server := &http.Server{Handler: updatecontrol.ProtectWithLimit(token, updatecontrol.MaxResponseBytes, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 75 * time.Second, MaxHeaderBytes: 4096}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = server.Serve(control) }()
 	defer func() { _ = server.Close(); <-done }()
@@ -163,4 +196,116 @@ func (g *workerUpdateGate) commit() bool {
 	g.proxy.BeginDrain()
 	g.stop()
 	return true
+}
+
+// registerHandoffControl adds the launcher's handoff operations: moving
+// background work, retiring, and exchanging admission load with peers.
+func (r *runtime) registerHandoffControl(mux *http.ServeMux, started <-chan struct{}) {
+	mux.HandleFunc("POST /background", func(w http.ResponseWriter, request *http.Request) {
+		select {
+		case <-started:
+		default:
+			http.Error(w, "Not serving", http.StatusConflict)
+			return
+		}
+		r.startBackground()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /retire", func(w http.ResponseWriter, request *http.Request) {
+		select {
+		case <-started:
+		default:
+			http.Error(w, "Not serving", http.StatusConflict)
+			return
+		}
+		if err := r.retire(request.Context()); err != nil {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /load", func(w http.ResponseWriter, request *http.Request) {
+		_ = json.NewEncoder(w).Encode(workerLoadReport{Load: r.proxy.Load(), ResidentBytes: hostinfo.ResidentBytes()})
+	})
+	mux.HandleFunc("PUT /peer-load", func(w http.ResponseWriter, request *http.Request) {
+		var report workerLoadReport
+		if json.NewDecoder(request.Body).Decode(&report) != nil {
+			http.Error(w, "Invalid load", http.StatusBadRequest)
+			return
+		}
+		r.applyPeerLoad(report)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /peer-exited", func(w http.ResponseWriter, request *http.Request) {
+		var exit peerExit
+		if json.NewDecoder(io.LimitReader(request.Body, 64<<10)).Decode(&exit) != nil {
+			http.Error(w, "Invalid peers", http.StatusBadRequest)
+			return
+		}
+		var exited []string
+		for _, instance := range exit.Exited {
+			if !validInstance(instance) {
+				http.Error(w, "Invalid peers", http.StatusBadRequest)
+				return
+			}
+			// This worker's own reservations are live whatever the launcher sent.
+			if instance != r.data.store.InstanceID() {
+				exited = append(exited, instance)
+			}
+		}
+		interrupted, err := r.data.store.MarkInstanceReservationsInterrupted(request.Context(), exited)
+		if err != nil {
+			http.Error(w, "Cannot mark interrupted usage", http.StatusServiceUnavailable)
+			return
+		}
+		if interrupted != 0 {
+			r.logger.Warn("interrupted usage retained after a worker exited; use offline reconcile-usage before releasing unknown charges", "count", interrupted)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// peerLoadTTL clears a peer load the launcher stopped refreshing, so a lost
+// final update cannot hold capacity, account limits or memory forever.
+const peerLoadTTL = 5 * time.Second
+
+func (r *runtime) applyPeerLoad(report workerLoadReport) {
+	r.proxy.SetPeerLoad(report.Load)
+	r.applyPeerMemory(report.ResidentBytes)
+	r.peerWorkers.Store(int32(max(0, report.Workers)))
+	if report.Workers > 0 {
+		r.peerLoadAt.Store(time.Now().UnixNano())
+	} else {
+		r.peerLoadAt.Store(0)
+	}
+}
+
+// expirePeerLoad runs until ctx ends and drops a stale peer load.
+func (r *runtime) expirePeerLoad(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if at := r.peerLoadAt.Load(); at != 0 && time.Since(time.Unix(0, at)) > peerLoadTTL {
+			r.logger.Warn("peer load expired without a launcher update; using this worker's own limits")
+			r.applyPeerLoad(workerLoadReport{})
+		}
+	}
+}
+
+// applyPeerMemory leaves the planned Go memory limit to the host's workers
+// together: peers' resident memory is subtracted, down to a quarter.
+func (r *runtime) applyPeerMemory(peerResident int64) {
+	planned := r.capacity.GoMemoryLimitBytes
+	if planned <= 0 {
+		return
+	}
+	limit := planned
+	if peerResident > 0 {
+		limit = max(planned/4, planned-peerResident)
+	}
+	debug.SetMemoryLimit(limit)
 }

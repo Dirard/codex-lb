@@ -462,3 +462,53 @@ func TestStoreInitializeAdoptsAManuallyReplacedOlderBootstrap(t *testing.T) {
 		t.Fatalf("restart with the same bootstrap changed the selection: %+v %v", again, err)
 	}
 }
+
+func TestLauncherDelegationRoundTrip(t *testing.T) {
+	store, _ := newTestStore(t)
+	if delegation, err := store.LoadDelegation(); err != nil || delegation != (LauncherDelegation{}) {
+		t.Fatalf("missing delegation = %+v, %v", delegation, err)
+	}
+	want := LauncherDelegation{SHA256: strings.Repeat("c", 64)}
+	if err := store.SaveDelegation(want); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.LoadDelegation(); err != nil || got != want {
+		t.Fatalf("delegation = %+v, %v", got, err)
+	}
+	if err := store.SaveDelegation(LauncherDelegation{SHA256: "../x"}); err == nil {
+		t.Fatal("invalid digest accepted")
+	}
+}
+
+// A bootstrap replaced by the version already selected from the dashboard is
+// recorded as the bootstrap; the real previous version stays the rollback target.
+func TestStoreInitializeKeepsPreviousWhenBootstrapIsTheCurrentVersion(t *testing.T) {
+	store, _ := newTestStore(t)
+	bootstrap := filepath.Join(t.TempDir(), "bootstrap")
+	original := []byte("binary-original")
+	writeExecutable(t, bootstrap, original)
+	state, err := store.Initialize(context.Background(), bootstrap, testDescriptor("go-v1.0.11"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(t.TempDir(), "updated")
+	updated := []byte("binary-updated")
+	writeExecutable(t, staged, updated)
+	installed, err := store.installFile(context.Background(), staged, digestOf(updated), testDescriptor("go-v1.2.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := state.Current
+	state.Current, state.Previous, state.Phase = installed, &previous, "succeeded"
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, bootstrap, updated)
+	adopted, err := store.Initialize(context.Background(), bootstrap, testDescriptor("go-v1.2.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted.Current.SHA256 != digestOf(updated) || adopted.Previous == nil || adopted.Previous.SHA256 != digestOf(original) || adopted.BootstrapSHA256 != digestOf(updated) {
+		t.Fatalf("replacing the bootstrap with the current version lost the previous one: %+v", adopted)
+	}
+}

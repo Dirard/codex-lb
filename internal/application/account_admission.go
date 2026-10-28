@@ -26,6 +26,9 @@ type accountAdmission struct {
 	waiters  map[uint64]accountWaiter
 	next     uint64
 	changed  chan struct{}
+	// peers is the pressure other live processes report; it counts against
+	// the limits but is never this process's own load.
+	peers map[string]AccountLoad
 }
 
 func newAccountAdmission() *accountAdmission {
@@ -93,6 +96,16 @@ func (a *accountAdmission) pruneLocked(accountID string) {
 	}
 }
 
+// pressureLocked sums this process's and its peers' creates and streams on
+// one account.
+func (a *accountAdmission) pressureLocked(accountID string) (creates, streams int) {
+	if state := a.accounts[accountID]; state != nil {
+		creates, streams = state.creates, state.streams
+	}
+	peer := a.peers[accountID]
+	return creates + peer.Creates, streams + peer.Streams
+}
+
 func (a *accountAdmission) notifyLocked() {
 	close(a.changed)
 	a.changed = make(chan struct{})
@@ -153,6 +166,16 @@ func (a *accountAdmission) fairShareLocked(choices []accountCandidate, settings 
 				active[activeKey] = true
 			}
 		}
+		if peer, ok := a.peers[accountID]; ok {
+			inflight += peer.Streams
+			requester += peer.Keys[key]
+			for activeKey := range peer.Keys {
+				active[activeKey] = true
+			}
+			for _, waitingKey := range peer.Waiting {
+				active[waitingKey] = true
+			}
+		}
 	}
 	for _, waiting := range a.waiters {
 		if waiting.key == "" {
@@ -196,11 +219,8 @@ func (p *Proxy) admittedAccount(ctx context.Context, choices []accountCandidate,
 				available = append(available, choice)
 				continue
 			}
-			state := a.accounts[choice.account.ID]
-			if state == nil {
-				state = &accountPressure{}
-			}
-			if settings.ProxyAccountResponseCreateLimit > 0 && state.creates >= settings.ProxyAccountResponseCreateLimit {
+			creates, streams := a.pressureLocked(choice.account.ID)
+			if settings.ProxyAccountResponseCreateLimit > 0 && creates >= settings.ProxyAccountResponseCreateLimit {
 				reason = "account_response_create_cap"
 				continue
 			}
@@ -208,7 +228,7 @@ func (p *Proxy) admittedAccount(ctx context.Context, choices []accountCandidate,
 			if streamWork && streamLimit > 0 && !confirmedOwner {
 				streamLimit = max(1, streamLimit-settings.ProxyAccountStreamRecoveryReserve)
 			}
-			if streamWork && streamLimit > 0 && state.streams >= streamLimit {
+			if streamWork && streamLimit > 0 && streams >= streamLimit {
 				reason = "account_stream_cap"
 				continue
 			}

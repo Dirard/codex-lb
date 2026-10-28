@@ -55,6 +55,9 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	var activeMu sync.Mutex
 	var active context.CancelFunc
 	var activeRequired bool
+	// activeTerminal: the active turn already sent its terminal frame and only
+	// finalizes; it can no longer be changed by a following frame.
+	var activeTerminal bool
 	var activeResponseID string
 	var activeInterrupts chan<- string
 	go func() {
@@ -145,7 +148,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			activeMu.Lock()
-			conflict := active != nil && route.RequireSecurityWorkAuthorized && !activeRequired
+			conflict := active != nil && !activeTerminal && route.RequireSecurityWorkAuthorized && !activeRequired
 			activeMu.Unlock()
 			if conflict {
 				releaseBody()
@@ -199,11 +202,21 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	defer idle.Stop()
 	var liteState application.ResponsesLiteState
 	for {
+		// A closing process ends the session between turns. The separate check
+		// keeps a queued response.create from winning the select below and
+		// starting another turn here; that frame was never dispatched.
+		closing := p.proxy.SessionsClosing()
+		select {
+		case <-closing:
+			p.closeMovedWebSocket(connection)
+			return
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-p.proxy.DrainStarted():
-			_ = connection.Close(websocket.StatusGoingAway, "Server is shutting down")
+		case <-closing:
+			p.closeMovedWebSocket(connection)
 			return
 		case <-idle.C:
 			_ = connection.Close(websocket.StatusNormalClosure, "Idle connection")
@@ -225,6 +238,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			activeMu.Lock()
 			active = cancelCall
 			activeRequired = message.route.RequireSecurityWorkAuthorized
+			activeTerminal = false
 			activeMu.Unlock()
 			options := p.responseOptions(r, key.ID)
 			options.Transport = application.CapabilityTransportWebSocket
@@ -243,14 +257,18 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				activeMu.Unlock()
 			}
 			turnActive.Store(true)
-			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body)
+			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body, func() {
+				activeMu.Lock()
+				activeTerminal = true
+				activeMu.Unlock()
+			})
 			turnActive.Store(false)
 			releaseActiveBody()
 			releaseActiveBody = nil
 			cancelCall()
 			activeMu.Lock()
 			active = nil
-			activeRequired = false
+			activeRequired, activeTerminal = false, false
 			activeResponseID, activeInterrupts = "", nil
 			activeMu.Unlock()
 			if err != nil && !terminal {
@@ -261,6 +279,18 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 			idle.Reset(120 * time.Second)
 		}
 	}
+}
+
+// closeMovedWebSocket sends 1001 so the client reconnects: to the replacement
+// server on drain, to the active process of the same installation on retirement.
+func (p *ProxyHandler) closeMovedWebSocket(connection *websocket.Conn) {
+	reason := "Server is restarting; reconnect"
+	select {
+	case <-p.proxy.DrainStarted():
+		reason = "Server is shutting down"
+	default:
+	}
+	_ = connection.Close(websocket.StatusGoingAway, reason)
 }
 
 const (

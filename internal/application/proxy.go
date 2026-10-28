@@ -86,6 +86,16 @@ type Proxy struct {
 	Catalog             ModelCatalogRoutingPolicy
 	Capabilities        *CapabilityRouter
 	compact             *CodexOperations
+
+	// sessions closes when drain or retirement began: long-lived client
+	// sessions end at their next idle point. Retirement alone keeps admission
+	// open. Guarded by admissionMu, like the fields below.
+	sessions chan struct{}
+	retiring bool
+	// Tokens this process holds in streams/admitted for its peers' work, and
+	// the counts the latest peer load asks for (see SetPeerLoad).
+	peerStreams, peerAdmitted             int
+	peerStreamsWanted, peerAdmittedWanted int
 }
 
 func NewProxy(store ProxyStore, provider ResponseProvider, cipher SecretCipher, config ProxyConfig) *Proxy {
@@ -110,7 +120,7 @@ func NewProxy(store ProxyStore, provider ResponseProvider, cipher SecretCipher, 
 	if config.ContinuationBounds.MaxContextBytes <= 0 {
 		config.ContinuationBounds.MaxContextBytes = 128 << 20
 	}
-	return &Proxy{store: store, provider: provider, cipher: cipher, config: config, streams: make(chan struct{}, config.MaxStreams), admitted: make(chan struct{}, config.MaxStreams+config.MaxQueued), draining: make(chan struct{}), accountAdmission: newAccountAdmission(), Capabilities: NewCapabilityRouter(store), ResolvePrice: func(_ context.Context, account domain.Account, model string) (pricing.Price, error) {
+	return &Proxy{store: store, provider: provider, cipher: cipher, config: config, streams: make(chan struct{}, config.MaxStreams), admitted: make(chan struct{}, config.MaxStreams+config.MaxQueued), draining: make(chan struct{}), sessions: make(chan struct{}), accountAdmission: newAccountAdmission(), Capabilities: NewCapabilityRouter(store), ResolvePrice: func(_ context.Context, account domain.Account, model string) (pricing.Price, error) {
 		if account.Kind != domain.AccountChatGPT {
 			return pricing.Price{}, pricing.ErrUnpriced
 		}
@@ -532,11 +542,14 @@ func (p *Proxy) dispatch(ctx context.Context, target ResponseTarget, body json.R
 // AdmissionCapacity includes active and queued Responses, independent of idle sockets.
 func (p *Proxy) AdmissionCapacity() int { return cap(p.admitted) }
 
-// AdmissionUsage reports currently executing generations and those admitted
-// but still waiting for a stream slot.
+// AdmissionUsage reports this process's currently executing generations and
+// those admitted but still waiting for a stream slot; slots held for peer
+// processes are excluded.
 func (p *Proxy) AdmissionUsage() (active, queued int) {
-	active = len(p.streams)
-	return active, max(0, len(p.admitted)-active)
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	active = max(0, len(p.streams)-p.peerStreams)
+	return active, max(0, len(p.admitted)-p.peerAdmitted-active)
 }
 
 func (p *Proxy) acquire(ctx context.Context) (func(), error) {
@@ -561,21 +574,47 @@ func (p *Proxy) acquire(ctx context.Context) (func(), error) {
 		defer p.admissionMu.Unlock()
 		select {
 		case <-draining:
-			<-p.streams
-			<-p.admitted
+			p.releaseSlotsLocked(true)
 			return nil, drainingError()
 		default:
 		}
-		return func() { <-p.streams; <-p.admitted }, nil
+		return func() { p.releaseSlots(true) }, nil
 	case <-draining:
-		<-p.admitted
+		p.releaseSlots(false)
 		return nil, drainingError()
 	case <-ctx.Done():
-		<-p.admitted
+		p.releaseSlots(false)
 		return nil, ctx.Err()
 	case <-timer.C:
-		<-p.admitted
+		p.releaseSlots(false)
 		return nil, &ProxyError{Code: "local_capacity_exceeded", Status: 503, Message: "Timed out waiting for local stream capacity"}
+	}
+}
+
+func (p *Proxy) releaseSlots(stream bool) {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	p.releaseSlotsLocked(stream)
+}
+
+// releaseSlotsLocked gives back one local admission's admission token and,
+// when stream is set, its stream token. While the peers' load wants more peer
+// tokens than this process holds, a released token stays in its channel as a
+// peer token instead of going to a local waiter, which would otherwise always
+// win against the non-blocking top-up in holdPeerSlotsLocked. The receives
+// never block: the channel still holds the caller's own token.
+func (p *Proxy) releaseSlotsLocked(stream bool) {
+	if stream {
+		if p.peerStreams < p.peerStreamsWanted {
+			p.peerStreams++
+		} else {
+			<-p.streams
+		}
+	}
+	if p.peerAdmitted < p.peerAdmittedWanted {
+		p.peerAdmitted++
+	} else {
+		<-p.admitted
 	}
 }
 
@@ -585,14 +624,31 @@ func (p *Proxy) BeginDrain() {
 	p.admissionMu.Lock()
 	defer p.admissionMu.Unlock()
 	p.stopping = true
-	select {
-	case <-p.draining:
-	default:
-		close(p.draining)
-	}
+	closeSignal(p.draining)
+	closeSignal(p.sessions)
 }
 
-// TryBeginIdleDrain closes admission only when no work owns a stream lease.
+// BeginRetire moves client sessions to the replacement process while this
+// one finishes what it accepted: idle client WebSockets close and active ones
+// close after their turn, but queued and new admissions are still served.
+// Only BeginDrain rejects work.
+func (p *Proxy) BeginRetire() {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	p.retiring = true
+	closeSignal(p.sessions)
+}
+
+// SessionsClosing is closed once retirement or a drain began. Long-lived client
+// sessions select on it between turns.
+func (p *Proxy) SessionsClosing() <-chan struct{} {
+	p.admissionMu.Lock()
+	defer p.admissionMu.Unlock()
+	return p.sessions
+}
+
+// TryBeginIdleDrain closes admission only when no local work owns a stream
+// lease; slots held for peer processes do not count.
 // A concurrent acquire either owns its lease first or observes the closed gate.
 func (p *Proxy) TryBeginIdleDrain() bool {
 	p.admissionMu.Lock()
@@ -605,10 +661,11 @@ func (p *Proxy) TryBeginIdleDrain() bool {
 		return false
 	default:
 	}
-	if len(p.streams) != 0 {
+	if len(p.streams) != p.peerStreams {
 		return false
 	}
 	close(p.draining)
+	closeSignal(p.sessions)
 	return true
 }
 
@@ -623,6 +680,9 @@ func (p *Proxy) ResumeAfterIdleDrain() bool {
 	select {
 	case <-p.draining:
 		p.draining = make(chan struct{})
+		if !p.retiring {
+			p.sessions = make(chan struct{})
+		}
 		return true
 	default:
 		return false
@@ -633,6 +693,14 @@ func (p *Proxy) DrainStarted() <-chan struct{} {
 	p.admissionMu.Lock()
 	defer p.admissionMu.Unlock()
 	return p.draining
+}
+
+func closeSignal(signal chan struct{}) {
+	select {
+	case <-signal:
+	default:
+		close(signal)
+	}
 }
 
 func drainingError() error {

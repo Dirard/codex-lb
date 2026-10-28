@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex-lb/internal/adapters/backups"
@@ -58,13 +60,35 @@ type runtime struct {
 	nextRetention  time.Time // owned by the maintenance loop
 	nextOptimize   time.Time
 	retention      *application.RetentionService
+	backupFiles    *backups.Directory
+	// Background work starts once: on activation, or when the launcher moves
+	// it here from a retiring worker.
+	backgroundOnce sync.Once
+	backgroundMu   sync.Mutex // orders startBackground against haltBackground
+	retireOnce     sync.Once
+	retireStart    chan struct{}
+	retired        chan struct{}
+	// peerWorkers is the number of other live workers the launcher reported;
+	// peerLoadAt is when it last did (Unix nanoseconds).
+	peerWorkers atomic.Int32
+	peerLoadAt  atomic.Int64
+	// openConns counts accepted connections that are not hijacked; retirement
+	// waits for it instead of http.Server.Shutdown, which would drop an
+	// accepted connection whose request it had not read yet.
+	openConns atomic.Int64
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
 	openedAt := time.Now()
 	capacity := planCapacity(cfg, detectHost())
 	applyCapacity(capacity, logger)
-	data, err := openDataWithOptions(ctx, cfg.dataDir, sqlite.Options{ReadConnections: capacity.SQLiteReaders})
+	options := sqlite.Options{ReadConnections: capacity.SQLiteReaders}
+	var inheritedLock *os.File
+	var livePeers []string
+	if cfg.handoff != nil {
+		options.InstanceID, inheritedLock, livePeers = cfg.handoff.instance, cfg.handoff.lock, cfg.handoff.peers
+	}
+	data, err := openDataWithOptions(ctx, cfg.dataDir, options, inheritedLock)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +101,8 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		data.close()
 		return nil, errors.New("cannot initialize local proxy accounting principal")
 	}
-	interrupted, err := data.store.MarkInterruptedReservations(ctx)
+	// Reservations of workers that still serve beside this one are not interrupted.
+	interrupted, err := data.store.MarkInterruptedReservations(ctx, livePeers)
 	if err != nil {
 		data.close()
 		return nil, errors.New("cannot preserve interrupted usage reservations")
@@ -184,7 +209,6 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		data.close()
 		return nil, err
 	}
-	backupFiles.RemoveStaleTemps()
 	backupService := application.NewBackupService(sqlite.NewSnapshotter(data.store, data.vault), data.store, backupFiles, time.Now)
 	api.ConfigureBackups(backupService)
 	baseCtx, cancel := context.WithCancel(context.Background())
@@ -193,7 +217,8 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		proxy: proxy, transport: transport, cancel: cancel, config: cfg, logger: logger,
 		usage: usage, catalog: catalog, automations: automations, backups: backupService,
 		backgroundCtx: backgroundCtx, stopBackground: stopBackground,
-		metrics: registry, capacity: capacity, started: openedAt}
+		metrics: registry, capacity: capacity, started: openedAt, backupFiles: backupFiles,
+		retireStart: make(chan struct{}), retired: make(chan struct{})}
 	r.reporter = reporter
 	proxyMux := http.NewServeMux()
 	keyUsage := httpapi.NewKeyUsageHandler(data.store)
@@ -260,16 +285,102 @@ func (r *runtime) serve(ctx context.Context) error {
 	return r.serveListener(ctx, listener)
 }
 
+// startBackground starts the loops, the metrics listener and cleanup that
+// exactly one worker of an installation runs.
+func (r *runtime) startBackground() {
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	r.backgroundOnce.Do(func() {
+		select {
+		case <-r.backgroundCtx.Done():
+			return
+		default:
+		}
+		r.background.Add(7)
+		go func() {
+			defer r.background.Done()
+			// A retiring worker may still write a requested backup's temp file.
+			if r.waitForSoleWorker(r.backgroundCtx) {
+				r.backupFiles.RemoveStaleTemps()
+			}
+		}()
+		go func() {
+			defer r.background.Done()
+			application.RunPeriodic(r.backgroundCtx, "maintenance", application.BackgroundSchedule{Report: r.reporter.report}, time.Minute, nil, r.maintainReports)
+		}()
+		go func() { defer r.background.Done(); r.maintainBackups(r.backgroundCtx) }()
+		go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
+		go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
+		go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
+		go func() {
+			defer r.background.Done()
+			// Repricing writes in long chunk series; let a retiring worker
+			// settle its requests first.
+			if r.waitForSoleWorker(r.backgroundCtx) {
+				_ = r.data.store.ResumeModelReprices(r.backgroundCtx)
+			}
+		}()
+		if err := r.startMetrics(); err != nil {
+			r.logger.Warn("metrics listener disabled", "address", r.config.metricsListen, "reason", err.Error())
+		}
+	})
+}
+
+// waitForSoleWorker returns true once no other worker of the installation
+// serves, or false when ctx ends first.
+func (r *runtime) waitForSoleWorker(ctx context.Context) bool {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for r.peerWorkers.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+	return ctx.Err() == nil
+}
+
+// haltBackground stops background loops and metrics for good; a later
+// startBackground does nothing.
+func (r *runtime) haltBackground() {
+	r.backgroundMu.Lock()
+	r.stopBackground()
+	r.backgroundMu.Unlock()
+	r.stopMetrics()
+	r.background.Wait()
+}
+
+// retire asks a serving worker to hand its traffic over and returns once its
+// background work has stopped. Accepted requests keep running.
+func (r *runtime) retire(ctx context.Context) error {
+	r.retireOnce.Do(func() { close(r.retireStart) })
+	select {
+	case <-r.retired:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// retirementDeadline bounds how long a retiring worker finishes accepted work
+// before the ordinary drain and its shutdown grace apply.
+const retirementDeadline = 30 * time.Minute
+
 func (r *runtime) serveListener(ctx context.Context, listener net.Listener) error {
-	r.background.Add(5)
-	go func() {
-		defer r.background.Done()
-		application.RunPeriodic(r.backgroundCtx, "maintenance", application.BackgroundSchedule{Report: r.reporter.report}, time.Minute, nil, r.maintainReports)
-	}()
-	go func() { defer r.background.Done(); r.maintainBackups(r.backgroundCtx) }()
-	go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
-	go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
-	go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
+	// A worker started beside a serving one leaves background work to it until
+	// the launcher moves it here.
+	if r.config.handoff == nil || !r.config.handoff.overlap {
+		r.startBackground()
+	}
+	r.server.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			r.openConns.Add(1)
+		case http.StateHijacked, http.StateClosed:
+			r.openConns.Add(-1)
+		}
+	}
 	served := make(chan error, 1)
 	go func() {
 		if r.onServing != nil {
@@ -277,9 +388,6 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 		}
 		served <- r.server.Serve(listener)
 	}()
-	if err := r.startMetrics(); err != nil {
-		r.logger.Warn("metrics listener disabled", "address", r.config.metricsListen, "reason", err.Error())
-	}
 	r.logger.Info("codex-lb ready", "address", listener.Addr().String(), "version", version,
 		"dashboard_auth_mode", r.config.authMode, "trusted_proxies", len(r.config.trusted), "metrics_listen", r.config.metricsListen,
 		"max_generations", r.capacity.MaxGenerations, "startup_ms", time.Since(r.started).Milliseconds())
@@ -287,13 +395,17 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 	select {
 	case <-ctx.Done():
 	case serveErr = <-served:
+	case <-r.retireStart:
+		r.retireServing(ctx, listener)
 	}
 	drainStarted := time.Now()
 	activeAtDrain, queuedAtDrain := r.proxy.AdmissionUsage()
 	r.logger.Info("draining active requests", "active_generations", activeAtDrain, "queued_generations", queuedAtDrain)
 	r.requests.beginDrain()
 	r.proxy.BeginDrain()
+	r.backgroundMu.Lock()
 	r.stopBackground()
+	r.backgroundMu.Unlock()
 	joined := make(chan struct{})
 	go func() { r.requests.active.Wait(); close(joined) }()
 	grace, stopGrace := context.WithTimeout(context.Background(), r.config.shutdownGrace)
@@ -333,6 +445,49 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 		return errors.New("HTTP server stopped unexpectedly")
 	}
 	return nil
+}
+
+// retireServing stops accepting and background work, then lets every accepted
+// request — queued admissions and current WebSocket turns included — finish
+// before the ordinary drain, bounded by retirementDeadline.
+func (r *runtime) retireServing(ctx context.Context, listener net.Listener) {
+	retiredAt := time.Now()
+	active, queued := r.proxy.AdmissionUsage()
+	r.logger.Info("retiring: new connections go to the replacement worker", "active_generations", active, "queued_generations", queued)
+	deadline, cancel := context.WithTimeout(context.Background(), retirementDeadline)
+	defer cancel()
+	// Stop accepting first, without http.Server.Shutdown: it would drop an
+	// accepted connection whose request is still unread. Closing this worker's
+	// copy of the shared listener leaves the socket to the replacement; idle
+	// keep-alive connections close and later responses carry Connection: close.
+	r.proxy.BeginRetire()
+	r.server.SetKeepAlivesEnabled(false)
+	_ = listener.Close()
+	r.haltBackground()
+	close(r.retired)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for r.openConns.Load() > 0 {
+		select {
+		case <-ticker.C:
+		case <-deadline.Done():
+			r.logger.Warn("retirement deadline reached; draining remaining requests", "deadline", retirementDeadline.String())
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+	// Only hijacked WebSockets remain, and no connection can start a new
+	// request, so waiting for the request lifecycle cannot race an Add.
+	joined := make(chan struct{})
+	go func() { r.requests.active.Wait(); close(joined) }()
+	select {
+	case <-joined:
+		r.logger.Info("retired worker finished its requests", "duration_ms", time.Since(retiredAt).Milliseconds())
+	case <-deadline.Done():
+		r.logger.Warn("retirement deadline reached; draining remaining requests", "deadline", retirementDeadline.String())
+	case <-ctx.Done():
+	}
 }
 
 func (r *runtime) close() error {

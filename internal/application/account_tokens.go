@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -157,6 +158,11 @@ func (s *TokenService) exchange(ctx context.Context, key accountGenerationKey, f
 		if errors.As(err, &oauth) && permanentRefreshError(oauth.Code) {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
+			// Another worker of the installation may have rotated this refresh
+			// token first (refresh_token_reused); its stored result is valid.
+			if current, ok := s.rotatedElsewhere(cleanup, expected, oauth.Code, force, rejectedToken); ok {
+				return current, nil
+			}
 			if markErr := s.store.MarkAccountReauthRequired(cleanup, expected, oauth.Code); markErr != nil {
 				return "", markErr
 			}
@@ -202,6 +208,45 @@ func (s *TokenService) exchange(ctx context.Context, key accountGenerationKey, f
 		return string(plain), err
 	}
 	return tokens.AccessToken, nil
+}
+
+// reusedRotationWait bounds how long a refresh rejected as reused re-reads the
+// credential: the worker that won the same refresh may not have stored its
+// rotation yet when the provider answers the loser.
+const (
+	reusedRotationWait     = time.Second
+	reusedRotationInterval = 50 * time.Millisecond
+)
+
+// rotatedElsewhere re-reads the credential after a permanent refresh failure
+// and returns its access token when the same incarnation now holds another
+// refresh token than the one that failed. A forced refresh never gets back the
+// token the provider rejected.
+func (s *TokenService) rotatedElsewhere(ctx context.Context, used domain.AccountCredential, code string, force bool, rejectedToken string) (string, bool) {
+	deadline := time.Now().Add(reusedRotationWait)
+	for {
+		current, err := s.store.GetAccountCredential(ctx, used.AccountID)
+		if err != nil || current.Generation != used.Generation {
+			return "", false
+		}
+		if !bytes.Equal(current.RefreshTokenEncrypted, used.RefreshTokenEncrypted) {
+			access, err := s.cipher.Decrypt(current.AccessTokenEncrypted)
+			if err != nil || len(access) == 0 || force && string(access) == rejectedToken {
+				return "", false
+			}
+			return string(access), true
+		}
+		if code != "refresh_token_reused" || !time.Now().Before(deadline) {
+			return "", false
+		}
+		timer := time.NewTimer(reusedRotationInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", false
+		case <-timer.C:
+		}
+	}
 }
 
 func permanentRefreshError(code string) bool {

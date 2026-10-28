@@ -26,11 +26,23 @@ func NewClient(socket, token string) *Client {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
-	return &Client{http: &http.Client{Transport: transport, Timeout: 15 * time.Second}, token: token}
+	return &Client{http: &http.Client{Transport: transport}, token: token}
 }
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
+// defaultCallTimeout bounds a call whose context has no deadline; a caller
+// that waits longer on purpose (a worker retiring) sets its own deadline.
+const defaultCallTimeout = 15 * time.Second
+
+// maxResponseBytes fits a worker's per-account admission load.
+const maxResponseBytes = 4 << 20
+
 func (c *Client) Call(ctx context.Context, method, path string, input, output any) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultCallTimeout)
+		defer cancel()
+	}
 	var body []byte
 	if input != nil {
 		var err error
@@ -63,8 +75,8 @@ func (c *Client) Call(ctx context.Context, method, path string, input, output an
 	if output == nil {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
-	if err != nil || len(data) > 64<<10 {
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil || len(data) > maxResponseBytes {
 		return errors.New("invalid runtime control response")
 	}
 	if err = json.Unmarshal(data, output); err != nil {
@@ -96,17 +108,27 @@ func (c *Client) Rollback(ctx context.Context, version string) (domain.RuntimeUp
 	return c.status(ctx, "POST", "/rollback", version)
 }
 
+// Protect authenticates the update API with request bodies of at most 4 KiB.
 func Protect(token string, next http.Handler) http.Handler {
+	return ProtectWithLimit(token, 4096, next)
+}
+
+// ProtectWithLimit is Protect with a caller-chosen body limit, for a worker's
+// control listener whose peer-load bodies grow with accounts and keys.
+func ProtectWithLimit(token string, limit int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }
+
+// MaxResponseBytes bounds a control response and, for workers, a request.
+const MaxResponseBytes = maxResponseBytes
 
 func Handler(service application.RuntimeUpdater) http.Handler {
 	mux := http.NewServeMux()

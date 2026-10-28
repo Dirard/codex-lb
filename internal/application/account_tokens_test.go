@@ -229,3 +229,154 @@ func TestStaleRefreshCannotReadOrRotateReimportedCredential(t *testing.T) {
 		t.Fatal("new incarnation rotation was not persisted")
 	}
 }
+
+// rotateElsewhere stores a rotation of credential as another worker of the
+// installation does after winning the same refresh.
+func rotateElsewhere(t *testing.T, store *sqlite.Store, vault *credentials.Vault, credential domain.AccountCredential, access []byte) {
+	t.Helper()
+	next := credential
+	next.AccessTokenEncrypted = access
+	next.RefreshTokenEncrypted, _ = vault.Encrypt([]byte("peer-rotation"))
+	if changed, err := store.RotateAccountCredential(context.Background(), credential, next, time.Now()); err != nil || !changed {
+		t.Errorf("peer rotation: %v %v", changed, err)
+	}
+}
+
+// The provider rejects a refresh token another worker already rotated as
+// reused; that worker's stored rotation is valid and is returned instead.
+func TestPermanentRefreshFailureAfterRotationElsewhereReturnsStoredToken(t *testing.T) {
+	store, vault, account, credential := tokenFixture(t)
+	rotated := expiringToken(time.Now().Add(time.Hour))
+	service := application.NewTokenService(store, vault, refreshFunc(func(_ context.Context, token string) (application.OAuthTokens, error) {
+		if token != "synthetic-refresh" {
+			t.Errorf("refresh used %q", token)
+		}
+		access, _ := vault.Encrypt([]byte(rotated))
+		rotateElsewhere(t, store, vault, credential, access)
+		return application.OAuthTokens{}, &application.OAuthError{Code: "refresh_token_reused", Message: "synthetic rejection"}
+	}))
+	defer service.Close()
+	token, err := service.AccessToken(context.Background(), account, credential)
+	if err != nil || token != rotated {
+		t.Fatalf("rotation by another worker not adopted: token=%q err=%v", token, err)
+	}
+	current, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || current.Status != domain.AccountActive {
+		t.Fatalf("account after adopted rotation: %v %v", current.Status, err)
+	}
+}
+
+// lateRotationStore stores another worker's rotation only at the third
+// credential read: the losing refresh's first re-read still sees the old
+// token, as when the provider answers the loser before the winner commits.
+type lateRotationStore struct {
+	*sqlite.Store
+	reads  atomic.Int64
+	rotate func()
+}
+
+func (s *lateRotationStore) GetAccountCredential(ctx context.Context, accountID string) (domain.AccountCredential, error) {
+	if s.reads.Add(1) == 3 {
+		s.rotate()
+	}
+	return s.Store.GetAccountCredential(ctx, accountID)
+}
+
+func TestReusedRefreshWaitsForRotationStoredElsewhere(t *testing.T) {
+	store, vault, account, credential := tokenFixture(t)
+	rotated := expiringToken(time.Now().Add(time.Hour))
+	access, err := vault.Encrypt([]byte(rotated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	late := &lateRotationStore{Store: store}
+	late.rotate = func() { rotateElsewhere(t, store, vault, credential, access) }
+	service := application.NewTokenService(late, vault, refreshFunc(func(context.Context, string) (application.OAuthTokens, error) {
+		return application.OAuthTokens{}, &application.OAuthError{Code: "refresh_token_reused", Message: "synthetic rejection"}
+	}))
+	defer service.Close()
+	token, err := service.AccessToken(context.Background(), account, credential)
+	if err != nil || token != rotated || late.reads.Load() != 3 {
+		t.Fatalf("late rotation not adopted: token=%q reads=%d err=%v", token, late.reads.Load(), err)
+	}
+	current, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || current.Status != domain.AccountActive {
+		t.Fatalf("account after late rotation: %v %v", current.Status, err)
+	}
+}
+
+// The winner of a refresh race may store its rotation only after the loser's
+// re-read window ended and the loser marked the account for re-authentication
+// as refresh_token_reused (a slow provider answer to the winner, or its writer
+// waiting for the other worker's write lock). The winner's rotation proves the
+// rejection was that race, so the account must be usable again.
+func TestLateRefreshWinnerReactivatesAccountMarkedByTheLoser(t *testing.T) {
+	store, vault, account, credential := tokenFixture(t)
+	rotated := expiringToken(time.Now().Add(time.Hour))
+	access, err := vault.Encrypt([]byte(rotated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewTokenService(store, vault, refreshFunc(func(context.Context, string) (application.OAuthTokens, error) {
+		return application.OAuthTokens{}, &application.OAuthError{Code: "refresh_token_reused", Message: "synthetic rejection"}
+	}))
+	defer service.Close()
+	var oauth *application.OAuthError
+	if _, err := service.AccessToken(context.Background(), account, credential); !errors.As(err, &oauth) || oauth.Code != "refresh_token_reused" {
+		t.Fatalf("losing refresh = %v", err)
+	}
+	marked, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || marked.Status != domain.AccountReauthRequired || marked.DeactivationReason != "refresh_token_reused" {
+		t.Fatalf("loser did not mark the account: %+v %v", marked, err)
+	}
+	rotateElsewhere(t, store, vault, credential, access)
+	current, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || current.Status != domain.AccountActive || current.DeactivationReason != "" {
+		t.Fatalf("valid rotation left the account %s (%q): %v", current.Status, current.DeactivationReason, err)
+	}
+	stored, err := store.GetAccountCredential(context.Background(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, err := vault.Decrypt(stored.AccessTokenEncrypted); err != nil || string(plain) != rotated {
+		t.Fatalf("winner's access token not stored: %v", err)
+	}
+}
+
+func TestPermanentRefreshFailureWithoutRotationRequiresReauth(t *testing.T) {
+	store, vault, account, credential := tokenFixture(t)
+	service := application.NewTokenService(store, vault, refreshFunc(func(context.Context, string) (application.OAuthTokens, error) {
+		return application.OAuthTokens{}, &application.OAuthError{Code: "invalid_grant", Message: "synthetic rejection"}
+	}))
+	defer service.Close()
+	var oauth *application.OAuthError
+	if _, err := service.AccessToken(context.Background(), account, credential); !errors.As(err, &oauth) || oauth.Code != "invalid_grant" {
+		t.Fatalf("permanent failure = %v", err)
+	}
+	current, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || current.Status != domain.AccountReauthRequired {
+		t.Fatalf("account after permanent failure: %v %v", current.Status, err)
+	}
+}
+
+// A forced refresh never gets back the access token the provider rejected,
+// even when another worker stored a new refresh token beside it.
+func TestForcedRefreshDoesNotAdoptRejectedTokenFromElsewhere(t *testing.T) {
+	store, vault, account, credential := tokenFixture(t)
+	rejected, err := vault.Decrypt(credential.AccessTokenEncrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewTokenService(store, vault, refreshFunc(func(context.Context, string) (application.OAuthTokens, error) {
+		rotateElsewhere(t, store, vault, credential, credential.AccessTokenEncrypted)
+		return application.OAuthTokens{}, &application.OAuthError{Code: "refresh_token_reused", Message: "synthetic rejection"}
+	}))
+	defer service.Close()
+	if token, err := service.ForceRefresh(context.Background(), account, string(rejected)); err == nil {
+		t.Fatalf("rejected token returned: %q", token)
+	}
+	current, err := store.GetAccount(context.Background(), account.ID)
+	if err != nil || current.Status != domain.AccountActive {
+		t.Fatalf("stale failure disabled the rotated credential: %v %v", current.Status, err)
+	}
+}

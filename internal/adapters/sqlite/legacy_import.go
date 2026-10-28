@@ -99,7 +99,7 @@ func (s *Store) ImportLegacySnapshot(ctx context.Context, sourcePath string, vau
 	if err != nil {
 		return report, err
 	}
-	dstTx, err := s.db.BeginTx(ctx, nil)
+	dstTx, err := s.beginWrite(ctx)
 	if err != nil {
 		return report, err
 	}

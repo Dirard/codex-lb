@@ -59,6 +59,7 @@ func (s *RuntimeUpdates) statusLocked() domain.RuntimeUpdateStatus {
 		UpdateAvailable: domain.NewerRuntimeVersion(s.latest.Version, current), CheckedAt: s.checkedAt,
 		Source: "github", ReleaseURL: "https://github.com/Dirard/codex-lb/releases", Supported: stable && platform,
 		Phase: s.phase, TargetVersion: s.target, LastError: s.lastError}
+	status.Seamless = status.Supported && s.host.Overlap()
 	if status.Phase == "" {
 		status.Phase = "idle"
 	}
@@ -73,17 +74,18 @@ func (s *RuntimeUpdates) statusLocked() domain.RuntimeUpdateStatus {
 	if previous := s.state.Previous; previous != nil {
 		status.PreviousVersion = previous.Descriptor.Version
 		status.CanRollback = status.Supported && previous.SHA256 != s.state.Current.SHA256 && compatibleRuntime(descriptor, previous.Descriptor)
-		if previous.Descriptor.SchemaVersion != descriptor.SchemaVersion {
+		if !domain.SharedSchema(descriptor, previous.Descriptor) {
 			status.RollbackNote = "The previous version uses an older database schema; return to it by restoring the pre-update backup"
 		}
 	}
 	return status
 }
 
-// compatibleRuntime allows switching between versions that share a database
-// schema, which is what rollback and boot recovery require.
+// compatibleRuntime allows switching to a version that can operate on the
+// current database without a restore, which is what rollback and boot recovery
+// require: an equal schema, or one sharing it through the schema floor.
 func compatibleRuntime(current, target domain.RuntimeDescriptor) bool {
-	return current.GOOS == target.GOOS && current.GOARCH == target.GOARCH && current.SchemaVersion == target.SchemaVersion && target.UpdateProtocol == domain.RuntimeUpdateProtocol
+	return current.GOOS == target.GOOS && current.GOARCH == target.GOARCH && domain.SharedSchema(current, target) && target.UpdateProtocol == domain.RuntimeUpdateProtocol
 }
 
 // compatibleUpdate also accepts a newer schema: the candidate migrates the
@@ -244,8 +246,15 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 		compatible = compatibleRuntime
 	}
 	checked, err := s.host.Inspect(ctx, target.Path)
-	if err != nil || checked != target.Descriptor || !compatible(old.Descriptor, checked) {
+	if err != nil || checked.Identity() != target.Descriptor.Identity() || !compatible(old.Descriptor, checked) {
 		s.finish("Target executable is incompatible or changed")
+		return
+	}
+	// Capabilities come from the verified executable, not from state an older
+	// launcher may have written without them.
+	target.Descriptor = checked
+	if s.host.Overlap() && domain.SeamlessSwitch(old.Descriptor, checked) {
+		s.switchSeamlessly(original, target)
 		return
 	}
 	s.mu.Lock()
@@ -281,8 +290,9 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 		s.restore(original, "Verified executable changed; previous version restored")
 		return
 	}
-	// From here a newer-schema candidate may have migrated the database.
-	migrated := target.Descriptor.SchemaVersion != old.Descriptor.SchemaVersion
+	// From here a newer-schema candidate may have migrated the database beyond
+	// what the previous version can run on.
+	migrated := !domain.SharedSchema(old.Descriptor, target.Descriptor)
 	if err = s.host.PrepareStart(ctx, target); err != nil {
 		s.restoreAfter(original, migrated, "New version failed startup verification; previous version restored")
 		return
@@ -308,6 +318,72 @@ func (s *RuntimeUpdates) install(release domain.RuntimeRelease, original domain.
 		return
 	}
 	s.finish("")
+}
+
+// switchSeamlessly starts target beside the running worker and hands traffic
+// over without an idle window. Every failure leaves the running worker serving:
+// a candidate migrates only what that worker can still run on, so no backup is
+// restored.
+func (s *RuntimeUpdates) switchSeamlessly(original domain.RuntimeInstallState, target domain.RuntimeInstallation) {
+	ctx := s.ctx
+	old := original.Current
+	s.mu.Lock()
+	s.state.Pending = &target
+	s.state.Phase = "preparing"
+	pending := s.state
+	s.mu.Unlock()
+	if s.store.Save(ctx, pending) != nil {
+		s.clearPending()
+		s.finish("Cannot persist the pending update")
+		return
+	}
+	s.setPhase("preparing")
+	if err := s.host.Backup(ctx); err != nil {
+		s.clearPending()
+		s.finish("Could not create a consistent backup; the current version keeps serving")
+		return
+	}
+	if s.store.Verify(ctx, target) != nil {
+		s.clearPending()
+		s.finish("Verified executable changed; the current version keeps serving")
+		return
+	}
+	if err := s.host.StartBeside(ctx, target); err != nil {
+		s.clearPending()
+		s.finish("New version failed startup verification; the current version keeps serving")
+		return
+	}
+	s.mu.Lock()
+	s.state.Current = target
+	s.state.Previous = &old
+	s.state.Pending = nil
+	s.state.Phase = "switching"
+	next := s.state
+	s.mu.Unlock()
+	if err := s.store.Save(ctx, next); err != nil {
+		s.abandonSwitch(original, "Cannot persist the new version; the current version keeps serving", true)
+		return
+	}
+	s.setPhase("switching")
+	if err := s.host.Handover(ctx); err != nil {
+		s.abandonSwitch(original, "New version failed activation; the current version keeps serving", false)
+		return
+	}
+	s.finish("")
+}
+
+// abandonSwitch returns to the original selection while its worker still
+// serves. A candidate that Handover already stopped needs no discard.
+func (s *RuntimeUpdates) abandonSwitch(original domain.RuntimeInstallState, message string, discard bool) {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 2*time.Minute)
+	defer cancel()
+	if discard {
+		_ = s.host.DiscardCandidate(cleanup)
+	}
+	s.mu.Lock()
+	s.state = original
+	s.mu.Unlock()
+	s.finish(message)
 }
 
 func (s *RuntimeUpdates) clearPending() { s.mu.Lock(); s.state.Pending = nil; s.mu.Unlock() }
