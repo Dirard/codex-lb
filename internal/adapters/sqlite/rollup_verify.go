@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex-lb/internal/application"
+	"codex-lb/internal/domain"
 )
 
 // rollupVerifyHours is the window the verifier recomputes from raw events:
@@ -19,9 +20,41 @@ type rollupReadCheck func(ctx context.Context, tx *sql.Tx, state rollupState, no
 
 // usageRollupReadChecks are the read-path comparisons of design §3.6: the
 // one-day dashboard and the seven-day UTC report through the rollup and the
-// raw path, which must agree exactly. The rollup read paths register them
-// here; until then the verifier compares the tables with raw events only.
-func (s *Store) usageRollupReadChecks() []rollupReadCheck { return nil }
+// raw path, which must agree exactly.
+func (s *Store) usageRollupReadChecks() []rollupReadCheck {
+	return []rollupReadCheck{verifyDashboardRead, verifyReportRead}
+}
+
+// verifyDashboardRead compares the one-day dashboard traffic ending at now.
+func verifyDashboardRead(ctx context.Context, tx *sql.Tx, state rollupState, now time.Time) (string, error) {
+	start := now.Add(-24 * time.Hour)
+	got, err := (&rollupRead{tx: tx, state: state}).dashboardTraffic(ctx, start, now, 3600, 24)
+	if err != nil {
+		return "", err
+	}
+	want, err := queryDashboardTrafficRaw(ctx, tx, start, now, 3600, 24)
+	if err != nil || reflect.DeepEqual(got, want) {
+		return "", err
+	}
+	return "dashboard_1d", nil
+}
+
+// verifyReportRead compares the unfiltered seven-day UTC report ending with
+// the day of now.
+func verifyReportRead(ctx context.Context, tx *sql.Tx, state rollupState, now time.Time) (string, error) {
+	day := now.UTC().Truncate(24 * time.Hour)
+	filter := domain.ReportFilter{Start: day.AddDate(0, 0, -6), End: day.AddDate(0, 0, 1),
+		PreviousStart: day.AddDate(0, 0, -13), Location: time.UTC}
+	got, err := (&rollupRead{tx: tx, state: state}).queryReports(ctx, filter)
+	if err != nil {
+		return "", err
+	}
+	want, err := queryReportsRaw(ctx, tx, filter)
+	if err != nil || reflect.DeepEqual(got, want) {
+		return "", err
+	}
+	return "report_7d", nil
+}
 
 // VerifyUsageRollups is the workflow "in one read snapshot: recompute the
 // hour-bucket rollup rows of the last day from folded raw events --> compare

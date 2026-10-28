@@ -386,6 +386,51 @@ func TestRollupReadersMatchRawEventsInEveryFoldState(t *testing.T) {
 	assertRollupFixtureExercised(t, s)
 }
 
+// The hourly verifier compares the one-day dashboard and the seven-day
+// report through both paths: a rollup row that differs outside the last day,
+// which the table comparison does not recompute, is still a mismatch.
+func TestUsageRollupVerifierComparesTheReadPaths(t *testing.T) {
+	ctx := context.Background()
+	s, _ := testStore(t)
+	insertRollupFixtureAt(t, s, rand.New(rand.NewPCG(53, 54)), 0, 1500, rollupFixtureBase, 6*24*time.Hour)
+	foldRollups(t, s, 1000)
+	now := rollupFixtureBase.Add(5*24*time.Hour + 7*time.Hour + 123*time.Millisecond)
+	if check, err := s.VerifyUsageRollups(ctx, now); err != nil || !check.Checked || check.Mismatch != "" {
+		t.Fatalf("consistent rollups: %+v %v", check, err)
+	}
+	for _, test := range []struct{ corrupt, mismatch string }{
+		{`UPDATE usage_rollup_total_hour SET cost_microdollars=cost_microdollars+1000000 WHERE bucket_epoch=?`, "report_7d"},
+		{`UPDATE usage_rollup_conversation_hour SET conversation_id='conv-ghost' WHERE id=(SELECT id FROM usage_rollup_conversation_hour
+ WHERE bucket_epoch>=? AND in_reports=1 ORDER BY bucket_epoch LIMIT 1)`, "report_7d"},
+	} {
+		hour := rollupFixtureBase.Add(2 * 24 * time.Hour).Unix()
+		if _, err := s.db.Exec(test.corrupt, hour); err != nil {
+			t.Fatal(err)
+		}
+		if check, err := s.VerifyUsageRollups(ctx, now); err != nil || check.Mismatch != test.mismatch {
+			t.Fatalf("%s: %+v %v", test.corrupt, check, err)
+		}
+		rebuildRollups(t, s)
+	}
+	// The dashboard check covers the minutes of the first partial hour.
+	if _, err := s.db.Exec(`UPDATE usage_rollup_total_hour SET requests=requests+1 WHERE bucket_epoch=?`,
+		now.Add(-23*time.Hour).Truncate(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	state, err := loadRollupState(ctx, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mismatch, err := verifyDashboardRead(ctx, tx, state, now); err != nil || mismatch != "dashboard_1d" {
+		t.Fatalf("dashboard check: %q %v", mismatch, err)
+	}
+}
+
 // assertRollupFixtureExercised guards against a fixture whose reads are
 // trivially equal because they are empty.
 func assertRollupFixtureExercised(t *testing.T, s *Store) {
