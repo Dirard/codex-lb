@@ -8,4 +8,4 @@
 
 - [x] 2.1 Add `.github/workflows/ci.yml` (Go, dashboard and OpenSpec jobs).
 - [x] 2.2 Add `scripts/release.sh` and `.github/workflows/release.yml`; verify two local builds produce identical `SHA256SUMS` and that the updater extractor accepts the archive.
-- [ ] 2.3 Verify CI is green on the pull request, then sync the delta into `openspec/specs/go-runtime/spec.md` and archive this change.
+- [x] 2.3 Verify CI is green on the pull request, then sync the delta into `openspec/specs/go-runtime/spec.md` and archive this change.

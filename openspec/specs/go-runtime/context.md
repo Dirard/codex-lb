@@ -765,3 +765,23 @@ moving it into another file spool was not needed for this measured bottleneck.
 
 For commands, comparison stages and limitations, see the
 [concurrent-streaming change notes](../../changes/archive/2026-09-27-optimize-go-concurrent-streaming/notes.md).
+
+## Host-adaptive capacity (go-v1.1.0)
+
+Limits follow the host instead of fixed 1 GB constants. At startup the runtime reads effective GOMAXPROCS, the smallest cgroup memory limit along its cgroup path (or `MemTotal`) and the descriptor limit, then picks a memory tier: a 1 GB-class host keeps the measured 512 generations / 128 queue / 4096 client WebSockets, a 4 GB host gets 2048 / 512 / 16384, and SQLite readers grow with CPUs. The Go soft memory limit defaults to 75% of usable memory. Overrides: `--memory-limit`, `--max-generations`, `--max-client-websockets`; `GOMEMLIMIT` is honored. The plan is logged at startup and shown in Settings → Runtime capacity. Byte-weighted body budgets per route are the planned next guard for very large contexts. Details: [adapt-capacity-to-host](../../changes/archive/2026-10-28-adapt-capacity-to-host/context.md).
+
+## Operational observability (go-v1.1.0)
+
+Every response carries `X-Request-Id`; failures log one JSON line with the stable `error_code` (successes at `--log-level debug`). Background loops recover panics and log failures by class with deduplication. `--metrics-listen 127.0.0.1:9464` serves Prometheus metrics and pprof on a separate unauthenticated listener; the public listener returns 404 for `/metrics` and `/debug`. A replaced bootstrap binary is adopted in either direction, so an emergency downgrade by binary replacement works. Details and examples: [observe-runtime-operations](../../changes/archive/2026-10-28-observe-runtime-operations/context.md).
+
+## Updates across schema versions (go-v1.0.11)
+
+The updater accepts an equal or newer schema. The pre-switch backup is taken before the candidate starts; if a migrating candidate fails after starting, the backup replaces the database (its WAL discarded) before the previous version restarts. Rollback and boot recovery still require an equal schema, so after a migrating update the dashboard explains that returning to the older release needs that backup. See [allow-schema-migrating-updates](../../changes/archive/2026-10-28-allow-schema-migrating-updates/proposal.md).
+
+## Online backups and data growth (go-v1.1.0)
+
+A verified online snapshot (`VACUUM INTO`, `quick_check`, schema and key validation) is taken daily by default, three are kept in `<data-dir>/backups/`, and a backup is skipped when it would leave less than 5% free disk. `codex-lb backup --data-dir … --output …` works while the service runs. `encryption.key` is never included; keep it separately. Retention runs in bounded batches until it catches up; quota history keeps 45 days by default; financial `usage_events` are kept unless the operator sets a retention. The WAL is capped at 64 MiB and checkpointed every minute. Runbook: [storage-growth-backups](../../changes/archive/2026-10-28-storage-growth-backups/context.md).
+
+## Dashboard trust model (go-v1.1.0)
+
+No request is trusted for being "local". First setup needs a one-time bootstrap token (environment or `<data-dir>/dashboard-bootstrap-token`), keyless proxy access needs an explicit `--unauthenticated-client` network resolved through `--trusted-proxy`, Secure cookies and HSTS follow `--public-origin`, a configured TOTP is always required, sessions are revocable with a 12-hour idle timeout and a 30-day cap, and model sources may not reach private addresses without `--allow-private-model-sources`. Operator migration notes: [harden-dashboard-trust-and-update-integrity](../../changes/archive/2026-10-28-harden-dashboard-trust-and-update-integrity/context.md).

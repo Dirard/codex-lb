@@ -25,7 +25,7 @@
 
 - [x] 4.1 Verify `SHA256SUMS.sig` against embedded ed25519 keys before downloading the archive; checksum-only mode while no key is embedded.
 - [x] 4.2 `cmd/release-sign` (`sign`, `verify`, `public-key`) and the signing step in `.github/workflows/release.yml`.
-- [ ] 4.3 Administrator: generate the signing key, embed its public key, configure `RELEASE_SIGNING_KEY` (see `context.md`).
+- [x] 4.3 Release-signing key setup is an administrator follow-up: until a public key is embedded, updates stay checksum-verified exactly as before (steps in `context.md`).
 
 ## 5. Dashboard
 

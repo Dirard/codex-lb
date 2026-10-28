@@ -11,4 +11,4 @@
 
 ## 3. Verification
 
-- [ ] 3.1 `make check` and dashboard checks; sync the delta into `openspec/specs/go-runtime/spec.md` and archive after merge.
+- [x] 3.1 `make check` and dashboard checks; sync the delta into `openspec/specs/go-runtime/spec.md` and archive after merge.

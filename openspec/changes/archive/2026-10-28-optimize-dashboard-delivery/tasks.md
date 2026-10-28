@@ -23,4 +23,4 @@
 ## 5. Verification
 
 - [x] 5.1 `npm --prefix web run lint|typecheck|test|build`, `go vet`, `golangci-lint`, `go test`, race tests, strict OpenSpec validation.
-- [ ] 5.2 Sync the delta into `openspec/specs/frontend-architecture/spec.md` and archive after review.
+- [x] 5.2 Sync the delta into `openspec/specs/frontend-architecture/spec.md` and archive after review.

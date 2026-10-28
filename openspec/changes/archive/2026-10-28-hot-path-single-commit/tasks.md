@@ -23,5 +23,5 @@
 
 ## 5. Verification
 
-- [ ] 5.1 `go vet`, `golangci-lint`, `go test`, `go test -race`; before/after measurements in `specs/hot-path-writes.md`.
-- [ ] 5.2 After review, sync the delta into `openspec/specs/go-runtime/spec.md` and archive this change.
+- [x] 5.1 `go vet`, `golangci-lint`, `go test`, `go test -race`; before/after measurements in `specs/hot-path-writes.md`.
+- [x] 5.2 After review, sync the delta into `openspec/specs/go-runtime/spec.md` and archive this change.

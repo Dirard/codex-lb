@@ -15,4 +15,4 @@
 
 ## 4. Verification
 
-- [ ] 4.1 `make check`; sync deltas into the main specs and archive after merge.
+- [x] 4.1 `make check`; sync deltas into the main specs and archive after merge.

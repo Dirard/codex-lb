@@ -223,9 +223,8 @@ Business rules SHALL be independent of HTTP, SQLite and provider SDK implementat
 
 #### Scenario: First-run dashboard distinguishes local and remote setup
 - **WHEN** the dashboard loads before a password is configured
-- **THEN** its session response identifies whether this request requires a bootstrap token using the same trusted-identity policy as password setup
-- **AND** direct local setup does not display a remote-blocked warning or request an unnecessary token
-- **AND** the dashboard remains gated until setup completes, and remote or forwarded requests cannot bypass bootstrap verification by spoofing local headers
+- **THEN** no request is classified as local: its session response requires a bootstrap token for every standard-mode request and names whether the token comes from the environment or the generated file in the data directory
+- **AND** the dashboard remains gated until setup completes, and no socket peer, `Host` value or forwarded header bypasses bootstrap verification
 
 ### Requirement: Drain strategies preserve their intended ordering
 
@@ -382,7 +381,7 @@ New unowned requests with distinct logical Thread-Id identities SHALL NOT inheri
 
 ### Requirement: Soft affinity is optional, scoped and operator-manageable
 
-New unowned requests SHALL apply key-scoped typed locality hints without weakening account/model/group/security scope, atomic capacity selection or hard ownership. The existing dashboard settings SHALL control automatic sticky locality, prompt-cache TTL and split primary/secondary pressure thresholds, survive restart/import and affect selection. The legacy single threshold SHALL remain a primary-threshold alias. A healthy eligible soft preference MAY move for pressure or local capacity; this MUST NOT authorize replay or transfer of an already-owned thread. Dashboard affinity list, filtering, paging, sorting, single/batch/filtered deletion and stale purge SHALL use the existing admin authentication/CSRF and UI contracts. Deleting cache/locality mappings MUST NOT delete response, file, voice or capability-lineage ownership. Unscoped legacy hints MUST NOT be promoted to authenticated key-scoped ownership; the original private snapshot SHALL retain them.
+New unowned requests SHALL apply key-scoped typed locality hints without weakening account/model/group/security scope, atomic capacity selection or hard ownership. The existing dashboard settings SHALL control automatic sticky locality, prompt-cache TTL and split primary/secondary pressure thresholds, survive restart/import and affect selection. The legacy single threshold SHALL remain a primary-threshold alias. A healthy eligible soft preference MAY move for pressure or local capacity; this MUST NOT authorize replay or transfer of an already-owned thread. The soft mapping SHALL be compared and set in the same durable transaction as the attempt's reservation, only after the reservation's key and account checks succeed. Dashboard affinity list, filtering, paging, sorting, single/batch/filtered deletion and stale purge SHALL use the existing admin authentication/CSRF and UI contracts. Deleting cache/locality mappings MUST NOT delete response, file, voice or capability-lineage ownership. Unscoped legacy hints MUST NOT be promoted to authenticated key-scoped ownership; the original private snapshot SHALL retain them.
 
 #### Scenario: Soft preference yields to available capacity without changing a hard owner
 - **WHEN** a new request's permitted soft-preferred account is locally full and a permitted alternate has room
@@ -395,9 +394,9 @@ New unowned requests SHALL apply key-scoped typed locality hints without weakeni
 - **AND** durable locality kinds and active hard-owner aliases SHALL remain unchanged
 
 #### Scenario: Locality persistence fails after reservation
-- **WHEN** saving a soft mapping fails before provider dispatch
-- **THEN** the unused reservation SHALL be settled without inventing usage or calling the provider
-- **AND** a lost compare-and-set race SHALL NOT retry the provider request or overwrite the winning mapping
+- **WHEN** saving a soft mapping fails inside the reservation transaction before provider dispatch
+- **THEN** no reservation SHALL remain, the provider SHALL NOT be called and the client SHALL receive HTTP 503 `affinity_persistence_failed`
+- **AND** a lost compare-and-set race SHALL NOT fail the reservation, retry the provider request or overwrite the winning mapping
 
 ### Requirement: Preserve active owner continuity and distinguish quota errors
 
@@ -504,7 +503,7 @@ The runtime SHALL allow independent Responses requests sharing a logical session
 - **AND** this local rejection neither proves provider quota exhaustion nor authorizes account migration
 
 ### Requirement: Idle client WebSockets do not consume HTTP body-reader capacity
-The runtime SHALL admit up to 4096 downstream WebSockets without adding a lower per-key socket ceiling, independently of HTTP body-reader, active-generation and upstream-socket admission. Empty client sockets MUST NOT dispatch upstream or reserve generation/key usage. The global connection slot MUST be acquired after authentication and released on every failed upgrade, disconnect and drain. Actual socket exhaustion SHALL return the existing 503/local_capacity_exceeded envelope and Retry-After. The existing 120-second idle timeout and per-request authorization SHALL remain in force.
+The runtime SHALL admit up to the host-sized client WebSocket budget (4096 on a 1 GB-class host) without adding a lower per-key socket ceiling, independently of HTTP body-reader, active-generation and upstream-socket admission. Empty client sockets MUST NOT dispatch upstream or reserve generation/key usage. The global connection slot MUST be acquired after authentication and released on every failed upgrade, disconnect and drain. Actual socket exhaustion SHALL return the existing 503/local_capacity_exceeded envelope and Retry-After. The existing 120-second idle timeout and per-request authorization SHALL remain in force.
 
 #### Scenario: HTTP remains usable beside idle subagent connections
 - **WHEN** more than 256 authenticated client WebSockets are idle within the global budget
@@ -520,7 +519,7 @@ The runtime SHALL admit up to 4096 downstream WebSockets without adding a lower 
 - **THEN** its global connection slot SHALL be released without changing active generation or continuation ownership
 
 ### Requirement: Standby socket capacity does not multiply retained large input bodies
-The runtime SHALL bound large incoming WebSocket messages across reading, queued and executing responses at twice the configured active-plus-queued response capacity (1280 by default), allowing a current and one staged next message per admitted request. A message larger than 4096 bytes MUST acquire a body permit before retaining data beyond its small prefix and retain it until handled or discarded. Waiting on an empty socket and receiving a short control frame MUST NOT acquire such a permit. The existing 32 MiB message limit SHALL remain enforced. Rejection, validation failure, completion, cancellation, disconnect and queue cleanup MUST release owned body permits exactly once. Socket expansion MUST NOT add a smaller shared payload-byte ceiling that rejects otherwise admitted requests.
+The runtime SHALL bound large incoming WebSocket messages across reading, queued and executing responses at twice the configured active-plus-queued response capacity (1280 on a 1 GB-class host), allowing a current and one staged next message per admitted request. A message larger than 4096 bytes MUST acquire a body permit before retaining data beyond its small prefix and retain it until handled or discarded. Waiting on an empty socket and receiving a short control frame MUST NOT acquire such a permit. The existing 32 MiB message limit SHALL remain enforced. Rejection, validation failure, completion, cancellation, disconnect and queue cleanup MUST release owned body permits exactly once. Socket expansion MUST NOT add a smaller shared payload-byte ceiling that rejects otherwise admitted requests.
 
 When every large-body permit is occupied, the runtime SHALL discard only the excess message with bounded scratch space under the existing message-size validation, return local capacity for that message, and keep the connection usable. It MUST NOT cancel the connection's active response, replay upstream work, or reclassify pressure as provider quota. The input-count bound MUST NOT be presented as a hard process-memory limit.
 
@@ -576,12 +575,16 @@ The runtime SHALL bound pending interruption controls to the active response. Wh
 - **AND** the current response can still reach its terminal event
 
 ### Requirement: Native WebSocket waits preserve client liveness without committing output
-The runtime SHALL send application-text heartbeats every ten seconds during a pending native `/backend-api/codex/responses` WebSocket turn and its trailing-slash equivalent. It SHALL use `codex.keepalive` when the current attempt has no real response ID and `response.in_progress` with the real ID when known. Heartbeats MUST NOT change visible-output classification, token usage, diagnostics, ownership or quota-retry eligibility. Attempt changes MUST clear the previous response ID. Generic `/v1/responses` routes MUST NOT receive synthetic heartbeats. Completion, cancellation and disconnect MUST stop and join request-owned heartbeat/worker activity with bounded downstream writes.
+The runtime SHALL send application-text heartbeats during a pending native `/backend-api/codex/responses` WebSocket turn and its trailing-slash equivalent after every ten seconds without a real downstream write. It SHALL use `codex.keepalive` when the current attempt has no real response ID and `response.in_progress` with the real ID when known. Heartbeats MUST NOT change visible-output classification, token usage, diagnostics, ownership or quota-retry eligibility. Attempt changes MUST clear the previous response ID. Generic `/v1/responses` routes MUST NOT receive synthetic heartbeats. Completion, cancellation and disconnect MUST stop and join request-owned heartbeat/worker activity with bounded downstream writes.
 
 #### Scenario: Slow native reasoning remains connected
 - **WHEN** a native WebSocket upstream is silent before or after response.created
 - **THEN** the client SHALL receive application-text heartbeats without fabricated response IDs or usage
 - **AND** real response events SHALL retain their order and a terminal event SHALL end heartbeats
+
+#### Scenario: Continuous output needs no heartbeat
+- **WHEN** real events are written at least every ten seconds
+- **THEN** no heartbeat SHALL be inserted between them
 
 #### Scenario: Quota refusal follows a heartbeat
 - **WHEN** the current attempt explicitly refuses quota without output or billable usage after a heartbeat
@@ -592,15 +595,23 @@ The runtime SHALL send application-text heartbeats every ten seconds during a pe
 - **THEN** it SHALL receive only real response events or the existing error envelope, not synthetic native heartbeats
 
 ### Requirement: Active upstream WebSocket transport has bounded liveness checks
-The runtime SHALL probe an active upstream WebSocket every thirty seconds with at most ten seconds to receive pong, independently of downstream heartbeats. Protocol pong MUST NOT count as model progress or extend the overall response deadline. An unresponsive connection after dispatch MUST be closed without automatic replay, quota refusal or owner migration, and existing unknown-usage reconciliation SHALL apply. Probe tasks MUST stop and be joined on completion and cancellation.
+The runtime SHALL probe an active upstream WebSocket every thirty seconds with at most ten seconds to receive pong, independently of downstream heartbeats. Any frame received from upstream SHALL also count as transport liveness, so a socket that received a frame within the interval SHALL NOT be pinged, and the probe SHALL NOT fail while the socket reader waits for a slow consumer to accept a frame or when a frame arrived after the ping was sent; the downstream write bound limits that wait. Protocol pong MUST NOT count as model progress or extend the overall response deadline. A ping SHALL be bounded only by its own timeout and MUST NOT be cancelled by lease completion or request cancellation; stopping a probe SHALL NOT wait for pong. An unresponsive connection after dispatch MUST be closed without automatic replay, quota refusal or owner migration, and existing unknown-usage reconciliation SHALL apply. Probe tasks MUST stop and be joined on completion and cancellation, and in-flight pings SHALL be joined when the upstream adapter closes.
 
 #### Scenario: Responsive upstream performs long reasoning
 - **WHEN** the upstream responds to protocol pings but emits no application events
 - **THEN** the request SHALL remain pending within the existing overall response deadline
 
 #### Scenario: Upstream stops answering pings
-- **WHEN** an active upstream fails a bounded ping after response.create was sent
+- **WHEN** an active upstream fails a bounded ping after response.create was sent and sends no frame
 - **THEN** the attempt SHALL terminate as a transport failure without another dispatch or fabricated zero usage
+
+#### Scenario: A downstream client is slower than the probe
+- **WHEN** a healthy upstream streams faster than the client accepts events, within the downstream write bound
+- **THEN** the response SHALL complete with its actual usage
+
+#### Scenario: A response completes while a ping is in flight
+- **WHEN** the terminal arrives while a liveness ping is being written or awaiting pong
+- **THEN** the owner socket SHALL remain usable for the next continuation
 
 ### Requirement: Bound streaming and finalize local accounting once
 
@@ -783,7 +794,7 @@ All requests SHALL contribute content-free usage, cost, timing and outcome data 
 
 ### Requirement: Read-only weekly-credit pace follows persisted settings
 
-Dashboard overview/projections SHALL compute the selected read-only weekly-credit pace from fresh persisted quota observations, including saved UTC working weekdays and smoothing interval. Missing samples SHALL remain distinguishable from zero burn, reset/window changes SHALL not be smoothed together, and stale/ineligible observations SHALL not inflate usable capacity. The report SHALL preserve its existing nullable forecast, confidence, reset-event and key-attribution contracts without controlling routing or initiating provider work. Settings SHALL survive restart and import and affect the actual report, not merely be accepted by the settings API.
+Dashboard overview/projections SHALL compute the selected read-only weekly-credit pace from fresh persisted quota observations, including saved UTC working weekdays and smoothing interval. Persisted observations are the newest observation of each five-minute bucket of an account window, with reset or window changes kept as separate observations. Missing samples SHALL remain distinguishable from zero burn, reset/window changes SHALL not be smoothed together, and stale/ineligible observations SHALL not inflate usable capacity. The report SHALL preserve its existing nullable forecast, confidence, reset-event and key-attribution contracts without controlling routing or initiating provider work. Settings SHALL survive restart and import and affect the actual report, not merely be accepted by the settings API.
 
 #### Scenario: Saved weekday and smoothing settings reach the report
 - **WHEN** the administrator saves working weekdays or a supported smoothing interval and reloads the runtime
@@ -792,6 +803,10 @@ Dashboard overview/projections SHALL compute the selected read-only weekly-credi
 #### Scenario: There is no fresh usable weekly observation
 - **WHEN** all candidate observations are stale, invalid or operator-ineligible
 - **THEN** weeklyCreditPace SHALL be null rather than showing fictional available credits or zero consumption
+
+#### Scenario: An idle polled account
+- **WHEN** an eligible account is polled without consumption for six hours
+- **THEN** its history still contains an observation in every five-minute bucket so the pace reports zero burn rather than missing samples
 
 ### Requirement: Subscription requests use a consistent supported Codex client identity
 
@@ -929,7 +944,7 @@ The runtime SHALL support a single-process SQLite installation with embedded web
 
 An authenticated administrator SHALL be able to add prices for a new Codex model and override or restore a bundled model price from the dashboard. Custom prices SHALL persist in SQLite and take effect for subsequent request admissions without rebuilding, upgrading or restarting the server. Price validation SHALL reject invalid, negative or out-of-range rates. Standard input, cached-input and output rates, and every rate in an explicitly supplied optional tier, MUST be present; omitted or null fields MUST NOT silently become zero. Explicit zero rates MAY be configured. External model-source prices MUST remain scoped to their source and MUST NOT be replaced by a global Codex override.
 
-Saving a model price SHALL recalculate historical costs for that model from retained token usage and request-tier/context data, including requests previously recorded at zero cost. Reports, account/key aggregates and affected current cost/credit limit consumption SHALL remain consistent without double-counting or changing token counts. Repricing MUST NOT issue provider requests. Missing historical detail MUST be reported explicitly rather than assigned invented costs. An in-flight settlement MUST NOT reintroduce an obsolete price after a completed price update. Removing an override SHALL restore an existing bundled rate; removing a custom-only model price SHALL leave that model explicitly unpriced rather than free.
+Saving a model price SHALL recalculate historical costs for that model from retained token usage and request-tier/context data, including requests previously recorded at zero cost. Reports, account/key aggregates and affected current cost/credit limit consumption SHALL remain consistent without double-counting or changing token counts. Repricing MUST NOT issue provider requests. Missing historical detail MUST be reported explicitly rather than assigned invented costs. An in-flight settlement MUST NOT reintroduce an obsolete price after a completed price update. Historical repricing SHALL run in bounded chunks so reservations and settlements are not blocked for the duration of the whole history; each chunk SHALL update event costs together with their aggregate and current-limit deltas. An unfinished repricing SHALL be recorded durably and resumed after restart, and repeating it SHALL NOT change already repriced costs. Removing an override SHALL restore an existing bundled rate; removing a custom-only model price SHALL leave that model explicitly unpriced rather than free.
 
 #### Scenario: A new model is priced while the server is running
 - **WHEN** the administrator saves a valid price for a model absent from the bundled rate card
@@ -954,7 +969,12 @@ Saving a model price SHALL recalculate historical costs for that model from reta
 #### Scenario: A historical cost changes after a manual key-limit reset
 - **WHEN** a tariff edit reprices requests whose charges were cleared by an explicit key-limit reset
 - **THEN** their historical report costs are updated without reinstating cleared current-limit consumption
-- **AND** a failed reconciliation rolls back both the tariff and financial changes
+- **AND** missing current-limit charge provenance found before saving rejects the edit without changing the tariff or any financial value
+
+#### Scenario: The ledger keeps working during a long repricing
+- **WHEN** a tariff edit reprices a large history while requests are being reserved and settled
+- **THEN** those reservations and settlements SHALL succeed and interleave with repricing chunks
+- **AND** a repricing interrupted by a restart SHALL complete after the next start without double-counting
 
 ### Requirement: Preserve required-capability conversation isolation
 
@@ -1035,13 +1055,15 @@ active. Additional concurrency MUST NOT weaken accounting/authentication.
 Configuration/data files MAY be reorganized only
 where measurement supports the change and recovery/data-safety contracts remain.
 
-The default global active-stream bound SHALL support 512 concurrent requests,
-retain a bounded 128-request queue and its 15-second timeout, and preserve all
-per-account recovery/create/stream and configured source caps. Raising the
+The global active-stream bound SHALL follow the host capacity plan, supporting
+512 concurrent requests with a bounded 128-request queue on a 1 GB-class host,
+retain the 15-second queue timeout, and preserve all per-account
+recovery/create/stream and configured source caps. Raising the
 global bound MUST NOT authorize scope bypass or weaken cancellation cleanup.
-The production HTTP transport MUST allow at least 512 concurrent connections to
-one upstream host, so its HTTP/1.1 connection queue does not reduce this bound.
-The upstream WebSocket session store SHALL support 512 independent live sessions
+The production HTTP transport MUST allow as many concurrent connections to one
+upstream host as the active-stream bound, so its HTTP/1.1 connection queue does
+not reduce this bound. The upstream WebSocket session store SHALL support as
+many independent live sessions as the active-stream bound
 without evicting active peers; its bounded-capacity refusal and idle-session
 eviction SHALL retain owner, key, credential and capability isolation.
 
@@ -1267,3 +1289,507 @@ A grouped key's report SHALL include a separate aggregate percentage of used sub
 #### Scenario: Missing or hidden quota information
 - **WHEN** only some group accounts report a known current window or upstream visibility is disabled
 - **THEN** partial observations identify their coverage, absent observations are unavailable, and hidden aggregates remain absent
+
+### Requirement: Changes and releases pass automated gates on a patched toolchain
+
+The module SHALL pin a Go toolchain without known reachable standard-library vulnerabilities. Pull requests and `main` SHALL run vet, lint, unit tests, race tests, vulnerability scanning, dashboard lint/typecheck/tests and OpenSpec validation without provider credentials. A pushed `go-vX.Y.Z` tag SHALL build the dashboard and the Linux amd64/arm64 binaries in CI, rerun the gates, and publish deterministic archives whose layout is accepted by the runtime updater together with `SHA256SUMS` and the release notes file for that tag. Building the same commit twice MUST produce identical checksums. A clean checkout without built dashboard assets SHALL compile and pass tests.
+
+#### Scenario: A release tag is pushed
+- **WHEN** an operator pushes `go-v1.0.11` after merging its release notes
+- **THEN** CI publishes `codex-lb-go-v1.0.11-linux-amd64.tar.gz`, `codex-lb-go-v1.0.11-linux-arm64.tar.gz` and `SHA256SUMS` only after the gates pass
+- **AND** each archive contains exactly `codex-lb`, `LICENSE`, `LICENSE.codex-relay` and `codex-lb.service`
+- **AND** no running installation is updated by publication
+
+#### Scenario: Reproducing a release locally
+- **WHEN** a maintainer runs `scripts/release.sh go-v1.0.11 <dir>` on the tagged commit
+- **THEN** the produced `SHA256SUMS` equals the published one
+
+### Requirement: Capacity defaults follow the detected host
+
+At startup the runtime SHALL detect the CPUs (effective GOMAXPROCS), the memory available to the process (the smallest of the cgroup v2/v1 limit along its cgroup path and physical memory, assuming 1 GiB when unknown) and the descriptor limit, and SHALL derive its bounds from that profile. Memory tiers SHALL be: below 768 MiB — 256 generations and 2048 client WebSockets; below 1.75 GiB — 512 and 4096; below 3.5 GiB — 1024 and 8192; below 7 GiB — 2048 and 16384; otherwise 4096 and 32768. The queue and concurrently read HTTP bodies SHALL be a quarter of the generation bound (queue 64…1024, readers at least 64); upstream WebSocket sessions and connections per upstream host SHALL equal the generation bound; SQLite readers SHALL be 2×CPU+4 within 8…32. Client WebSockets SHALL be reduced so that sockets, twice the generation bound and 256 reserved descriptors fit the descriptor limit, never below 64.
+
+The Go soft memory limit SHALL default to 75% of available memory. An exported GOMEMLIMIT SHALL be kept and used for sizing; `--memory-limit off` SHALL leave the runtime limit unset and `--memory-limit <size>` SHALL set it and size from it. `--max-generations` and `--max-client-websockets` SHALL override the derived values; invalid values MUST fail startup naming the flag. The runtime SHALL log the detected profile and effective limits before serving, and `GET /api/runtime/capacity` (administrator only) SHALL return them with the overridden limits and current usage (active and queued generations, client WebSockets, Go heap, process RSS). Host-derived bounds MUST NOT bypass per-account, per-key or source caps.
+
+#### Scenario: The service moves from a 1 GB to a 4 GB host
+- **WHEN** the same binary starts on a 6-CPU host whose process may use 3.8 GiB
+- **THEN** it admits up to 2048 generations with a 512-request queue, 16384 client WebSockets and 16 SQLite readers, and sets a 75% Go soft memory limit
+- **AND** on a 1 GB host it keeps 512 generations, a 128-request queue and 4096 client WebSockets
+
+#### Scenario: A container or systemd unit limits memory
+- **WHEN** the process runs under `MemoryMax=900M` on a larger machine
+- **THEN** sizing uses the 900 MiB cgroup limit and reports `cgroup_v2` as its source
+
+#### Scenario: The operator overrides capacity
+- **WHEN** the operator starts with `--max-generations 300 --memory-limit 2GiB`
+- **THEN** 300 generations, a 75-request queue and a 2 GiB Go soft limit are in effect and the capacity endpoint lists both overrides
+
+### Requirement: Requests and background work are observable without exposing secrets
+
+Every HTTP request and WebSocket SHALL receive a server-generated `X-Request-Id` and SHALL produce one structured log line when it ends, with method, path without query, status, response size, duration, resolved client IP, route group and the stable `error.code` of our JSON error envelope when present. Failures SHALL be logged at INFO (4xx) or WARN (5xx) and successes at DEBUG; `--log-level` SHALL select the minimum level. Request bodies, query strings, credentials and provider error messages MUST NOT be logged. Background loops (usage polling, automations, model catalog, maintenance) SHALL recover panics with their stack, report every run, log failures by a stable class without message text — immediately on a new class, at most every ten minutes while it persists, and once on recovery — and SHALL start after a bounded jitter. Startup SHALL log the effective configuration summary and drain SHALL log its duration and whether the grace deadline cancelled work. The final startup error SHALL be a single JSON line.
+
+#### Scenario: A request is rejected for lack of accounts
+- **WHEN** a client request fails with 503 `no_available_accounts`
+- **THEN** one WARN line with the request ID, path, status and `error_code` is logged and the same ID is returned in `X-Request-Id`
+- **AND** no request body, query or credential appears in the log
+
+#### Scenario: A background poll keeps failing
+- **WHEN** the usage poll fails with the same class on consecutive runs
+- **THEN** the failure is logged once, again after ten minutes, and a recovery line is logged after the next success
+- **AND** a panic in a run is logged with its stack and the loop continues
+
+### Requirement: Runtime metrics are available on an opt-in private listener
+
+When `--metrics-listen` is set, the runtime SHALL serve Prometheus text metrics and pprof on that separate listener: HTTP requests and durations by fixed route group and status class, in-flight requests, active and queued generations and client WebSockets against their limits, process and Go memory, goroutines, uptime, accounts by status, database and WAL size, background runs by result with their last success time, and build version. Labels MUST NOT contain account, key or request identifiers. The listener SHALL be off by default and SHALL warn when bound beyond loopback. On the public listener `/metrics` and `/debug` SHALL return 404 rather than the dashboard shell.
+
+#### Scenario: An operator scrapes metrics
+- **WHEN** the server starts with `--metrics-listen 127.0.0.1:9464`
+- **THEN** `GET http://127.0.0.1:9464/metrics` returns the metric families in text format
+- **AND** `GET /metrics` on the public address returns 404
+
+### Requirement: Deployment templates restart, bound descriptors and sandbox the service
+
+The systemd template SHALL restart indefinitely with backoff, set a descriptor limit sufficient for the host-sized socket budget, allow at least the drain grace plus accounting cleanup to stop, and apply systemd sandboxing that keeps `/proc/meminfo` and the cgroup filesystem readable for capacity detection. The Docker image SHALL disable the built-in version manager, because containers update by replacing the image, and SHALL document a stop timeout of at least 120 seconds.
+
+#### Scenario: A transient startup failure
+- **WHEN** the listen port is briefly busy at boot
+- **THEN** systemd keeps retrying with increasing delay instead of leaving the unit failed
+
+### Requirement: Pooled upstream WebSockets deliver frames only to their own response
+
+The runtime SHALL hand an upstream WebSocket frame only to the response whose response.create is currently in flight on that socket. A frame read while no response owns the socket, or after the owning response stopped reading, SHALL be dropped and SHALL cause every later reuse of that socket to be preceded by a successful protocol ping round trip. An event announcing or terminating a response whose ID differs from the current response, a second response.created with another ID, or a terminal repeating the socket's previous response ID SHALL fail the attempt as an invalid stream and retire the socket; such a terminal MUST NOT settle the request, and the existing unknown-usage reconciliation SHALL apply.
+
+#### Scenario: A frame arrives after a terminal while the socket is idle
+- **WHEN** upstream sends frames after a response's terminal event and the socket is reused
+- **THEN** the next response SHALL receive none of those frames
+- **AND** the socket SHALL be reused only after a successful ping, keeping its exact continuation
+
+#### Scenario: A terminal belongs to another response
+- **WHEN** a leased response receives a terminal whose response ID differs from its response.created or equals the previous response on the socket
+- **THEN** the attempt SHALL fail as an invalid stream without emitting that terminal or settling its usage
+- **AND** the next request SHALL use a new upstream connection
+
+### Requirement: Reused idle upstream WebSockets are proven alive before dispatch
+
+Before writing response.create on a pooled upstream WebSocket that has been idle for at least twenty seconds, or that sent unsolicited frames, the runtime SHALL ping it under the lease with at most three seconds to receive pong. On failure it SHALL discard the socket; a request without previous_response_id SHALL continue on another socket or a new handshake, and an exact continuation SHALL be rejected as continuation-not-found before execution. A recently used socket without unsolicited frames SHALL be reused without an extra round trip. Request cancellation during this check SHALL release the lease without discarding the socket. The response.create write SHALL be bounded by thirty seconds.
+
+#### Scenario: An idle socket died silently
+- **WHEN** a pooled socket stopped answering while idle and a new request leases it
+- **THEN** the request SHALL be sent on a new upstream connection within the ping bound
+- **AND** no response.create SHALL be written on the dead socket
+
+#### Scenario: An exact continuation anchor died while idle
+- **WHEN** a continuation's exact socket fails the liveness check
+- **THEN** the request SHALL be rejected before execution and its unused reservation released
+- **AND** it MUST NOT move to another connection or be replayed
+
+#### Scenario: A warm socket is reused
+- **WHEN** a socket is reused shortly after its previous response without unsolicited frames
+- **THEN** response.create SHALL be written without a preceding ping
+
+### Requirement: Upstream HTTP connections are health-checked and reusable
+
+The shared upstream HTTP transport SHALL send HTTP/2 health pings after thirty seconds without frames, fail a connection whose ping is unanswered for ten seconds or whose writes stall for thirty seconds, limit the per-stream receive buffer to 1 MiB, and resume TLS sessions from a bounded client session cache. After a Responses terminal event or a Chat `[DONE]` marker, an HTTP/1.x response body SHALL be drained for at most 64 KiB and 100 milliseconds before closing so that a keep-alive connection can be reused; draining MUST NOT change the result.
+
+#### Scenario: HTTP/1.1 body ends shortly after the terminal
+- **WHEN** an HTTP/1.1 upstream ends each stream body a few milliseconds after its terminal event
+- **THEN** sequential streams SHALL reuse one upstream connection
+
+#### Scenario: Upstream keeps the body open after the terminal
+- **WHEN** the body does not end after the terminal
+- **THEN** the stream SHALL complete with its terminal result after the drain bound
+
+### Requirement: Upstream streams are bounded by size and time
+
+Upstream SSE and WebSocket response streams SHALL be bounded by 256 MiB of total event payload per response, the existing 16 MiB per-event bound and the overall response deadline, not by an event count. Exceeding the payload bound SHALL fail the stream as incomplete.
+
+#### Scenario: A long response has many small events
+- **WHEN** a healthy upstream sends more than one hundred thousand small events before its terminal
+- **THEN** the response SHALL complete with its terminal usage
+
+### Requirement: Native Codex SSE waits keep the client idle timer alive
+
+During a dispatched native `/backend-api/codex/responses` HTTP/SSE response and its trailing-slash equivalent, the runtime SHALL send a heartbeat as an SSE data event after ten seconds without any real downstream write: `response.in_progress` with the real current response ID when known, otherwise `codex.keepalive`. Generic `/v1/responses` SSE SHALL keep SSE comment heartbeats. Heartbeats SHALL NOT be sent before dispatch, and MUST NOT change visible-output classification, usage, ownership or retry eligibility.
+
+#### Scenario: Native SSE reasoning is silent
+- **WHEN** a dispatched native SSE response emits nothing for more than ten seconds
+- **THEN** the client SHALL receive a data-event heartbeat without fabricated usage
+
+#### Scenario: Events flow continuously
+- **WHEN** real events are written at least every ten seconds
+- **THEN** no heartbeat SHALL be inserted between them
+
+#### Scenario: A generic SSE client waits
+- **WHEN** a dispatched `/v1/responses` SSE response is silent
+- **THEN** it SHALL receive only SSE comment heartbeats
+
+### Requirement: Downstream WebSocket turns carry protocol pings
+
+During an active Responses WebSocket turn on every Responses WebSocket route, the runtime SHALL send a protocol ping every thirty seconds. The ping is transport traffic, not an application event; turn completion MUST NOT cancel an in-flight ping write, and pings SHALL stop when the connection handler exits.
+
+#### Scenario: A generic WebSocket turn is silent
+- **WHEN** a `/v1/responses` WebSocket turn waits longer than the ping interval
+- **THEN** the client SHALL observe protocol pings and no synthetic application events
+
+### Requirement: Chat-source function calls stream before completion
+
+For Chat-compatible sources, the runtime SHALL accumulate tool-call arguments in linear time. When the first arguments delta of a declared non-custom function tool arrives with a known call ID and name, the runtime SHALL emit `response.output_item.added` and stream `response.function_call_arguments.delta` before the upstream `[DONE]`; custom tools and calls without ID or name SHALL keep terminal-time emission. A call whose name or ID changes after streaming started, an undeclared tool or a duplicate call ID SHALL fail the response as an invalid tool call, and the completed item SHALL keep the streamed item ID.
+
+#### Scenario: A long function call is generated
+- **WHEN** a Chat source streams a declared function call in many argument deltas
+- **THEN** the client SHALL receive the added item and argument deltas before the completed response
+- **AND** the final item SHALL contain the complete arguments
+
+#### Scenario: A streamed call changes its name
+- **WHEN** a name fragment arrives after the call started streaming
+- **THEN** the response SHALL fail as an invalid tool call
+
+### Requirement: Realtime sessions bound writes and detect dead peers
+
+Codex Realtime proxying SHALL bound each write in either direction by thirty seconds; a failed write SHALL end the session as a disconnect with joined pump activity. The upstream socket SHALL be protocol-pinged after thirty seconds without received frames with ten seconds to receive pong, and an unanswered ping while nothing was received and no frame waits for the client SHALL end the session as a disconnect. The downstream socket SHALL receive protocol pings every thirty seconds as intermediary keepalive.
+
+#### Scenario: A realtime client stops reading
+- **WHEN** the downstream realtime client stops reading while upstream sends frames
+- **THEN** the session SHALL end within the write bound
+
+#### Scenario: The realtime upstream goes silent and stops answering
+- **WHEN** the upstream sends nothing and does not answer a ping
+- **THEN** the session SHALL end as a realtime disconnect within the ping bound
+
+### Requirement: Operation requests resolve client identity like Responses
+
+Compact, file, transcription, control and realtime operation requests SHALL resolve the client IP through the configured trusted proxies exactly as Responses requests do, and SHALL derive the user-agent group from the User-Agent product token rather than a client-supplied group header.
+
+#### Scenario: Compact behind a trusted proxy
+- **WHEN** a compact request arrives through a trusted proxy with a forwarded client address
+- **THEN** the operation SHALL be attributed to the forwarded client address
+
+### Requirement: Native chat completions render incomplete Responses terminals
+
+Streaming `/v1/chat/completions` over a Responses source SHALL render `response.incomplete` as a final chunk with `finish_reason` `length`, or `content_filter` when that is the incomplete reason, followed by optional usage and `[DONE]`; every chunk SHALL carry `created` and `model`. Accounting of the attempt SHALL be unchanged.
+
+#### Scenario: Output limit reached after partial content
+- **WHEN** a Responses source ends a chat-translated stream with response.incomplete for max_output_tokens
+- **THEN** the client SHALL receive the partial content, a `length` finish reason and `[DONE]` instead of an error chunk
+
+### Requirement: Provider-side conversation state binds a request to its account
+
+A Responses request whose top-level `conversation` is present and is neither `null` nor an empty string SHALL be account-bound in the same way as a request referencing an account-owned file. Such a request MUST NOT be replayed on another account, MUST NOT be rebuilt from local history without its `conversation`, and its successful response SHALL be stored as an account-bound continuation so later `previous_response_id` turns are not replayed across accounts either.
+
+#### Scenario: Quota refusal of a conversation-bound request
+- **WHEN** a request carrying `conversation` is refused for quota by its first account before any visible output
+- **THEN** the proxy SHALL return HTTP 409 `quota_failover_requires_context`
+- **AND** no second provider attempt SHALL be made and no request without `conversation` SHALL be sent
+
+#### Scenario: Follow-up of a conversation-bound response
+- **WHEN** a later request continues a stored conversation-bound response with `previous_response_id` and its owner refuses quota
+- **THEN** the proxy SHALL report the truthful continuation failure instead of replaying local history on another account
+
+### Requirement: A response terminal follows one durable finalization
+
+After an upstream Responses attempt returns, the runtime SHALL persist its settlement or retained uncertain usage, its account outcome with any continuation quota mark, and its continuation with session and turn-state aliases in one durable commit. A settlement failure SHALL persist none of them. An account-outcome failure SHALL keep the settlement and skip ownership publication. A continuation or alias failure SHALL keep the settlement and the account outcome. The buffered terminal event SHALL be delivered to the client only after that commit; when the outcome or ownership could not be persisted the client SHALL receive the error instead of the terminal, so no client observes a response whose `previous_response_id` is unknown.
+
+#### Scenario: A successful streamed response completes
+- **WHEN** a streamed attempt completes with known usage and a session identity
+- **THEN** settlement, the healthy account outcome, the response continuation and its session alias SHALL be committed together before the terminal event is sent
+
+#### Scenario: Ownership persistence fails after settlement
+- **WHEN** the continuation cannot be stored after a successful settlement
+- **THEN** the settlement SHALL remain finalized exactly once
+- **AND** the client SHALL receive an error rather than the terminal event
+
+#### Scenario: Settlement cannot be persisted
+- **WHEN** the settlement write fails
+- **THEN** no account outcome, continuation or alias SHALL be persisted and the client SHALL receive `usage_settlement_failed`
+
+### Requirement: Queued durable writes are not starved by other transactions
+
+Every runtime SQLite mutation SHALL be executed by the grouped batch writer; only schema migration and the offline legacy import MAY open a direct writer transaction. The batch execution deadline SHALL start after the writer connection is obtained, so time spent waiting behind another transaction MUST NOT fail queued reservations or settlements. Dashboard reports and request-log listing SHALL use a separate bounded read pool so analytics cannot occupy the proxy's read connections.
+
+#### Scenario: A queued reservation waits behind another transaction
+- **WHEN** another transaction holds the writer connection longer than the batch execution deadline
+- **THEN** a queued reservation SHALL execute after the connection is released and succeed
+
+#### Scenario: Many concurrent dashboard reports run
+- **WHEN** dashboard analytics saturate their read pool
+- **THEN** proxy authentication, selection and continuation reads SHALL still use free connections of the main read pool
+
+### Requirement: Conversation aliases share their owner's stored context
+
+Session and turn-state alias rows SHALL reference the stored context of the response they point to instead of storing a copy. Looking up an alias SHALL return that response's context while it is retained. Continuation record and byte bounds SHALL count each stored context once and SHALL be enforced without scanning all continuations on every save.
+
+#### Scenario: A session alias is saved with its response
+- **WHEN** a response with a session identity is remembered
+- **THEN** the alias row SHALL hold no encrypted context of its own
+- **AND** a lookup through the alias SHALL return the response's context
+
+#### Scenario: Upgrading a database with copied alias contexts
+- **WHEN** schema 33 is upgraded
+- **THEN** existing alias rows SHALL keep their own context and the bounds counters SHALL equal a full recount
+
+### Requirement: First-run dashboard setup always requires a one-time bootstrap token
+
+In standard dashboard authentication mode, password setup SHALL require a bootstrap token for every request, independent of socket peer, `Host` and forwarded headers. `CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN`, when set, MUST contain 32 to 1024 printable characters without spaces or `serve` SHALL refuse to start. When no dashboard password exists and no unconsumed operator token is configured, startup SHALL write a random token to `<data-dir>/dashboard-bootstrap-token` with mode 0600 and log the file path but never the token. A successful setup SHALL invalidate the token used: the generated file is removed and the SHA-256 of an operator token is persisted so that value is refused after restarts. Removing the dashboard password SHALL publish a new generated token. Setup attempts SHALL count against the `bootstrap` authentication failure scope. The session response SHALL report whether a token is required and whether it comes from the environment or the generated file.
+
+#### Scenario: Loopback setup without a token is refused
+- **WHEN** a setup request arrives from `127.0.0.1` with `Host: 127.0.0.1:2455` and no forwarded headers but without a bootstrap token
+- **THEN** the response is 403 `invalid_bootstrap_token` and no password is stored
+
+#### Scenario: A generated token works exactly once
+- **WHEN** the server starts without a password and without an operator token
+- **THEN** a 0600 token file exists in the data directory, its path is logged and its value is not
+- **AND** setup with that token succeeds and removes the file
+- **AND** after the password is removed a different token is published and the previous one is refused
+
+#### Scenario: A short operator token is rejected at start
+- **WHEN** `CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN` has fewer than 32 characters
+- **THEN** `serve` exits with a configuration error that does not echo the token
+
+### Requirement: Keyless proxy access requires an explicit client network
+
+While API-key authentication is disabled, a protected proxy route without a Bearer key SHALL use the local proxy principal only when the resolved client address belongs to a configured `--unauthenticated-client` network. The resolved client SHALL be the raw peer when no forwarded header is present and the peer is not a trusted proxy, or the trusted-proxy-resolved client when the peer is a trusted proxy. A trusted proxy without forwarded client identity, and forwarded headers from an untrusted peer, MUST NOT qualify. Socket or `Host` locality MUST NOT grant keyless access. `serve` SHALL refuse unauthenticated-client networks that overlap a trusted-proxy network and SHALL log a warning when such a network contains loopback addresses. Required-capability requests, usage self-service and Realtime SHALL keep requiring a real key. The dashboard SHALL display a warning on every page while API-key authentication is disabled.
+
+#### Scenario: Loopback without an explicit network requires a key
+- **WHEN** API-key authentication is disabled and a loopback client calls `/v1/models` without a key and no unauthenticated-client network is configured
+- **THEN** the response is 401
+
+#### Scenario: Proxied client inside the network
+- **WHEN** a trusted proxy at `127.0.0.1` forwards client `10.1.2.3` and `10.0.0.0/8` is an unauthenticated-client network
+- **THEN** the request proceeds without a key
+- **AND** the same request without `X-Forwarded-For`, or with a forwarded client outside the network, or from an untrusted peer, is rejected with 401
+
+### Requirement: Proxy trust and secure cookies are explicit operator configuration
+
+The first request carrying forwarded client headers from an untrusted loopback peer SHALL produce one WARN log naming the peer and the `--trusted-proxy` remedy. `--public-origin` SHALL accept only an `https://host[:port]` origin without path, query or credentials. When it is set, or the connection uses TLS, dashboard cookies SHALL be `Secure`, the administrator cookie SHALL be named `__Host-codex_lb_dashboard_session` with `Path=/` and no `Domain`, and responses SHALL include `Strict-Transport-Security`. The public origin SHALL be trusted by cross-origin protection. Dashboard and report cookies SHALL use `SameSite=Strict`. The shipped systemd unit SHALL pass `--trusted-proxy 127.0.0.1/32 --trusted-proxy ::1/128`.
+
+#### Scenario: Secure mode cookie
+- **WHEN** the server runs with `--public-origin https://lb.example` and an administrator completes setup over plain HTTP from the proxy
+- **THEN** the cookie is `__Host-codex_lb_dashboard_session`, `Secure`, `HttpOnly`, `SameSite=Strict`, and the response carries HSTS
+
+#### Scenario: Untrusted forwarding is reported once
+- **WHEN** two requests with `X-Forwarded-For` arrive from a loopback peer that is not a trusted proxy
+- **THEN** exactly one warning is logged
+
+### Requirement: Authentication endpoints bound request bodies and password hashing
+
+Requests to `/api/dashboard-auth/*` and `/api/key-reports/session` SHALL be limited to 8 KiB of body, including bodies without a declared length, and SHALL answer 413 `request_too_large` above it. Password hashing and comparison SHALL run outside the authentication state lock with at most four concurrent operations; a request that finds no free slot SHALL immediately receive 429 `authentication_busy` with `Retry-After: 1` and MUST NOT spend its attempt budget.
+
+#### Scenario: Oversized login body
+- **WHEN** a login request carries a 9 KiB body
+- **THEN** the response is 413 and no password hash is computed
+
+#### Scenario: Saturated hashing fails fast
+- **WHEN** all hashing slots are busy
+- **THEN** a login receives 429 with `Retry-After: 1` and session state reads still succeed
+
+### Requirement: Authentication failures are limited per client and per installation
+
+For each scope (`password`, `totp`, `bootstrap`) the system SHALL allow 8 attempts per minute per client, grouping IPv6 clients by /64 and IPv4 clients by address. The system SHALL also count failures per scope for the whole installation: after 10 failures without a 15-minute quiet period, attempts from every client SHALL be refused until `min(2^(n−10) seconds, 15 minutes)` after the last failure, where `n` is the failure count, answered as 429 `login_rate_limited` with `Retry-After`. A success SHALL reset only the caller's per-client window. Rejected attempts SHALL be logged at WARN with scope reason and client address and MUST NOT log submitted secrets.
+
+#### Scenario: Failures from many addresses lock the installation
+- **WHEN** 10 wrong passwords arrive from 10 different client addresses
+- **THEN** the correct password from an eleventh address receives 429 with `Retry-After: 1`
+- **AND** one more failure after that delay raises the next `Retry-After` to 2
+
+#### Scenario: IPv6 prefix grouping
+- **WHEN** 8 attempts arrive from different addresses in one IPv6 /64
+- **THEN** the next attempt from that /64 is refused while another /64 is not
+
+### Requirement: A configured TOTP is required at every sign-in
+
+When a TOTP secret is configured, a dashboard session SHALL be fully authenticated only after TOTP verification, regardless of `totp_required_on_login`. Password-only sessions SHALL expire after at most 5 minutes. The settings API SHALL report `totpRequiredOnLogin` as the configured state and SHALL ignore attempts to change it. The TOTP settings screen SHALL state that a code is required at every sign-in while TOTP is configured and SHALL NOT offer a toggle.
+
+#### Scenario: Password-only session after TOTP setup
+- **WHEN** TOTP was confirmed and an administrator signs in with the password only
+- **THEN** `/api/settings` answers 401 until `/api/dashboard-auth/totp/verify` succeeds
+- **AND** `GET /api/settings` reports `totpRequiredOnLogin: true` even after a settings update sends `false`
+
+### Requirement: Dashboard sessions are revocable and expire when idle
+
+Dashboard session tokens SHALL carry a random session id, the installation session epoch, an absolute expiry and an idle deadline; tokens of the earlier format SHALL be rejected. `POST /api/dashboard-auth/logout` SHALL revoke the presented session until its absolute expiry. `POST /api/dashboard-auth/logout-all` SHALL require a fully authenticated session and SHALL advance the epoch so every previously issued session is rejected. A session without an authenticated request for 12 hours SHALL be rejected; authenticated requests SHALL extend the idle deadline at most every 10 minutes without extending the absolute expiry. The absolute lifetime SHALL be the configured dashboard session lifetime (default 24 hours) capped at 30 days for every client. The dashboard SHALL offer "sign out everywhere" in its session settings.
+
+#### Scenario: Logout revokes a copied cookie
+- **WHEN** a session cookie is copied and the session then logs out
+- **THEN** the copied cookie receives 401 on `/api/settings`
+
+#### Scenario: Sign out everywhere
+- **WHEN** two sessions exist and one calls `logout-all`
+- **THEN** both receive 401 afterwards
+
+#### Scenario: Idle session
+- **WHEN** 12 hours pass without an authenticated request
+- **THEN** the session is rejected although its absolute expiry has not passed
+
+### Requirement: Model-source destinations are public unless explicitly allowed
+
+Without `--allow-private-model-sources`, creating a model source or changing its base URL to `localhost`, a `.localhost` name, or a literal loopback, private, link-local, carrier-grade NAT, multicast, unspecified, reserved or IPv4-embedding IPv6 address SHALL return 422. Without that flag every model-source connection SHALL resolve its destination and dial only checked public unicast addresses; a name resolving to any non-public address SHALL be refused before a connection is made. When an environment HTTP proxy is used, the destination name SHALL be checked before the request is handed to the proxy and the proxy endpoint SHALL remain dialable. Redirect responses from model sources SHALL NOT be followed. Subscription, OAuth and release traffic SHALL keep its existing path.
+
+#### Scenario: Metadata address rejected at creation
+- **WHEN** an administrator creates a source with base URL `http://169.254.169.254/latest`
+- **THEN** the response is 422 and nothing is stored
+
+#### Scenario: Name resolving to loopback refused at dial
+- **WHEN** a stored source's host name resolves to `127.0.0.1`
+- **THEN** the request fails before any connection to the loopback address
+
+#### Scenario: Self-hosted source with the opt-in
+- **WHEN** `--allow-private-model-sources` is set
+- **THEN** a source at `http://127.0.0.1:11434/v1` can be created and used
+
+### Requirement: Dashboard responses carry a content security policy
+
+Dashboard and admin API responses SHALL include a Content-Security-Policy that allows scripts, connections, fonts and styles only from the same origin (inline styles allowed), images from the same origin plus `data:` and `blob:`, and sets `object-src 'none'`, `base-uri 'none'`, `form-action 'self'` and `frame-ancestors 'none'`. Proxy routes SHALL carry `default-src 'none'; frame-ancestors 'none'; sandbox`.
+
+#### Scenario: Policy headers
+- **WHEN** a browser loads `/` or `/api/settings`
+- **THEN** the response carries the dashboard policy
+- **AND** `/v1/models` carries the sandbox policy
+
+### Requirement: Sensitive administrator actions require the current password
+
+In standard dashboard authentication mode, `POST /api/accounts/{id}/export/auth`, `POST /api/runtime/updates/apply` and `POST /api/runtime/updates/rollback` SHALL require `currentPassword` in the JSON body. The password SHALL be verified under the `password` failure scope; a missing or wrong value SHALL return 403 `reauthentication_required` without performing the action and without ending the session. Trusted-header and disabled modes SHALL NOT require it. The dashboard SHALL prompt for the password before these actions.
+
+#### Scenario: Export without the password
+- **WHEN** a fully authenticated administrator exports account tokens without `currentPassword`
+- **THEN** the response is 403 `reauthentication_required` and contains no tokens
+
+### Requirement: Disabled dashboard authentication is limited to loopback listeners
+
+`--dashboard-auth-mode=disabled` SHALL be accepted only with a loopback `--listen` address and SHALL log a startup warning that every client reaching the listener is an administrator.
+
+#### Scenario: Disabled mode on all interfaces
+- **WHEN** `serve` is started with `--dashboard-auth-mode disabled --listen 0.0.0.0:2455`
+- **THEN** it exits with a configuration error
+
+### Requirement: Error archives redact common credential formats
+
+Error-archive redaction SHALL mask, in addition to bearer values, OpenAI-style keys and JWTs, AWS access key IDs, Google API keys, GitHub and Slack tokens, PEM private-key blocks and URL user-info credentials, while preserving surrounding text.
+
+#### Scenario: Free-text credentials
+- **WHEN** an archived diagnostic message contains an AWS access key ID and `https://user:secret@db.example/x`
+- **THEN** the stored message contains `[redacted]` in their place and keeps `https://[redacted]@db.example/x`
+
+### Requirement: Self-update verifies signed release checksums
+
+When the running binary embeds at least one trusted ed25519 release public key, the updater SHALL download `SHA256SUMS.sig` and SHALL refuse the update unless the base64 signature over the exact `SHA256SUMS` bytes verifies with an embedded key; this check SHALL complete before the archive is downloaded or extracted, and a refused update SHALL leave the staging directory empty. When no key is embedded, the updater SHALL keep checksum-only verification so earlier releases remain installable. The release workflow SHALL sign `SHA256SUMS` with the PKCS#8 PEM ed25519 key from the `RELEASE_SIGNING_KEY` secret, publish `SHA256SUMS.sig`, and fail when the build embeds trusted keys but the secret is missing or does not match an embedded key. Key rotation SHALL be possible by embedding several keys.
+
+#### Scenario: Signature matrix
+- **WHEN** a build embeds a trusted key and a release offers a valid signature, no signature, a signature by another key, or a modified `SHA256SUMS`
+- **THEN** only the valid signature produces an extracted binary and no other case downloads the archive
+
+#### Scenario: Transition release
+- **WHEN** a build embeds no key
+- **THEN** a release with only `SHA256SUMS` is installed after its checksum matches and no signature is requested
+
+### Requirement: Quota history stays bounded and is read per current series
+
+The runtime SHALL store at most one quota-history row per account window and five-minute UTC bucket: an observation in the latest row's bucket with the same reset time and window length SHALL update that row, while a later bucket, an older observation or a changed reset time or window length SHALL insert a row. Current quota state SHALL remain unchanged by this rule. Dashboard overview and projections SHALL read, for each current account window, every retained observation in the six-hour pace horizon plus the 64 newest observations of the lookback, through the series index and without a global row limit; the read MUST NOT fail because of the number of accounts.
+
+#### Scenario: Frequent polling does not multiply history rows
+- **WHEN** an account window is polled every minute without a reset
+- **THEN** history contains one row per five-minute bucket whose values equal the latest observation in that bucket
+
+#### Scenario: A reset inside a bucket is preserved
+- **WHEN** the reset time changes between two polls in the same five-minute bucket
+- **THEN** both the pre-reset and the post-reset observations remain in history
+
+#### Scenario: Many accounts
+- **WHEN** 200 or more accounts each have a day of one-minute history
+- **THEN** the dashboard overview and projections complete without an observation-limit error
+
+### Requirement: Online backups are verified snapshots without the encryption key
+
+The runtime SHALL create database backups without stopping request handling by running `VACUUM INTO` through a dedicated connection that cannot modify the source, writing to a temporary file in the destination directory. Before publication the snapshot SHALL be flushed to stable storage and SHALL pass `PRAGMA quick_check`, carry the application id and a supported schema version, and decrypt its runtime identity probe and every stored credential with the installation key. Publication SHALL be an atomic rename followed by a directory flush; a failed attempt MUST remove its temporary file and MUST NOT remove an existing backup. Snapshots SHALL preserve the implicit rowids used as reservation fences. The encryption key MUST NOT be written to the backups directory or included in a downloadable snapshot, and every backup listing SHALL state that the key must be stored separately.
+
+#### Scenario: Backup while requests are being settled
+- **WHEN** a backup runs while reservations are created and settled
+- **THEN** the published snapshot passes quick_check and opens as a runtime database with the same key
+- **AND** request handling continues during the snapshot
+
+#### Scenario: Verification fails
+- **WHEN** the snapshot does not pass quick_check or cannot be decrypted with the installation key
+- **THEN** no backup file is published and the attempt is reported as failed
+
+#### Scenario: Downloaded snapshot without the key
+- **WHEN** an administrator downloads a backup
+- **THEN** the file contains no encryption key and the listing warns that the key is stored separately
+
+### Requirement: Backups are scheduled, rotated and bounded by free space
+
+The backup schedule SHALL persist an interval of 0–168 hours (0 disables scheduled backups) and a keep count of 1–30, defaulting to every 24 hours and 3 backups, and changes SHALL apply without restart. A scheduled backup SHALL start when the newest backup is older than the interval, checked periodically after a startup delay. After a successful backup, backups beyond the newest keep count SHALL be removed; skipped or failed attempts MUST NOT remove backups. Only one backup SHALL run at a time; a concurrent request SHALL be rejected as busy. A backup SHALL be refused when the estimated snapshot would leave less than 5 % of the filesystem free, bounded to at least 256 MiB and at most 2 GiB. The last attempt's time, trigger and outcome SHALL be visible to the administrator.
+
+#### Scenario: Rotation after a scheduled backup
+- **WHEN** a scheduled backup succeeds with keep count 3 and four older backups exist
+- **THEN** exactly the three newest backups remain
+
+#### Scenario: Not enough disk space
+- **WHEN** the estimated snapshot would leave less than the free-space reserve
+- **THEN** no snapshot is written, existing backups remain and the outcome reports insufficient space
+
+### Requirement: Backup administration is administrator-only
+
+`GET /api/backups`, `POST /api/backups`, `PUT /api/backups/schedule` and `GET /api/backups/{name}` SHALL require an authenticated dashboard administrator and SHALL keep the existing cross-origin protection for unsafe methods. The download SHALL reject a request whose `Sec-Fetch-Site` header is present and is neither `same-origin` nor `none`, SHALL accept only names of the backup file pattern, SHALL serve only files inside the backups directory and SHALL respond with an attachment and `Cache-Control: no-store`. Proxy API keys MUST NOT access these routes.
+
+#### Scenario: Unauthorized or cross-site access
+- **WHEN** an unauthenticated caller, a proxy API key or a cross-site page requests a backup
+- **THEN** the request is rejected without reading the file
+
+#### Scenario: Traversal attempt
+- **WHEN** the requested backup name contains a path or does not match the backup pattern
+- **THEN** the request is rejected as not found
+
+### Requirement: A CLI backup works for cron while the service runs
+
+`codex-lb backup --data-dir DIR --output PATH` SHALL write a verified snapshot of DIR's database to the absolute PATH, or to a standard backup name inside PATH when it is an existing directory, while the service is running or stopped. The command MUST NOT take the service lock, migrate or write the source database, or overwrite an existing file, and SHALL print the written path and size as JSON.
+
+#### Scenario: Cron backup of a running service
+- **WHEN** the command runs against the data directory of a running service
+- **THEN** it writes a verified snapshot and the service continues to own its database
+
+### Requirement: Retention keeps up with operational growth
+
+Retention SHALL delete in batches of at most 500 rows per batch-writer job and continue until a batch is short or a 20-second cycle budget is spent. Quota history SHALL be retained for 45 days when no override is stored (an explicit 0 disables it) and observations older than one day SHALL be thinned to the newest per account window, UTC hour, reset time and window length; the newest observation of a series MUST NOT be deleted. Request events MUST NOT be deleted unless request-log retention is configured. Finished automation runs SHALL be kept for the newest 100 cycles of each job, and pending or running runs and each job's latest cycle MUST NOT be deleted. Limit warm-up attempts SHALL be kept for the newest 100 per account; only attempts whose reset time is more than eight days old MAY be deleted and the newest attempt of an account MUST NOT be deleted.
+
+#### Scenario: A large backlog
+- **WHEN** 100 000 quota-history rows are older than the retention cutoff
+- **THEN** one retention cycle deletes them without holding the writer for longer than one bounded batch
+
+#### Scenario: Default retention on upgrade
+- **WHEN** no retention override is stored
+- **THEN** quota history older than 45 days is removed and request events are kept
+
+### Requirement: Settled reservation pruning preserves fences
+
+A usage reservation SHALL be deleted only when it is settled, was last updated more than seven days ago, is not referenced by a usage event, an account outcome or a continuation, and is not the reservation with the largest rowid. Reservations of request events removed by request-log retention SHALL be deleted in the same transaction under the same conditions. Reserved or reconciliation-pending reservations MUST NOT be deleted, and a reservation created after pruning MUST receive a larger rowid than every deleted reservation.
+
+#### Scenario: Fences survive pruning
+- **WHEN** settled reservations older than seven days are pruned
+- **THEN** account outcomes, continuations and affinity versions keep resolving and comparing as before
+- **AND** a new reservation's rowid is larger than every deleted rowid
+
+### Requirement: WAL size and planner statistics are maintained
+
+The writer connection SHALL set `journal_size_limit` to 64 MiB. A dedicated maintenance connection SHALL run a passive WAL checkpoint every minute and a truncating checkpoint with a busy timeout of at most one second when no frames remain uncheckpointed and the WAL file is not empty; a busy result SHALL be skipped until the next cycle. `PRAGMA optimize` with a bounded analysis limit SHALL run through the batch writer once a day and when the store closes; a failure MUST NOT prevent closing.
+
+#### Scenario: WAL growth during long reads
+- **WHEN** long readers prevented checkpoints and then finish
+- **THEN** the next maintenance cycle checkpoints and the WAL file no longer exceeds the size limit
+
+### Requirement: Reports and request logs use bounded queries
+
+Admin report responses SHALL be identical to the previous per-day evaluation for every filter, time zone and window while using a number of database statements independent of the number of days. Request-log pages SHALL be ordered through an index on `(requested_at, request_id)`, and the request-log API SHALL accept an optional opaque keyset `cursor`, returned as `nextCursor` when more rows exist, that returns rows strictly after the last returned row in the existing descending order, while offset paging remains supported and the total, conversation aggregate and filter options ignore the cursor. Open reservations SHALL use a partial index on reserved rows.
+
+#### Scenario: Daylight-saving week
+- **WHEN** a report window spans a daylight-saving transition in the selected time zone
+- **THEN** daily rows and medians equal the previous per-day results
+
+#### Scenario: Keyset page
+- **WHEN** a client passes a page's `nextCursor` as `cursor`
+- **THEN** the response equals the next offset page without scanning the skipped rows
+
+### Requirement: Storage bookkeeping is atomic and bounded
+
+Deleting an automation job SHALL delete the job and its runs in one transaction and SHALL return any failure. Settling or releasing a reservation whose limit was lowered by repricing SHALL clamp the limit at zero instead of skipping the adjustment. Error-archive and resource-owner bounds SHALL be enforced from counters maintained in the same transaction as each insert or delete, evicting the oldest rows in the previous order. Opening a store with a relative filesystem path SHALL resolve it to an absolute path.
+
+#### Scenario: Release after a downward reprice
+- **WHEN** a reservation's limit consumption was reduced below its reserved amount and the reservation is released
+- **THEN** the limit's current value becomes zero rather than keeping the reserved amount
