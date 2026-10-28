@@ -43,13 +43,14 @@ type ModelCatalogConfig struct {
 }
 
 type ModelCatalogService struct {
-	store    ModelCatalogStore
-	fetcher  ModelCatalogFetcher
-	tokens   ModelCatalogTokenSource
-	config   ModelCatalogConfig
-	mu       sync.RWMutex
-	snapshot *domain.CatalogSnapshot
-	refresh  chan struct{}
+	background BackgroundSchedule
+	store      ModelCatalogStore
+	fetcher    ModelCatalogFetcher
+	tokens     ModelCatalogTokenSource
+	config     ModelCatalogConfig
+	mu         sync.RWMutex
+	snapshot   *domain.CatalogSnapshot
+	refresh    chan struct{}
 }
 
 func NewModelCatalogService(store ModelCatalogStore, fetcher ModelCatalogFetcher, tokens ModelCatalogTokenSource, config ModelCatalogConfig) *ModelCatalogService {
@@ -100,17 +101,14 @@ func (s *ModelCatalogService) RequestRefresh() {
 }
 
 func (s *ModelCatalogService) Run(ctx context.Context) error {
-	ticker := time.NewTicker(s.config.RefreshEvery)
-	defer ticker.Stop()
-	for {
-		_ = s.Refresh(ctx)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		case <-s.refresh:
-		}
-	}
+	RunPeriodic(ctx, "model_catalog", s.background, s.config.RefreshEvery, s.refresh, s.Refresh)
+	return ctx.Err()
+}
+
+// ConfigureBackground sets the refresher's start delay and outcome reporting;
+// call it before Run.
+func (s *ModelCatalogService) ConfigureBackground(schedule BackgroundSchedule) {
+	s.background = schedule
 }
 
 func (s *ModelCatalogService) Refresh(ctx context.Context) error {

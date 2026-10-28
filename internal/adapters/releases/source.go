@@ -4,6 +4,7 @@ package releases
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,6 +49,10 @@ type Source struct {
 	client *http.Client
 	goos   string
 	goarch string
+	// keys are the embedded trusted release keys; keysErr reports a malformed
+	// embedded list, which refuses every download.
+	keys    []ed25519.PublicKey
+	keysErr error
 }
 
 var _ application.RuntimeReleaseSource = (*Source)(nil)
@@ -61,7 +66,8 @@ func New(client *http.Client, goos, goarch string) *Source {
 	owned := *client
 	owned.Jar = nil
 	owned.CheckRedirect = checkRedirect
-	return &Source{client: &owned, goos: goos, goarch: goarch}
+	keys, err := TrustedReleaseKeys()
+	return &Source{client: &owned, goos: goos, goarch: goarch, keys: keys, keysErr: err}
 }
 
 func checkRedirect(req *http.Request, via []*http.Request) error {

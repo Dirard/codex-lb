@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/upstream"
+	"codex-lb/internal/adapters/wirejson"
 	"codex-lb/internal/application"
 )
 
@@ -79,8 +81,9 @@ func (a *Adapter) chatGPTWireBody(target *upstream.Target, body json.RawMessage,
 	if _, ok := object["instructions"]; !ok {
 		object["instructions"] = json.RawMessage(`""`)
 	}
+	// Decode input only when it is a string; an item array can be megabytes.
 	var text string
-	if json.Unmarshal(object["input"], &text) == nil {
+	if input := bytes.TrimSpace(object["input"]); len(input) != 0 && input[0] == '"' && json.Unmarshal(input, &text) == nil {
 		object["input"], _ = json.Marshal([]struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
@@ -115,11 +118,8 @@ func (a *Adapter) chatGPTWireBody(target *upstream.Target, body json.RawMessage,
 			object["client_metadata"], _ = json.Marshal(metadata)
 		}
 	}
-	normalized, err := json.Marshal(object)
-	if err != nil {
-		return nil, providerFailure("invalid_response_request", 400, false)
-	}
-	return normalized, nil
+	// Values came from json.Unmarshal or json.Marshal; re-assemble them verbatim.
+	return wirejson.EncodeObject(object), nil
 }
 
 // normalizeChatGPTReasoning applies the subscription-only minimal workaround

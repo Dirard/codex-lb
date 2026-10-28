@@ -84,13 +84,17 @@ func (s *Server) registerRuntimeUpdateRoutes(admin *http.ServeMux) {
 	} {
 		admin.HandleFunc(action.path, func(w http.ResponseWriter, r *http.Request) {
 			var request struct {
-				Version string `json:"version"`
+				Version         string `json:"version"`
+				CurrentPassword string `json:"currentPassword"`
 			}
 			if !decodeJSON(w, r, &request) {
 				return
 			}
 			if request.Version == "" || strings.TrimSpace(request.Version) != request.Version {
 				writeError(w, http.StatusBadRequest, "invalid_update_target", "A version is required")
+				return
+			}
+			if !s.confirmPassword(w, r, request.CurrentPassword) {
 				return
 			}
 			if s.runtimeUpdates == nil {

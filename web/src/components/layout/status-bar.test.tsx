@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { StatusBar, type StatusBarProps } from "@/components/layout/status-bar";
 import i18n from "@/i18n";
 import {
-  createDashboardOverview,
+  createDashboardStatus,
   createDashboardSettings,
 } from "@/test/mocks/factories";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
@@ -41,9 +41,9 @@ describe("StatusBar", () => {
   it("shows ready service independently from stale usage", async () => {
     server.use(
       http.get("/health/ready", () => HttpResponse.json({ status: "ok" })),
-      http.get("/api/dashboard/overview", () =>
+      http.get("/api/dashboard/status", () =>
         HttpResponse.json(
-          createDashboardOverview({
+          createDashboardStatus({
             lastSyncAt: new Date(Date.now() - 120_000).toISOString(),
           }),
         ),
@@ -56,14 +56,33 @@ describe("StatusBar", () => {
     expect(await screen.findByText("Stale")).toBeInTheDocument();
   });
 
+  it("reads usage sync from the status endpoint, never from the overview", async () => {
+    let overviewRequests = 0;
+    server.use(
+      http.get("/health/ready", () => HttpResponse.json({ status: "ok" })),
+      http.get("/api/dashboard/overview", () => {
+        overviewRequests += 1;
+        return HttpResponse.json({}, { status: 500 });
+      }),
+      http.get("/api/dashboard/status", () =>
+        HttpResponse.json(createDashboardStatus({ lastSyncAt: new Date().toISOString() })),
+      ),
+    );
+
+    renderStatusBar();
+
+    expect(await screen.findByText("Synced")).toBeInTheDocument();
+    expect(overviewRequests).toBe(0);
+  });
+
   it("shows fresh usage independently from an unready service", async () => {
     server.use(
       http.get("/health/ready", () =>
         HttpResponse.json({ detail: "Service unavailable" }, { status: 503 }),
       ),
-      http.get("/api/dashboard/overview", () =>
+      http.get("/api/dashboard/status", () =>
         HttpResponse.json(
-          createDashboardOverview({
+          createDashboardStatus({
             lastSyncAt: new Date().toISOString(),
           }),
         ),
@@ -80,8 +99,8 @@ describe("StatusBar", () => {
     const lastSyncAt = "2026-08-09T14:30:45.000Z";
     server.use(
       http.get("/health/ready", () => HttpResponse.json({ status: "ok" })),
-      http.get("/api/dashboard/overview", () =>
-        HttpResponse.json(createDashboardOverview({ lastSyncAt })),
+      http.get("/api/dashboard/status", () =>
+        HttpResponse.json(createDashboardStatus({ lastSyncAt })),
       ),
     );
     useDateDisplayFormatStore.setState({ dateDisplayFormat: "default" });
@@ -111,9 +130,9 @@ describe("StatusBar", () => {
         await pendingReadiness;
         return HttpResponse.json({ status: "ok" });
       }),
-      http.get("/api/dashboard/overview", () =>
+      http.get("/api/dashboard/status", () =>
         HttpResponse.json(
-          createDashboardOverview({
+          createDashboardStatus({
             lastSyncAt: new Date().toISOString(),
           }),
         ),
@@ -179,7 +198,7 @@ describe("StatusBar", () => {
 
     const link = screen.getByRole("link", { name: "Open official GitHub repository" });
 
-    expect(link).toHaveAttribute("href", "https://github.com/soju06/codex-lb");
+    expect(link).toHaveAttribute("href", "https://github.com/Dirard/codex-lb");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
   });

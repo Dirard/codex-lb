@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"codex-lb/internal/domain"
 )
@@ -51,9 +50,6 @@ func TestWarmupReservationIsPrivateAndReconcilesWithoutClientCharge(t *testing.T
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if n, err := store.ReleaseStaleReservations(ctx, fixedTime.Add(24*time.Hour)); err != nil || n != 0 {
-		t.Fatalf("warmup uncertainty was stale-released: %d %v", n, err)
-	}
 	logs, err := store.ListRequestLogs(ctx, domain.RequestLogFilter{Limit: 10})
 	if err != nil || len(logs.Requests) != 1 {
 		t.Fatalf("pending projection: %+v %v", logs, err)

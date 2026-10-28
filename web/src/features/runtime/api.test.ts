@@ -33,7 +33,7 @@ describe("runtime update API authentication", () => {
         () => applyRuntimeUpdate("go-v1.1.0"),
         () => rollbackRuntimeUpdate("go-v1.0.0"),
       ].entries()) {
-        useAuthStore.setState({ authenticated: true, initialized: true, canWrite: true });
+        useAuthStore.setState({ authenticated: true, initialized: true });
         await expect(action()).rejects.toMatchObject({ status: 401 });
         expect(useAuthStore.getState().authenticated).toBe(false);
         expect(refreshSession).toHaveBeenCalledTimes(index + 1);

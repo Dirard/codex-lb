@@ -46,7 +46,7 @@ func (s *Store) ListAffinities(ctx context.Context, filter domain.AffinityFilter
 	if direction == "" {
 		direction = "desc"
 	}
-	err = transact(ctx, s.db, func(tx *sql.Tx) error {
+	err = s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if filter.Kind == "" || filter.Kind == domain.AffinityPromptCache {
 			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM affinity_bindings WHERE kind='prompt_cache' AND updated_at<=?", millis(now.Add(-ttl))).Scan(&page.StalePromptCacheCount); err != nil {
 				return err
@@ -86,7 +86,7 @@ func (s *Store) DeleteFilteredAffinities(ctx context.Context, filter domain.Affi
 	if err != nil {
 		return 0, err
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM affinity_bindings WHERE (kind,key) IN
+	result, err := s.exec(ctx, `DELETE FROM affinity_bindings WHERE (kind,key) IN
  (SELECT b.kind,b.key FROM affinity_bindings b JOIN accounts a ON a.id=b.account_id WHERE `+where+")", args...)
 	if err != nil {
 		return 0, err

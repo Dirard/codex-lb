@@ -42,6 +42,11 @@ func requestLogWhere(filter domain.RequestLogFilter) (string, []any) {
 		parts = append(parts, "e.conversation_id=?")
 		args = append(args, filter.ConversationID)
 	}
+	if filter.Before != nil {
+		// A row-value comparison is an index range on (requested_at, request_id).
+		parts = append(parts, "(e.requested_at,e.request_id)<(?,?)")
+		args = append(args, millis(filter.Before.RequestedAt), filter.Before.RequestID)
+	}
 	if len(filter.AccountIDs) > 0 {
 		parts, args = appendInCondition(parts, args, "e.account_id", filter.AccountIDs)
 	}
@@ -127,7 +132,7 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	if filter.Limit < 1 || filter.Limit > 1000 || filter.Offset < 0 {
 		return response, ErrInvalid
 	}
-	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return response, err
 	}
@@ -136,8 +141,12 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	joins := ` FROM log_entries e LEFT JOIN accounts a ON a.id=e.account_id
  LEFT JOIN api_keys k ON k.id=e.api_key_id
  LEFT JOIN legacy_model_sources ms ON ms.id=e.model_source_id`
-	countQuery := pendingRequestLogSource + `SELECT (SELECT count(*)` + events + `)+(SELECT count(*)` + pending + `)`
-	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&response.Total); err != nil {
+	// The total describes the whole filtered result, not the rows after a cursor.
+	unbounded := filter
+	unbounded.Before = nil
+	countEvents, countPending, countArgs := requestLogSources(unbounded)
+	countQuery := pendingRequestLogSource + `SELECT (SELECT count(*)` + countEvents + `)+(SELECT count(*)` + countPending + `)`
+	if err := tx.QueryRowContext(ctx, countQuery, countArgs...).Scan(&response.Total); err != nil {
 		return response, err
 	}
 	query := `SELECT e.requested_at,e.account_id,nullif(coalesce(e.plan_type,a.plan_type),''),
@@ -146,15 +155,19 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
  e.client_ip,e.conversation_id,nullif(e.service_tier,''),e.status,nullif(e.error_code,''),
  e.input_tokens,e.output_tokens,e.reasoning_tokens,e.reasoning_tokens_known,
  e.cached_input_tokens,e.reasoning_effort,e.cost_microdollars,e.total_latency_ms,
- e.latency_first_token_ms,e.queue_latency_ms` + joins + ` ORDER BY e.requested_at DESC,e.request_id DESC`
-	pageArgs := append(append([]any{}, args...), filter.Limit, filter.Offset)
+ e.latency_first_token_ms,e.queue_latency_ms,e.request_id` + joins + ` ORDER BY e.requested_at DESC,e.request_id DESC`
+	// One extra row tells whether a keyset continuation exists.
+	pageArgs := append(append([]any{}, args...), filter.Limit+1, filter.Offset)
 	rows, err := tx.QueryContext(ctx, requestLogPageSource(events, pending)+query, pageArgs...)
 	if err != nil {
 		return response, err
 	}
+	more := false
+	var last domain.RequestLogCursor
 	for rows.Next() {
 		var item domain.RequestLogEntry
 		var requested int64
+		var internalID string
 		var account, plan, keyName, keyID, source, sourceID, sourceKind, transport, useragent, group, ip,
 			conversation, tier, errorCode, effort sql.NullString
 		var input, output, reasoning, cached, cost, total, queue sql.NullInt64
@@ -163,7 +176,7 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 		if err := rows.Scan(&requested, &account, &plan, &keyName, &keyID, &item.RequestID,
 			&item.RequestKind, &item.Model, &source, &sourceID, &sourceKind, &transport, &useragent, &group,
 			&ip, &conversation, &tier, &item.Status, &errorCode, &input, &output, &reasoning,
-			&reasoningKnown, &cached, &effort, &cost, &total, &first, &queue); err != nil {
+			&reasoningKnown, &cached, &effort, &cost, &total, &first, &queue, &internalID); err != nil {
 			rows.Close()
 			return response, err
 		}
@@ -206,7 +219,12 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 		if first.Valid && first.Int64 > 0 {
 			item.LatencyFirstTokenMS = &first.Int64
 		}
+		if len(response.Requests) == filter.Limit {
+			more = true
+			break
+		}
 		response.Requests = append(response.Requests, item)
+		last = domain.RequestLogCursor{RequestedAt: fromMillis(requested), RequestID: internalID}
 	}
 	err = rows.Err()
 	rows.Close()
@@ -214,11 +232,18 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 		return response, err
 	}
 	response.HasMore = int64(filter.Offset+len(response.Requests)) < response.Total
+	if filter.Before != nil {
+		response.HasMore = more
+	}
+	if more {
+		cursor := last.String()
+		response.NextCursor = &cursor
+	}
 	if filter.ConversationID != "" {
 		var costMicro int64
 		costQuery := pendingRequestLogSource + `SELECT coalesce(sum(cost_microdollars),0) FROM (
- SELECT e.cost_microdollars` + events + ` UNION ALL SELECT e.cost_microdollars` + pending + `)`
-		if err := tx.QueryRowContext(ctx, costQuery, args...).Scan(&costMicro); err != nil {
+ SELECT e.cost_microdollars` + countEvents + ` UNION ALL SELECT e.cost_microdollars` + countPending + `)`
+		if err := tx.QueryRowContext(ctx, costQuery, countArgs...).Scan(&costMicro); err != nil {
 			return response, err
 		}
 		response.Conversation = &struct {
@@ -239,12 +264,13 @@ func logNullableInt(value sql.NullInt64) *int64 {
 func (s *Store) RequestLogOptions(ctx context.Context, filter domain.RequestLogFilter) (domain.RequestLogOptions, error) {
 	options := domain.RequestLogOptions{AccountIDs: []string{}, ModelOptions: []domain.RequestLogModelOption{},
 		APIKeys: []domain.RequestLogAPIKeyOption{}, Statuses: []string{}}
-	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return options, err
 	}
 	defer tx.Rollback()
 	filter.Statuses = nil // Status facet must not self-filter.
+	filter.Before = nil   // Facets describe the whole result, not one page.
 	events, pending, args := requestLogSources(filter)
 	// UNION deduplicates only the facet columns; no full log rows or unrelated
 	// account/key lookups are needed to populate the filter controls.

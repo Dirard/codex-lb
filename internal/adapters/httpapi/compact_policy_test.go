@@ -65,7 +65,7 @@ func TestCompactRoutesShareKeyReasoningAndFastModePolicy(t *testing.T) {
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	compact := httptest.NewServer(mux)
 	defer compact.Close()
 	for _, path := range []string{"/v1/responses/compact", "/v1/responses/compact/", "/backend-api/codex/responses/compact", "/backend-api/codex/responses/compact/", "/backend-api/codex/responses"} {

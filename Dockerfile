@@ -25,4 +25,7 @@ EXPOSE 2455
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD wget -q -O /dev/null http://127.0.0.1:2455/health/ready || exit 1
 ENTRYPOINT ["/usr/local/bin/codex-lb"]
-CMD ["serve", "--data-dir", "/data", "--listen", "0.0.0.0:2455"]
+# Containers update by replacing the image, so the built-in version manager is
+# off. Allow at least 120s to stop: docker run --stop-timeout 120 (compose:
+# stop_grace_period: 120s), or in-flight accounting is cut short.
+CMD ["serve", "--data-dir", "/data", "--listen", "0.0.0.0:2455", "--self-update=false"]

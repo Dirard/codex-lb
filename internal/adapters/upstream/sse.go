@@ -9,8 +9,15 @@ import (
 
 const (
 	maxSSEEventBytes = 16 << 20
-	maxSSEEvents     = 100000
+	// maxStreamBytes bounds the total event payload of one upstream response.
+	// Streams are bounded by size and the overall response deadline, not by
+	// an event count that a long healthy response can exceed.
+	maxStreamBytes = 256 << 20
 )
+
+func streamTooLarge() error {
+	return &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream stream exceeds bounded size"}
+}
 
 // ReadSSE shares the bounded parser with native provider endpoints. A callback
 // error stops reading immediately, including an endpoint's terminal sentinel.
@@ -18,22 +25,25 @@ func ReadSSE(reader io.Reader, handle func(event string, data []byte) error) err
 	return readSSE(reader, handle)
 }
 
+// readSSE hands every event a buffer it owns (one allocation per event), so
+// handlers may retain data without copying it.
 func readSSE(reader io.Reader, handle func(event string, data []byte) error) error {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64<<10), maxSSEEventBytes)
-	var data bytes.Buffer
-	eventName := ""
-	size := 0
+	// The scanner grows on demand up to the event bound; most lines are small.
+	scanner.Buffer(make([]byte, 8<<10), maxSSEEventBytes)
+	var data []byte
+	eventName, lastName := "", ""
+	size, total := 0, 0
 	dispatch := func() error {
-		if data.Len() == 0 && eventName == "" {
+		if len(data) == 0 && eventName == "" {
 			return nil
 		}
-		payload := append([]byte(nil), data.Bytes()...)
+		payload := data
 		if len(payload) > 0 && payload[len(payload)-1] == '\n' {
 			payload = payload[:len(payload)-1]
 		}
 		err := handle(eventName, payload)
-		data.Reset()
+		data = nil
 		eventName = ""
 		return err
 	}
@@ -42,6 +52,9 @@ func readSSE(reader io.Reader, handle func(event string, data []byte) error) err
 		size += len(line) + 1
 		if size > maxSSEEventBytes {
 			return &Error{Code: ErrorCodeInvalidStream, Message: "upstream SSE event exceeds bounded size"}
+		}
+		if total += len(line) + 1; total > maxStreamBytes {
+			return streamTooLarge()
 		}
 		{
 			trimmed := line
@@ -61,12 +74,16 @@ func readSSE(reader io.Reader, handle func(event string, data []byte) error) err
 			}
 			switch string(field) {
 			case "data":
-				if data.Len() > 0 {
-					data.WriteByte('\n')
+				if len(data) > 0 {
+					data = append(data, '\n')
 				}
-				data.Write(value)
+				data = append(data, value...)
 			case "event":
-				eventName = string(value)
+				// Consecutive events usually share a name; reuse its string.
+				if string(value) != lastName {
+					lastName = string(value)
+				}
+				eventName = lastName
 			}
 		}
 	}
@@ -76,7 +93,7 @@ func readSSE(reader io.Reader, handle func(event string, data []byte) error) err
 		}
 		return &Error{Code: ErrorCodeConnection, Message: "upstream SSE read failed"}
 	}
-	if data.Len() > 0 || eventName != "" {
+	if len(data) > 0 || eventName != "" {
 		return dispatch()
 	}
 	return nil

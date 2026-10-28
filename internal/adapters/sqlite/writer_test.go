@@ -291,3 +291,35 @@ func TestBatchedReservationsCannotOverdrawSharedKey(t *testing.T) {
 		t.Fatalf("budget overdraw: accepted=%d limits=%+v err=%v", accepted, current.Limits, err)
 	}
 }
+
+// Waiting behind a transaction that holds the writer connection is not batch
+// execution time: a queued job must run after the holder commits.
+func TestWriteBatchDeadlineExcludesWaitingForTheWriterConnection(t *testing.T) {
+	s, _ := testStore(t)
+	s.writer.timeout = 100 * time.Millisecond
+	holder, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec("CREATE TABLE writer_wait_probe(id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- s.write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, "INSERT INTO writer_wait_probe VALUES(1)")
+			return err
+		})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("queued job finished while the connection was held: %v", err)
+	case <-time.After(3 * s.writer.timeout):
+	}
+	if err := holder.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("queued job failed after waiting for the connection: %v", err)
+	}
+}

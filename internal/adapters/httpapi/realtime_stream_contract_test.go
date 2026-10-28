@@ -54,7 +54,7 @@ func TestRealtimeStreamFailureAndCancellationReleaseCapacity(t *testing.T) {
 			ops.ConfigureAdmission(proxy)
 			var archives atomic.Int32
 			ops.ConfigureDiagnostics(func(context.Context, application.ErrorDiagnostic) { archives.Add(1) })
-			handler := httpapi.NewCodexOperationsHandler(store, ops)
+			handler := httpapi.NewCodexOperationsHandler(store, ops, nil)
 			done := make(chan struct{})
 			cancels := make(chan context.CancelFunc, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -38,7 +39,7 @@ type websocketSession struct {
 	key            websocketKey
 	connection     *websocket.Conn
 	gate           chan struct{}
-	frames         chan websocketFrame
+	readerDone     chan struct{}
 	cancel         context.CancelFunc
 	latest         string
 	refs           int
@@ -46,6 +47,42 @@ type websocketSession struct {
 	retireWhenIdle bool
 	last           time.Time
 	timer          *time.Timer
+
+	// Reader state shared with the leased response without p.mu.
+	lease       atomic.Pointer[websocketLease]
+	lastFrame   atomic.Int64 // UnixNano of the latest frame read from upstream
+	delivering  atomic.Bool  // a read frame waits for the lease to accept it
+	unsolicited atomic.Bool  // the peer sent a frame that no response owned
+}
+
+// websocketLease owns the frames of exactly one response.create. Frames read
+// while no lease is armed, or after its response stopped reading, belong to no
+// response: the reader drops them and marks the socket so every later reuse is
+// fenced by a ping round trip first. The hand-off is unbuffered, so a frame is
+// either accepted by the response that is still reading or attributed to none.
+type websocketLease struct {
+	frames chan websocketFrame
+	done   chan struct{}
+}
+
+// arm routes upstream frames to a new response; call it before response.create.
+func (s *websocketSession) arm() *websocketLease {
+	lease := &websocketLease{frames: make(chan websocketFrame), done: make(chan struct{})}
+	s.lease.Store(lease)
+	return lease
+}
+
+// disarm stops routing frames to the lease before the socket can be released.
+func (s *websocketSession) disarm(lease *websocketLease) {
+	s.lease.CompareAndSwap(lease, nil)
+	close(lease.done)
+}
+
+// websocketReuseFence bounds the liveness proof for a pooled idle socket; the
+// zero value disables it.
+type websocketReuseFence struct {
+	after   time.Duration
+	timeout time.Duration
 }
 
 // A live upstream connection is part of Responses continuation state. The
@@ -57,18 +94,33 @@ type websocketSessions struct {
 	entries   map[websocketKey][]*websocketSession
 	responses map[websocketResponseKey]*websocketSession
 	lanes     int
+	maxLanes  int // live session bound; 0 uses defaultWebSocketSessions
 	closed    bool
 	readers   sync.WaitGroup
+	pings     sync.WaitGroup
 }
 
-func (p *websocketSessions) acquire(ctx context.Context, target Target, previous string, client *http.Client) (*websocketSession, Result, error) {
+var errTransportClosed = errors.New("upstream transport is closed")
+
+// defaultWebSocketSessions is the measured 1 GB-host bound used when the
+// runtime does not size the pool from the host.
+const defaultWebSocketSessions = 512
+
+func (p *websocketSessions) sessionLimit() int {
+	if p.maxLanes > 0 {
+		return p.maxLanes
+	}
+	return defaultWebSocketSessions
+}
+
+func (p *websocketSessions) acquire(ctx context.Context, target Target, previous string, client *http.Client, fence websocketReuseFence) (*websocketSession, Result, error) {
 	scope := websocketScope{Owner: ownerOf(target), Endpoint: endpoint(target.BaseURL, "responses"), CredentialHash: sha256.Sum256([]byte(target.Credential)), RequiredCapability: target.RequiredCapability}
 	key := websocketKey{websocketScope: scope, Session: target.SessionID}
 	for {
 		p.mu.Lock()
 		if p.closed {
 			p.mu.Unlock()
-			return nil, Result{}, errors.New("upstream transport is closed")
+			return nil, Result{}, errTransportClosed
 		}
 		if p.entries == nil {
 			p.entries = make(map[websocketKey][]*websocketSession)
@@ -117,7 +169,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 				}
 			}
 			if entry == nil {
-				if p.lanes >= 512 {
+				if p.lanes >= p.sessionLimit() {
 					var oldest *websocketSession
 					for _, lanes := range p.entries {
 						for _, candidate := range lanes {
@@ -135,7 +187,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 				if key.Session == "" {
 					key.Session = "request:" + rand.Text()
 				}
-				entry = &websocketSession{key: key, gate: make(chan struct{}, 1), frames: make(chan websocketFrame, 1)}
+				entry = &websocketSession{key: key, gate: make(chan struct{}, 1), readerDone: make(chan struct{})}
 				p.entries[key] = append(p.entries[key], entry)
 				p.lanes++
 			}
@@ -169,11 +221,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 		}
 		if ctx.Err() != nil {
 			p.release(entry, true, "", acquired)
-			failure := &Error{Code: "request_cancelled", Status: 499, Message: "Request cancelled before upstream response creation", RejectedBeforeExecution: true, cause: ctx.Err()}
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				failure.Code, failure.Status = "upstream_timeout", http.StatusGatewayTimeout
-			}
-			return nil, Result{}, failure
+			return nil, Result{}, cancelledBeforeCreate(ctx)
 		}
 		p.mu.Lock()
 		actualDead := entry.dead
@@ -182,7 +230,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 			mapped, found := p.responses[websocketResponseKey{scope, previous}]
 			lost = lost || !found || mapped != entry || entry.latest != previous
 		}
-		connection := entry.connection
+		connection, idle := entry.connection, time.Since(entry.last)
 		p.mu.Unlock()
 		if lost {
 			p.release(entry, !actualDead, "", true)
@@ -192,7 +240,21 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 			return nil, Result{}, &Error{Code: ErrorCodeContinuationNotFound, Message: "Upstream session is no longer available", RejectedBeforeExecution: true}
 		}
 		if connection != nil {
-			return entry, Result{}, nil
+			err := p.fenceReuse(ctx, entry, connection, idle, fence)
+			if err == nil {
+				return entry, Result{}, nil
+			}
+			if ctx.Err() != nil {
+				p.release(entry, true, "", true)
+				return nil, Result{}, cancelledBeforeCreate(ctx)
+			}
+			// response.create was not written, so replacing the socket is safe;
+			// an exact continuation cannot move to another connection.
+			p.release(entry, false, "", true)
+			if previous == "" {
+				continue
+			}
+			return nil, Result{}, &Error{Code: ErrorCodeContinuationNotFound, Message: "Upstream session is no longer available", RejectedBeforeExecution: true}
 		}
 
 		headers := make(http.Header)
@@ -200,7 +262,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 			headers.Set("Authorization", "Bearer "+target.Credential)
 		}
 		copyAllowedTargetHeaders(headers, target.Headers)
-		connection, response, err := websocket.Dial(ctx, websocketURL(scope.Endpoint), &websocket.DialOptions{HTTPClient: client, HTTPHeader: headers})
+		connection, response, err := websocket.Dial(ctx, scope.Endpoint, &websocket.DialOptions{HTTPClient: client, HTTPHeader: headers})
 		if err != nil {
 			p.release(entry, false, "", true)
 			if response != nil && response.StatusCode >= 400 {
@@ -227,7 +289,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 			cancel()
 			connection.CloseNow()
 			p.release(entry, false, "", true)
-			return nil, Result{}, errors.New("upstream transport is closed")
+			return nil, Result{}, errTransportClosed
 		}
 		entry.connection, entry.cancel = connection, cancel
 		p.readers.Add(1)
@@ -237,18 +299,64 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 	}
 }
 
+func cancelledBeforeCreate(ctx context.Context) error {
+	failure := &Error{Code: "request_cancelled", Status: 499, Message: "Request cancelled before upstream response creation", RejectedBeforeExecution: true, cause: ctx.Err()}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		failure.Code, failure.Status = "upstream_timeout", http.StatusGatewayTimeout
+	}
+	return failure
+}
+
+// fenceReuse proves that a pooled socket can carry a new response.create.
+// It runs under the lease, without p.mu and before the lease is armed, so the
+// reader drops anything the peer sends and still processes the pong. A socket
+// that ever sent unsolicited frames is always fenced: the pong also proves
+// every earlier peer frame was read and dropped. Recently used clean sockets
+// skip the round trip.
+func (p *websocketSessions) fenceReuse(ctx context.Context, entry *websocketSession, connection *websocket.Conn, idle time.Duration, fence websocketReuseFence) error {
+	if fence.timeout <= 0 || !entry.unsolicited.Load() && idle < fence.after {
+		return nil
+	}
+	select {
+	case err := <-p.ping(connection, fence.timeout):
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// read is the only reader of an upstream socket. It hands frames to the armed
+// lease and never blocks while the socket is idle, so control frames (pong,
+// close) are processed between responses.
 func (p *websocketSessions) read(ctx context.Context, entry *websocketSession, connection *websocket.Conn) {
 	defer p.readers.Done()
-	defer close(entry.frames)
+	defer close(entry.readerDone)
 	defer func() { p.mu.Lock(); p.discardLocked(entry); p.mu.Unlock() }()
 	for {
 		kind, data, err := connection.Read(ctx)
-		frame := websocketFrame{kind, data, err}
+		if err == nil {
+			entry.lastFrame.Store(time.Now().UnixNano())
+		}
+		lease := entry.lease.Load()
+		if lease == nil {
+			if err != nil {
+				return
+			}
+			entry.unsolicited.Store(true)
+			continue
+		}
+		entry.delivering.Store(true)
 		select {
-		case entry.frames <- frame:
+		case lease.frames <- websocketFrame{kind, data, err}:
+		case <-lease.done:
+			if err == nil {
+				entry.unsolicited.Store(true)
+			}
 		case <-ctx.Done():
+			entry.delivering.Store(false)
 			return
 		}
+		entry.delivering.Store(false)
 		if err != nil {
 			return
 		}
@@ -276,6 +384,7 @@ func (p *websocketSessions) release(entry *websocketSession, keep bool, response
 	}
 	if acquired {
 		<-entry.gate
+		entry.last = time.Now()
 	}
 	if !entry.dead && entry.refs == 0 {
 		entry.last = time.Now()
@@ -360,4 +469,5 @@ func (p *websocketSessions) close() {
 	}
 	p.mu.Unlock()
 	p.readers.Wait()
+	p.pings.Wait()
 }

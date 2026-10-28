@@ -16,7 +16,7 @@ func (s *Store) SaveAccountIdentity(ctx context.Context, account domain.Account,
 	if account.ID != credential.AccountID {
 		return ErrInvalid
 	}
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		existing, err := scanAccount(tx.QueryRowContext(ctx, "SELECT "+accountColumns+" FROM accounts WHERE id=?", account.ID))
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err

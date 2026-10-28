@@ -29,8 +29,6 @@ describe("AuthSessionSchema", () => {
       authMode: "trusted_header",
       passwordManagementEnabled: true,
       passwordSessionActive: false,
-      role: "admin",
-      permissions: ["read", "write"],
     });
   });
 

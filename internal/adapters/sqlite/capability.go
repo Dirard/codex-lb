@@ -47,7 +47,7 @@ func (s *Store) RequireCapability(ctx context.Context, capability, keyScope stri
 		return hashes, err
 	}
 	now := time.Now().UTC()
-	err = transact(ctx, s.db, func(tx *sql.Tx) error {
+	err = s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, hash := range hashes {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO capability_lineage_markers
  (marker_hash,created_at,last_seen_at) VALUES(?,?,?) ON CONFLICT(marker_hash) DO UPDATE SET

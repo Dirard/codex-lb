@@ -32,7 +32,7 @@ func publicWarmupFixture(t *testing.T, upstream *httptest.Server) (*httptest.Ser
 	operations := application.NewCodexOperations(store, store, adapter, time.Hour)
 	operations.ConfigureAdmission(publicWarmupAdmission{})
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server, store

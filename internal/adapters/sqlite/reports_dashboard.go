@@ -56,7 +56,7 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 	}
 	first := (start.Unix() + int64(bucketSeconds) - 1) / int64(bucketSeconds) * int64(bucketSeconds)
 	facts, args := reportFacts(filter, time.Unix(first, 0), end)
-	rows, err := s.readDB.QueryContext(ctx, facts+`SELECT (at_ms/1000/?)*?,coalesce(sum(request_count),0),
+	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT (at_ms/1000/?)*?,coalesce(sum(request_count),0),
  coalesce(sum(input_tokens),0),coalesce(sum(output_tokens),0),
  coalesce(sum(cached_input_tokens),0),coalesce(sum(cost_usd),0),
  coalesce(sum(error_count),0),coalesce(sum(cancelled_count),0)
@@ -102,13 +102,13 @@ func (s *Store) QueryDashboardTraffic(ctx context.Context, start, end time.Time,
 
 func (s *Store) dashboardConversationRequests(ctx context.Context, filter domain.ReportFilter, start, end time.Time) (int64, error) {
 	var folded, raw int64
-	err := s.readDB.QueryRowContext(ctx, `SELECT coalesce(sum(request_count),0) FROM legacy_conversation_hourly
+	err := s.analyticsDB.QueryRowContext(ctx, `SELECT coalesce(sum(request_count),0) FROM legacy_conversation_hourly
  WHERE bucket_epoch>=? AND bucket_epoch<?`, start.Unix(), end.Unix()).Scan(&folded)
 	if err != nil {
 		return 0, err
 	}
 	where, args := rawReportWhere(filter, start, end)
-	err = s.readDB.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e WHERE `+where+`
+	err = s.analyticsDB.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e WHERE `+where+`
  AND e.conversation_id IS NOT NULL AND trim(e.conversation_id)!=''`, args...).Scan(&raw)
 	return folded + raw, err
 }
@@ -125,7 +125,7 @@ func (s *Store) dashboardTopError(ctx context.Context, filter domain.ReportFilte
 ) GROUP BY error_code ORDER BY sum(amount) DESC,error_code LIMIT 1`
 	args := append([]any{start.Unix(), end.Unix()}, rawArgs...)
 	var code string
-	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(&code)
+	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&code)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

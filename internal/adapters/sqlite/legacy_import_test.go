@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"codex-lb/internal/domain"
 )
@@ -88,9 +87,6 @@ func TestImportLegacySnapshotPreservesStateAndSource(t *testing.T) {
 	pending, err := s.ListReservationsNeedingReconciliation(ctx, "", 10)
 	if err != nil || len(pending) != 1 || pending[0].ID != "reservation-pending" {
 		t.Fatalf("pending legacy ledger not enumerable: %+v, %v", pending, err)
-	}
-	if released, err := s.ReleaseStaleReservations(ctx, fixedTime.Add(7*24*time.Hour)); err != nil || released != 0 {
-		t.Fatalf("legacy pending reservation silently released: %d, %v", released, err)
 	}
 	settings, err := s.LoadSettings(ctx)
 	if err != nil || !settings.TOTPRequiredOnLogin || !settings.APIKeyAuthEnabled || settings.DashboardSessionTTL != 86400 ||

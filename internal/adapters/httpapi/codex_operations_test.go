@@ -52,6 +52,13 @@ func (s *operationsKeyStore) LoadAccountCreditStatus(context.Context, string) (*
 func (s *operationsKeyStore) ListAccountQuota(context.Context, string) ([]domain.AccountQuota, error) {
 	return nil, nil
 }
+func (s *operationsKeyStore) AccountSelectionSnapshot(_ context.Context, ids []string) (map[string]domain.AccountSelectionState, error) {
+	states := make(map[string]domain.AccountSelectionState, len(ids))
+	for _, id := range ids {
+		states[id] = domain.AccountSelectionState{}
+	}
+	return states, nil
+}
 func (s *operationsKeyStore) LoadSettings(context.Context) (domain.RuntimeSettings, error) {
 	return domain.RuntimeSettings{RoutingStrategy: "round_robin"}, nil
 }
@@ -120,7 +127,7 @@ func TestCodexOperationsRoutesAuthenticateAndDispatch(t *testing.T) {
 	service := application.NewCodexOperations(store, &codexOwnerStore{}, provider, time.Hour)
 	service.ConfigureAdmission(codexTestAdmission{})
 	service.ConfigureAccountSelection(application.NewProxy(store, nil, nil, application.ProxyConfig{}))
-	handler := NewCodexOperationsHandler(store, service)
+	handler := NewCodexOperationsHandler(store, service, nil)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
@@ -174,7 +181,7 @@ func TestCodexOperationsTranscriptionMultipartBoundary(t *testing.T) {
 	service := application.NewCodexOperations(store, &codexOwnerStore{}, provider, time.Hour)
 	service.ConfigureAdmission(codexTestAdmission{})
 	service.ConfigureAccountSelection(application.NewProxy(store, nil, nil, application.ProxyConfig{}))
-	handler := NewCodexOperationsHandler(store, service)
+	handler := NewCodexOperationsHandler(store, service, nil)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

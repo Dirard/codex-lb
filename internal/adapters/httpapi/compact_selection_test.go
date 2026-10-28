@@ -75,7 +75,7 @@ func TestCompactSelectionSharesStrategyQuotaAndWaitsBeforeReadingCandidates(t *t
 	operations.ConfigureAccountSelection(proxy)
 	operations.ConfigurePrice(proxy.ResolvePrice)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	endpoint := server.URL + "/v1/responses/compact/"

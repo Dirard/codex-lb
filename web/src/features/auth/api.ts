@@ -70,3 +70,8 @@ export function disableTotp(payload: unknown) {
 export function logout() {
   return post(`${AUTH_BASE_PATH}/logout`, StatusResponseSchema);
 }
+
+// Revokes every dashboard session, including the current one.
+export function logoutAllSessions() {
+  return post(`${AUTH_BASE_PATH}/logout-all`, StatusResponseSchema);
+}

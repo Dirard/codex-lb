@@ -200,12 +200,17 @@ type failingAffinityStore struct {
 	reservations chan string
 }
 
-func (s failingAffinityStore) SaveAffinity(_ context.Context, _ domain.AffinityBinding, _ int64, reservationID string) (bool, error) {
-	s.reservations <- reservationID
-	return false, errors.New("synthetic affinity write failure")
+// ReserveUsage fails the shared reservation/affinity job the way the adapter
+// does after rolling it back: no reservation remains.
+func (s failingAffinityStore) ReserveUsage(ctx context.Context, request domain.ReservationRequest) (domain.Reservation, error) {
+	if request.Affinity == nil {
+		return s.Store.ReserveUsage(ctx, request)
+	}
+	s.reservations <- request.ID
+	return domain.Reservation{}, fmt.Errorf("%w: synthetic affinity write failure", domain.ErrAffinityPersistence)
 }
 
-func TestAffinityWriteFailureSettlesUnusedReservationBeforeHTTPDispatch(t *testing.T) {
+func TestAffinityWriteFailureLeavesNoReservationBeforeHTTPDispatch(t *testing.T) {
 	_, baseStore := wireFixture(t, nil)
 	store := failingAffinityStore{Store: baseStore, reservations: make(chan string, 3)}
 	var calls atomic.Int64
@@ -225,7 +230,7 @@ func TestAffinityWriteFailureSettlesUnusedReservationBeforeHTTPDispatch(t *testi
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	mux.Handle("/", httpapi.NewProxyHandler(store, proxy, nil))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -238,13 +243,12 @@ func TestAffinityWriteFailureSettlesUnusedReservationBeforeHTTPDispatch(t *testi
 		if status != 503 || !strings.Contains(body, "affinity_persistence_failed") || calls.Load() != 0 {
 			t.Fatalf("write failure dispatched or committed HTTP 200: %d %s calls=%d", status, body, calls.Load())
 		}
-		reservation, err := store.GetReservation(context.Background(), <-store.reservations)
-		if err != nil || reservation.Status != "failed" || reservation.NeedsReconciliation {
+		if reservation, err := store.GetReservation(context.Background(), <-store.reservations); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("unused reservation retained: %+v %v", reservation, err)
 		}
 	}
 	totals, err := store.UsageTotals(context.Background(), "wire-key", "")
-	if err != nil || totals.FailedCount != 3 || totals.Usage != (domain.UsageAmount{}) {
+	if err != nil || totals.FailedCount != 0 || totals.Usage != (domain.UsageAmount{}) {
 		t.Fatalf("undispatched failures charged usage: %+v %v", totals, err)
 	}
 }

@@ -25,6 +25,12 @@ type AccountQuotaMetadata interface {
 	LoadAccountQuotaRefusalAt(context.Context, string) (*time.Time, error)
 }
 
+// AccountSelectionSnapshots loads routing telemetry for many candidates with a
+// constant number of reads.
+type AccountSelectionSnapshots interface {
+	AccountSelectionSnapshot(context.Context, []string) (map[string]domain.AccountSelectionState, error)
+}
+
 type Groups interface {
 	SaveGroup(context.Context, domain.AccountGroup, time.Time) error
 	GetGroup(context.Context, string) (domain.AccountGroup, error)
@@ -49,9 +55,7 @@ type UsageLedger interface {
 	SettleUsage(context.Context, string, domain.UsageSettlement) (bool, error)
 	GetReservation(context.Context, string) (domain.Reservation, error)
 	ListReservationsNeedingReconciliation(context.Context, string, int) ([]domain.Reservation, error)
-	TouchReservation(context.Context, string, time.Time) (bool, error)
 	MarkReservationUncertain(context.Context, string) (bool, error)
-	ReleaseStaleReservations(context.Context, time.Time) (int, error)
 	RecordUsage(context.Context, domain.UsageEvent) (bool, error)
 	UsageTotals(context.Context, string, string) (domain.UsageTotals, error)
 }
@@ -63,4 +67,14 @@ type Settings interface {
 	SaveAdminSecret(context.Context, domain.AdminSecret) error
 	InitializeAdminSecret(context.Context, domain.AdminSecret) (bool, error)
 	AdvanceTOTPStep(context.Context, int64) (bool, error)
+}
+
+// DashboardSessions persists dashboard session revocation and the digests of
+// consumed one-time bootstrap tokens. Digests are SHA-256 hex strings.
+type DashboardSessions interface {
+	RevokeDashboardSession(ctx context.Context, sessionDigest string, expiresAt time.Time) error
+	DashboardSessionRevoked(ctx context.Context, sessionDigest string) (bool, error)
+	AdvanceDashboardSessionEpoch(ctx context.Context) error
+	BootstrapTokenConsumed(ctx context.Context, tokenDigest string) (bool, error)
+	ConsumeBootstrapToken(ctx context.Context, tokenDigest string, at time.Time) error
 }

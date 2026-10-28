@@ -11,9 +11,10 @@ import (
 
 var clientIPHeaders = []string{"X-Forwarded-For", "Forwarded", "X-Real-IP", "True-Client-IP", "CF-Connecting-IP"}
 
+// Identity is the resolved client of a request. It carries no notion of
+// locality: a loopback peer is not evidence of a local operator.
 type Identity struct {
 	IP          netip.Addr
-	Local       bool
 	TrustedPeer bool
 	Forwarded   bool
 }
@@ -32,11 +33,7 @@ func ResolveIdentity(r *http.Request, trusted []netip.Prefix) Identity {
 			id.Forwarded = id.Forwarded || strings.TrimSpace(value) != ""
 		}
 	}
-	if !id.Forwarded {
-		id.Local = ip.IsLoopback() && localHost(r.Host)
-		return id
-	}
-	if !id.TrustedPeer {
+	if !id.Forwarded || !id.TrustedPeer {
 		return id
 	}
 	var consensus netip.Addr
@@ -79,7 +76,6 @@ func ResolveIdentity(r *http.Request, trusted []netip.Prefix) Identity {
 		consensus = resolved
 	}
 	id.IP = consensus
-	id.Local = consensus.IsLoopback() && localHost(r.Host)
 	return id
 }
 
@@ -90,17 +86,6 @@ func containsIP(networks []netip.Prefix, ip netip.Addr) bool {
 		}
 	}
 	return false
-}
-
-func localHost(host string) bool {
-	if parsed, _, err := net.SplitHostPort(host); err == nil {
-		host = parsed
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
-	return err == nil && ip.IsLoopback()
 }
 
 func parseXFF(value string) ([]netip.Addr, error) {

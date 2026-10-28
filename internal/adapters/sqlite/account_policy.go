@@ -39,7 +39,7 @@ func (s *Store) updateAccountPolicy(ctx context.Context, id, column string, valu
 	if id == "" {
 		return ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, "UPDATE accounts SET "+column+`=? WHERE id=?
+	res, err := s.exec(ctx, "UPDATE accounts SET "+column+`=? WHERE id=?
  AND NOT (status='deactivated' AND deactivation_reason='deleted')`, value, id)
 	if err != nil {
 		return err
@@ -64,7 +64,7 @@ func (s *Store) TransitionAccountStatus(ctx context.Context, id string, expected
 		(next == domain.AccountPaused || reason == "deleted") {
 		return ErrConflict
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET status=?,deactivation_reason=''
+	res, err := s.exec(ctx, `UPDATE accounts SET status=?,deactivation_reason=''
  WHERE id=? AND status=? AND deactivation_reason=?
  AND NOT (status='deactivated' AND deactivation_reason='deleted')`, next, id, expected, reason)
 	if err != nil {
@@ -79,7 +79,7 @@ func (s *Store) TransitionAccountStatus(ctx context.Context, id string, expected
 	}
 	var current domain.AccountStatus
 	var currentReason string
-	err = s.db.QueryRowContext(ctx, "SELECT status,deactivation_reason FROM accounts WHERE id=?", id).Scan(&current, &currentReason)
+	err = s.readDB.QueryRowContext(ctx, "SELECT status,deactivation_reason FROM accounts WHERE id=?", id).Scan(&current, &currentReason)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && current == domain.AccountDeactivated && currentReason == "deleted" {
 		return ErrNotFound
 	}

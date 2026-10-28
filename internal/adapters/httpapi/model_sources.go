@@ -21,7 +21,9 @@ func (s *Server) modelSources() (*application.ModelSourceService, bool) {
 	if !ok {
 		return nil, false
 	}
-	return application.NewModelSourceService(store, s.cipher), true
+	service := application.NewModelSourceService(store, s.cipher)
+	service.AllowPrivateDestinations = s.config.AllowPrivateModelSources
+	return service, true
 }
 
 func (s *Server) listModelSources(w http.ResponseWriter, r *http.Request) {

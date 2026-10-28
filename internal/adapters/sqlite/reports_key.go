@@ -15,7 +15,7 @@ func (s *Store) KeyTrendBuckets(ctx context.Context, keyID string, since, until 
 	}
 	filter := domain.ReportFilter{APIKeyIDs: []string{keyID}}
 	facts, args := reportFacts(filter, since, until)
-	rows, err := s.readDB.QueryContext(ctx, facts+`SELECT (at_ms/3600000)*3600000,
+	rows, err := s.analyticsDB.QueryContext(ctx, facts+`SELECT (at_ms/3600000)*3600000,
  coalesce(sum(input_tokens+output_tokens),0),coalesce(sum(cost_usd),0)
  FROM facts GROUP BY 1 ORDER BY 1`, args...)
 	if err != nil {
@@ -63,7 +63,7 @@ func (s *Store) KeyUsage7Day(ctx context.Context, keyID string, since, until tim
  WHEN substr(f.account_id,1,1)=char(31) THEN substr(f.account_id,2)
  ELSE f.account_id END
  GROUP BY f.account_id,a.email,f.is_deleted`
-	rows, err := s.readDB.QueryContext(ctx, query, append(hArgs, rArgs...)...)
+	rows, err := s.analyticsDB.QueryContext(ctx, query, append(hArgs, rArgs...)...)
 	if err != nil {
 		return result, err
 	}

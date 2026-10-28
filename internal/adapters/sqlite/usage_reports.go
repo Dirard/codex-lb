@@ -29,7 +29,7 @@ func (s *Store) RecordUsage(ctx context.Context, event domain.UsageEvent) (bool,
 		return false, fmt.Errorf("metered usage must settle its reservation: %w", ErrInvalid)
 	}
 	inserted := false
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if err := priceUsageEventTx(ctx, tx, &event); err != nil {
 			return err
 		}

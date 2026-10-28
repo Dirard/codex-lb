@@ -27,7 +27,7 @@ func (s *Store) SetAccountGroups(ctx context.Context, accountID string, groupIDs
 		seen[groupID] = struct{}{}
 	}
 
-	return transact(ctx, s.db, func(tx *sql.Tx) error {
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var exists int
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM accounts
 		 WHERE id=? AND NOT(status='deactivated' AND deactivation_reason='deleted')`, accountID).

@@ -33,7 +33,6 @@ export type AccountAction = "details" | "resume" | "reauth" | "warmup-toggle" | 
 export type AccountCardProps = {
   account: AccountSummary;
   showAccountId?: boolean;
-  readOnly?: boolean;
   onAction?: (account: AccountSummary, action: AccountAction) => void;
 };
 
@@ -85,7 +84,7 @@ function QuotaBar({
   );
 }
 
-export function AccountCard({ account, showAccountId = false, readOnly = false, onAction }: AccountCardProps) {
+export function AccountCard({ account, showAccountId = false, onAction }: AccountCardProps) {
   const { t } = useTranslation();
   const blurred = usePrivacyStore((s) => s.blurred);
   const dateDisplayFormat = useDateDisplayFormatStore((s) => s.dateDisplayFormat);
@@ -126,7 +125,7 @@ export function AccountCard({ account, showAccountId = false, readOnly = false, 
   const availableResetCredits = account.availableResetCredits ?? 0;
   const hasResetCredits = availableResetCredits > 0;
   const resetCreditDisabled =
-    readOnly || status === "paused" || status === "reauth" || status === "deactivated";
+    status === "paused" || status === "reauth" || status === "deactivated";
   const resetCountdown = account.resetCreditNearestExpiresAt
     ? formatSingleUnitRemaining(account.resetCreditNearestExpiresAt)
     : null;
@@ -200,7 +199,6 @@ export function AccountCard({ account, showAccountId = false, readOnly = false, 
               : "text-muted-foreground hover:text-foreground",
           )}
           aria-label={warmupToggleLabel}
-          disabled={readOnly}
           onClick={() => onAction?.(account, "warmup-toggle")}
         >
           <Zap className="h-3 w-3" aria-hidden="true" />
@@ -266,7 +264,6 @@ export function AccountCard({ account, showAccountId = false, readOnly = false, 
             size="sm"
             variant="ghost"
             className="h-7 gap-1.5 rounded-lg text-xs text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
-            disabled={readOnly}
             onClick={() => onAction?.(account, "resume")}
           >
             <Play className="h-3 w-3" />
@@ -279,7 +276,6 @@ export function AccountCard({ account, showAccountId = false, readOnly = false, 
             size="sm"
             variant="ghost"
             className="h-7 gap-1.5 rounded-lg text-xs text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
-            disabled={readOnly}
             onClick={() => onAction?.(account, "reauth")}
           >
             <RotateCcw className="h-3 w-3" />

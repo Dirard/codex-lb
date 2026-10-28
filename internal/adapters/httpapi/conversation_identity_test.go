@@ -221,7 +221,7 @@ func TestCompactSharesThreadIdentityAndHeaderAliases(t *testing.T) {
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	compact := httptest.NewServer(mux)
 	defer compact.Close()
 	headers = http.Header{"X-Codex-Session-Id": {" shared-process "}, "Thread-Id": {" compact-thread "}, "X-Codex-Turn-State": {"provider-token"}}

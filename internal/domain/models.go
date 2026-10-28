@@ -188,6 +188,8 @@ type ReservationRequest struct {
 	Model             string      `json:"-"`
 	Budget            UsageAmount `json:"-"`
 	Now               time.Time   `json:"-"`
+	// Affinity, when set, is written only together with this reservation.
+	Affinity *AffinityCAS `json:"-"`
 }
 
 type Reservation struct {
@@ -201,6 +203,8 @@ type Reservation struct {
 	NeedsReconciliation bool      `json:"needsReconciliation"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
+	// AffinityChanged reports whether the reservation's soft binding won its CAS.
+	AffinityChanged bool `json:"-"`
 }
 
 type UsageSettlement struct {
@@ -265,4 +269,7 @@ type AdminSecret struct {
 	PasswordHash         string `json:"-"`
 	TOTPSecretEncrypted  []byte `json:"-"`
 	TOTPLastVerifiedStep *int64 `json:"-"`
+	// SessionEpoch is advanced only by "sign out everywhere"; sessions issued
+	// under an older epoch are rejected.
+	SessionEpoch int64 `json:"-"`
 }

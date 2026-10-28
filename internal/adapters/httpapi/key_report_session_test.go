@@ -40,7 +40,7 @@ func reportSessionServer(t *testing.T) (*Server, *sqlite.Store, http.Handler) {
 			t.Fatal(err)
 		}
 	}
-	server := New(store, vault, Config{}, nil)
+	server := New(store, vault, Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil)
 	public := http.NewServeMux()
 	NewKeyUsageHandler(store).RegisterPublicRoutes(public)
 	public.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +70,7 @@ func reportSessionRequest(handler http.Handler, method, path, bearer string, coo
 func TestKeyReportBrowserSessionLifecycle(t *testing.T) {
 	server, store, handler := reportSessionServer(t)
 	ctx := context.Background()
-	admin, err := server.auth.SetupPassword(ctx, "synthetic-password", time.Hour)
+	admin, err := server.auth.SetupPassword(ctx, "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestKeyReportBrowserSessionLifecycle(t *testing.T) {
 		}
 		cookie := cookies[0]
 		if cookie.Name != keyReportCookie || cookie.Path != keyReportCookiePath || cookie.Domain != "" || !cookie.HttpOnly ||
-			cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.MaxAge < 86390 || cookie.MaxAge > 86400 {
+			cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge < 86390 || cookie.MaxAge > 86400 {
 			t.Fatal("report cookie attributes incorrect")
 		}
 		for _, path := range []string{"/api/key-reports/session", "/api/key-reports/reports"} {
@@ -192,8 +192,9 @@ func TestKeyReportSessionHTTPSAndCSRF(t *testing.T) {
 				t.Fatal("HTTPS login failed", w.Code)
 			}
 			cookie := w.Result().Cookies()[0]
-			if cookie.Secure != (mode != "spoofed") || cookie.MaxAge > 12*60*60 || cookie.MaxAge < 12*60*60-10 {
-				t.Fatal("incorrect Secure or remote lifetime policy")
+			// A 365-day setting is capped at 30 days for every client.
+			if cookie.Secure != (mode != "spoofed") || cookie.MaxAge > 30*24*60*60 || cookie.MaxAge < 30*24*60*60-10 {
+				t.Fatal("incorrect Secure or lifetime cap policy", cookie.MaxAge)
 			}
 		})
 	}

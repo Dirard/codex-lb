@@ -220,3 +220,111 @@ ALTER TABLE runtime_settings ADD COLUMN show_reset_credit_expiry_badge INTEGER N
 const schemaV26 = `ALTER TABLE runtime_settings ADD COLUMN warmup_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini';`
 
 const schemaV33 = `ALTER TABLE runtime_settings ADD COLUMN codex_client_version TEXT NOT NULL DEFAULT '0.156.0' CHECK(length(codex_client_version) BETWEEN 1 AND 64);`
+
+// schemaV34 lets session/turn aliases reference their owner's stored context
+// instead of copying it, keeps continuation bounds counters in O(1) through
+// triggers (each stored context counted once), and records model repricing
+// that has not finished all of its history chunks.
+const schemaV34 = `
+ALTER TABLE continuations ADD COLUMN context_response_id TEXT;
+CREATE TABLE continuation_stats (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ records INTEGER NOT NULL, context_bytes INTEGER NOT NULL
+);
+INSERT INTO continuation_stats(id,records,context_bytes)
+ SELECT 1,count(*),coalesce(sum(length(context_encrypted)),0) FROM continuations;
+CREATE TRIGGER continuation_stats_insert AFTER INSERT ON continuations BEGIN
+ UPDATE continuation_stats SET records=records+1,
+ context_bytes=context_bytes+coalesce(length(NEW.context_encrypted),0) WHERE id=1;
+END;
+CREATE TRIGGER continuation_stats_delete AFTER DELETE ON continuations BEGIN
+ UPDATE continuation_stats SET records=records-1,
+ context_bytes=context_bytes-coalesce(length(OLD.context_encrypted),0) WHERE id=1;
+END;
+CREATE TRIGGER continuation_stats_update AFTER UPDATE OF context_encrypted ON continuations BEGIN
+ UPDATE continuation_stats SET context_bytes=context_bytes
+ -coalesce(length(OLD.context_encrypted),0)+coalesce(length(NEW.context_encrypted),0) WHERE id=1;
+END;
+CREATE TABLE model_reprice_pending (
+ model TEXT PRIMARY KEY, requested_at INTEGER NOT NULL
+);
+`
+
+// schemaV35 makes dashboard sessions revocable (per session and by epoch) and
+// records consumed operator bootstrap tokens so they cannot be replayed.
+const schemaV35 = `
+ALTER TABLE admin_secret ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0 CHECK(session_epoch >= 0);
+CREATE TABLE dashboard_session_revocations (
+ session_hash TEXT PRIMARY KEY CHECK(length(session_hash) = 64), expires_at INTEGER NOT NULL
+);
+CREATE INDEX idx_dashboard_session_revocations_expiry ON dashboard_session_revocations(expires_at);
+CREATE TABLE dashboard_bootstrap_consumed (
+ token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64), consumed_at INTEGER NOT NULL
+);
+`
+
+// schemaV36 makes the quota-history series index covering, so projection and
+// demand reads walk one series in index order without table lookups (DB-3).
+// The name is kept because reads pin it with INDEXED BY.
+const schemaV36 = `
+DROP INDEX idx_account_quota_history_identity_time;
+CREATE INDEX idx_account_quota_history_identity_time ON account_quota_history
+ (account_id,window,observed_at DESC,id DESC,used_percent,reset_at,window_minutes);
+`
+
+// schemaV37 persists the online backup schedule (OPS-6). Interval 0 disables
+// scheduled backups; the defaults keep three daily snapshots.
+const schemaV37 = `
+CREATE TABLE backup_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ interval_hours INTEGER NOT NULL DEFAULT 24 CHECK(interval_hours BETWEEN 0 AND 168),
+ keep_count INTEGER NOT NULL DEFAULT 3 CHECK(keep_count BETWEEN 1 AND 30)
+);
+INSERT INTO backup_settings(id) VALUES(1);
+`
+
+// schemaV38 replaces the status/age index, rewritten on every settlement, with
+// partial indexes for the only two access paths: open reservations (pending
+// reconciliation and interrupted-request marking, DB-17) and released
+// reservations awaiting retention (DB-5).
+const schemaV38 = `
+DROP INDEX idx_usage_reservations_status_age;
+CREATE INDEX idx_usage_reservations_open ON usage_reservations(needs_reconciliation,id) WHERE status='reserved';
+CREATE INDEX idx_usage_reservations_released ON usage_reservations(updated_at) WHERE status='released';
+`
+
+// schemaV39 orders request-log pages and keyset cursors by (requested_at,
+// request_id) without a temporary B-tree (DB-16). The new index also serves
+// every time-range scan of the replaced single-column index.
+const schemaV39 = `
+CREATE INDEX idx_usage_events_time_id ON usage_events(requested_at,request_id);
+DROP INDEX idx_usage_events_time;
+`
+
+// schemaV40 keeps error-archive and resource-owner bounds in counters that
+// triggers maintain in the same transaction as every insert or delete, so
+// enforcing them no longer scans every row on each insert (DB-19).
+const schemaV40 = `
+CREATE TABLE error_archive_stats (
+ id INTEGER PRIMARY KEY CHECK(id=1), archive_count INTEGER NOT NULL, archive_bytes INTEGER NOT NULL
+);
+INSERT INTO error_archive_stats(id,archive_count,archive_bytes)
+ SELECT 1,count(*),coalesce(sum(length(content_encrypted)),0) FROM error_archives;
+CREATE TRIGGER error_archives_count_insert AFTER INSERT ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_count=archive_count+1,archive_bytes=archive_bytes+length(NEW.content_encrypted) WHERE id=1;
+END;
+CREATE TRIGGER error_archives_count_delete AFTER DELETE ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_count=archive_count-1,archive_bytes=archive_bytes-length(OLD.content_encrypted) WHERE id=1;
+END;
+CREATE TRIGGER error_archives_count_update AFTER UPDATE OF content_encrypted ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_bytes=archive_bytes-length(OLD.content_encrypted)+length(NEW.content_encrypted) WHERE id=1;
+END;
+CREATE TABLE codex_resource_owner_stats (id INTEGER PRIMARY KEY CHECK(id=1), owner_count INTEGER NOT NULL);
+INSERT INTO codex_resource_owner_stats(id,owner_count) SELECT 1,count(*) FROM codex_resource_owners;
+CREATE TRIGGER codex_resource_owners_count_insert AFTER INSERT ON codex_resource_owners BEGIN
+ UPDATE codex_resource_owner_stats SET owner_count=owner_count+1 WHERE id=1;
+END;
+CREATE TRIGGER codex_resource_owners_count_delete AFTER DELETE ON codex_resource_owners BEGIN
+ UPDATE codex_resource_owner_stats SET owner_count=owner_count-1 WHERE id=1;
+END;
+`

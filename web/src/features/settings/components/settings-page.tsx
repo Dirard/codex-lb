@@ -12,11 +12,13 @@ import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { FirewallSection } from "@/features/firewall/components/firewall-section";
 import { ModelSourcesSettings } from "@/features/model-sources/components/model-sources-settings";
 import { ModelPricesSettings } from "@/features/model-prices/model-prices-settings";
+import { RuntimeCapacitySettings } from "@/features/runtime/runtime-capacity-settings";
 import { RuntimeUpdateSettings } from "@/features/runtime/runtime-update-settings";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import { shouldExpandAdvancedSettings } from "@/features/settings/advanced-settings-deeplink";
 import { AdvancedSettingsGroup } from "@/features/settings/components/advanced-settings-group";
 import { AppearanceSettings } from "@/features/settings/components/appearance-settings";
+import { BackupSettings } from "@/features/settings/components/backup-settings";
 import { CodexClientSettings } from "@/features/settings/components/codex-client-settings";
 import { DataRetentionSettings } from "@/features/settings/components/data-retention-settings";
 import { ImportSettings } from "@/features/settings/components/import-settings";
@@ -51,11 +53,10 @@ export function SettingsPage() {
   const authMode = useAuthStore((state) => state.authMode);
   const passwordManagementEnabled = useAuthStore((state) => state.passwordManagementEnabled);
   const passwordSessionActive = useAuthStore((state) => state.passwordSessionActive);
-  const canWrite = useAuthStore((state) => state.canWrite);
 
   const settings = settingsQuery.data;
   const busy = updateSettingsMutation.isPending;
-  const controlsDisabled = busy || !canWrite;
+  const controlsDisabled = busy;
   const settingsLoadError = getErrorMessageOrNull(
     settingsQuery.error,
     t("settings.toasts.loadFailed"),
@@ -109,12 +110,6 @@ export function SettingsPage() {
       ) : (
         <>
           {error ? <AlertMessage variant="error">{error}</AlertMessage> : null}
-          {!canWrite ? (
-            <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-foreground">
-              {t("settings.page.readOnlyNotice")}
-            </div>
-          ) : null}
-
           {authMode === "trusted_header" ? (
             <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-foreground">
               {t("settings.page.trustedHeaderNotice")}
@@ -129,16 +124,18 @@ export function SettingsPage() {
 
           <div className="space-y-4">
             <AppearanceSettings />
-            <RuntimeUpdateSettings canWrite={canWrite} />
+            <RuntimeUpdateSettings />
+            <RuntimeCapacitySettings />
+            <BackupSettings />
             <ImportSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
             <ResetCreditSettings settings={settings} busy={controlsDisabled} onSave={handleSave} />
-            {canWrite ? <PasswordSettings disabled={busy} /> : null}
-            {canWrite && passwordManagementEnabled ? (
+            <PasswordSettings disabled={busy} />
+            {passwordManagementEnabled ? (
               <SessionSettings settings={settings} busy={busy} onSave={handleSave} />
             ) : null}
-            {canWrite && passwordManagementEnabled && passwordSessionActive ? (
+            {passwordManagementEnabled && passwordSessionActive ? (
               <Suspense fallback={null}>
-                <TotpSettings settings={settings} disabled={busy} onSave={handleSave} />
+                <TotpSettings settings={settings} disabled={busy} />
               </Suspense>
             ) : null}
 

@@ -49,7 +49,7 @@ func TestRealtimeRequiresBearerThroughKeylessServerIngress(t *testing.T) {
 	ops := application.NewCodexOperations(store, store, adapter, time.Hour)
 	ops.ConfigureAdmission(proxy)
 	api := httpapi.New(store, nil, httpapi.Config{UnauthenticatedClientCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}, nil)
-	handler := api.Handler(httpapi.NewCodexOperationsHandler(store, ops), nil)
+	handler := api.Handler(httpapi.NewCodexOperationsHandler(store, ops, nil), nil)
 	call := func(method, path, peer, key string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://localhost:2455"+path, strings.NewReader("v=offer\r\n"))
 		r.RemoteAddr = peer

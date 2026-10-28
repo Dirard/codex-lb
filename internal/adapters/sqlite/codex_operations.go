@@ -19,7 +19,7 @@ func (s *Store) RecordCodexContentFreeUsage(ctx context.Context, event domain.Us
 		return fmt.Errorf("content-free usage event: %w", ErrInvalid)
 	}
 	inserted, discarded := false, false
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		deleted, discard, err := usageDeletionPolicyTx(ctx, tx, event.AccountID, event.AccountGeneration)
 		if err != nil || discard {
 			discarded = discard

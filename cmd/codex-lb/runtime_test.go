@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -181,6 +182,46 @@ func TestRuntimeTransportAllows512ActiveStreamsToOneHost(t *testing.T) {
 	}
 }
 
+// NET-9/NET-16: the upstream transport health-checks HTTP/2 connections and
+// resumes TLS sessions on new connections.
+func TestRuntimeTransportProbesHTTP2AndResumesTLS(t *testing.T) {
+	r, err := openRuntime(context.Background(), testConfig(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.close()
+	h2 := r.transport.HTTP2
+	if h2 == nil || h2.SendPingTimeout != 30*time.Second || h2.PingTimeout != 10*time.Second || h2.WriteByteTimeout != 30*time.Second || h2.MaxReceiveBufferPerStream != 1<<20 {
+		t.Fatalf("HTTP/2 health configuration missing: %+v", h2)
+	}
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	upstream.EnableHTTP2 = true
+	upstream.StartTLS()
+	defer upstream.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(upstream.Certificate())
+	r.transport.TLSClientConfig.RootCAs = roots
+	client := &http.Client{Transport: r.transport}
+	get := func() *http.Response {
+		t.Helper()
+		request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, upstream.URL, nil)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		return response
+	}
+	if first := get(); first.ProtoMajor != 2 || first.TLS.DidResume {
+		t.Fatalf("first connection: proto=%d resumed=%v", first.ProtoMajor, first.TLS.DidResume)
+	}
+	r.transport.CloseIdleConnections()
+	if second := get(); !second.TLS.DidResume {
+		t.Fatal("new upstream connection did not resume the TLS session")
+	}
+}
+
 func TestRequestLifecycleWaitsForActiveHandler(t *testing.T) {
 	var lifecycle requestLifecycle
 	entered, finish, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -224,5 +265,39 @@ func TestCLIConfigurationAndVersion(t *testing.T) {
 	t.Setenv("CODEX_LB_CONNECT_ADDRESS", "unsafe&command")
 	if _, err := parseConfig("serve", nil, io.Discard); err == nil || strings.Contains(err.Error(), "unsafe&command") {
 		t.Fatal("unsafe connect address accepted or echoed")
+	}
+}
+
+func TestCLISecurityConfiguration(t *testing.T) {
+	t.Setenv("CODEX_LB_DATA_DIR", filepath.Join(t.TempDir(), "secure"))
+	t.Setenv("CODEX_LB_CONNECT_ADDRESS", "")
+	cfg, err := parseConfig("serve", []string{"--public-origin", "https://lb.example", "--allow-private-model-sources",
+		"--trusted-proxy", "127.0.0.1/32", "--unauthenticated-client", "10.0.0.0/8"}, io.Discard)
+	if err != nil || cfg.publicOrigin != "https://lb.example" || !cfg.allowPrivateModelSources {
+		t.Fatalf("secure configuration rejected: %v", err)
+	}
+	if api := cfg.apiConfig("go-test"); api.BootstrapTokenFile == nil || api.BootstrapTokenFile.Location() != filepath.Join(cfg.dataDir, "dashboard-bootstrap-token") {
+		t.Fatal("bootstrap token file is not inside the data directory")
+	}
+	for _, args := range [][]string{
+		{"--public-origin", "http://lb.example"},
+		{"--public-origin", "https://lb.example/dashboard"},
+		{"--trusted-proxy", "127.0.0.1/32", "--unauthenticated-client", "127.0.0.0/8"},
+		{"--dashboard-auth-mode", "disabled", "--listen", "0.0.0.0:2455"},
+	} {
+		if _, err := parseConfig("serve", args, io.Discard); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if _, err := parseConfig("serve", []string{"--dashboard-auth-mode", "disabled", "--listen", "127.0.0.1:2455"}, io.Discard); err != nil {
+		t.Fatalf("loopback disabled mode rejected: %v", err)
+	}
+	t.Setenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", strings.Repeat("a", 31))
+	if _, err := parseConfig("serve", nil, io.Discard); err == nil || strings.Contains(err.Error(), strings.Repeat("a", 31)) {
+		t.Fatal("short bootstrap token accepted or echoed")
+	}
+	t.Setenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", strings.Repeat("a", 32))
+	if _, err := parseConfig("serve", nil, io.Discard); err != nil {
+		t.Fatalf("32-character bootstrap token rejected: %v", err)
 	}
 }

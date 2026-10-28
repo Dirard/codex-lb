@@ -2,6 +2,9 @@
 Description=codex-lb Go proxy
 After=network-online.target
 Wants=network-online.target
+# Keep retrying after transient failures (busy port, slow disk) instead of
+# giving up after five quick restarts.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -10,16 +13,50 @@ Group=codex-lb
 StateDirectory=codex-lb
 StateDirectoryMode=0700
 UMask=0077
-# Optional, e.g. CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN for first remote setup.
+# Optional, e.g. CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN (32+ characters). Without it
+# first-run setup uses the one-time token written to
+# /var/lib/codex-lb/dashboard-bootstrap-token (path is logged at start).
 EnvironmentFile=-/etc/codex-lb.env
-ExecStart=/usr/local/bin/codex-lb serve --data-dir /var/lib/codex-lb --listen 127.0.0.1:2455
+# The reverse proxy on this host must send X-Forwarded-For; add
+# --public-origin https://<dashboard host> when browsers use HTTPS.
+ExecStart=/usr/local/bin/codex-lb serve --data-dir /var/lib/codex-lb --listen 127.0.0.1:2455 --trusted-proxy 127.0.0.1/32 --trusted-proxy ::1/128
 Restart=on-failure
 RestartSec=2s
-TimeoutStopSec=90s
+RestartSteps=5
+RestartMaxDelaySec=60s
+# Drain grace (30s) + accounting cleanup (45s) + launcher margin must fit.
+TimeoutStopSec=120s
+# Capacity is sized from the memory this unit may use: set MemoryMax= (and
+# optionally MemoryHigh=) to reserve room for other services on the host.
+# Client WebSocket capacity is bounded by this descriptor limit.
+LimitNOFILE=65536
+
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+DevicePolicy=closed
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# /proc/meminfo stays readable: memory detection needs it (no ProcSubset=pid).
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

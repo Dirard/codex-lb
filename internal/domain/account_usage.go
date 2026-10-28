@@ -102,6 +102,15 @@ type AccountAdditionalQuota struct {
 	ObservedAt     time.Time
 }
 
+// AccountSelectionState is the telemetry one routing choice reads per account,
+// loaded together so every candidate is judged on one consistent snapshot.
+type AccountSelectionState struct {
+	Quotas     []AccountQuota
+	Credits    *AccountCreditStatus
+	RefusalAt  *time.Time
+	Additional []AccountAdditionalQuota
+}
+
 type AccountUsageSnapshot struct {
 	AccountID              string
 	ObservedAt             time.Time

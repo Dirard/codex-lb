@@ -42,7 +42,7 @@ func (s *Store) CleanupDeletedAccounts(ctx context.Context, limit int) (int, err
 		return 0, ErrInvalid
 	}
 	count := 0
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var watermark sql.NullInt64
 		err := tx.QueryRowContext(ctx, `SELECT hourly_folded_through FROM legacy_import_state WHERE id=1`).Scan(&watermark)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {

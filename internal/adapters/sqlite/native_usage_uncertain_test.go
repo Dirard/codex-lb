@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"testing"
-	"time"
 
 	"codex-lb/internal/domain"
 )
@@ -28,8 +27,11 @@ func TestNativeUncertainReservationKeepsOnlyItsOwnBudget(t *testing.T) {
 			t.Fatalf("attempt %d did not retain uncertainty: %v, %v", attempt, marked, err)
 		}
 	}
-	if released, err := store.ReleaseStaleReservations(ctx, fixedTime.Add(time.Hour)); err != nil || released != 1 {
-		t.Fatalf("uncertain reservation was stale-released or another call marked: %d, %v", released, err)
+	if other, err := store.GetReservation(ctx, "other"); err != nil || other.Status != "reserved" || other.NeedsReconciliation {
+		t.Fatalf("another reservation was marked uncertain: %+v, %v", other, err)
+	}
+	if released, err := store.SettleUsage(ctx, "other", domain.UsageSettlement{Status: "released"}); err != nil || !released {
+		t.Fatalf("release other: %v, %v", released, err)
 	}
 	reservation, err := store.GetReservation(ctx, "uncertain")
 	if err != nil || reservation.Status != "reserved" || !reservation.NeedsReconciliation {

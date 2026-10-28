@@ -24,6 +24,7 @@ import {
   createDashboardAuthSession,
   createDashboardOverview,
   createDashboardProjections,
+  createDashboardStatus,
   createDashboardSettings,
   createDefaultAccounts,
   createDefaultAccountGroups,
@@ -760,6 +761,17 @@ export const handlers = [
     });
   }),
 
+  http.get("/api/backups", () => {
+    return HttpResponse.json({
+      schedule: { intervalHours: 24, keep: 3 },
+      backups: [],
+      lastAttempt: null,
+      running: false,
+      encryptionKeyIncluded: false,
+      storage: { databaseBytes: 4096, walBytes: 0, backupBytes: 0, freeBytes: 1073741824, totalBytes: 4294967296 },
+    });
+  }),
+
   http.get("/api/runtime/updates", () => {
     return HttpResponse.json({
       currentVersion: "go-v1.19.0",
@@ -774,12 +786,20 @@ export const handlers = [
     });
   }),
 
+  http.get("/api/runtime/capacity", () => {
+    return HttpResponse.json(createRuntimeCapacity());
+  }),
+
   http.get("/api/dashboard/overview", () => {
     return HttpResponse.json(
       createDashboardOverview({
         accounts: state.accounts,
       }),
     );
+  }),
+
+  http.get("/api/dashboard/status", () => {
+    return HttpResponse.json(createDashboardStatus());
   }),
 
   http.get("/api/dashboard/projections", () => {
@@ -1146,38 +1166,6 @@ export const handlers = [
 		return HttpResponse.json({ status: "deleted" });
 	}),
 
-  http.post("/api/accounts/:accountId/export", ({ params }) => {
-    const accountId = String(params.accountId);
-    const account = findAccount(accountId);
-    if (!account) {
-      return HttpResponse.json(
-        { error: { code: "account_not_found", message: "Account not found" } },
-        { status: 404 },
-      );
-    }
-    return HttpResponse.json({
-      accountId: account.accountId,
-      email: account.email,
-      planType: account.planType,
-      status: account.status,
-      authJson: JSON.stringify(
-        {
-          auth_mode: "chatgpt",
-          OPENAI_API_KEY: null,
-          tokens: {
-            id_token: "id-token",
-            access_token: "access-token",
-            refresh_token: "refresh-token",
-            account_id: accountId,
-          },
-          last_refresh: "2026-01-01T12:00:00.000000Z",
-        },
-        null,
-        2,
-      ),
-    });
-  }),
-
   http.delete("/api/accounts/:accountId", ({ params }) => {
     const accountId = String(params.accountId);
     const exists = state.accounts.some(
@@ -1259,8 +1247,6 @@ export const handlers = [
 		state.authSession = createDashboardAuthSession({
 			...state.authSession,
 			authenticated: !state.authSession.totpRequiredOnLogin,
-			role: "admin",
-			permissions: ["read", "write"],
 		});
 		return HttpResponse.json(state.authSession);
 	}),
@@ -1578,31 +1564,6 @@ export const handlers = [
       totalAccounts: run.accountId ? 1 : 0,
       completedAccounts: run.accountId ? 1 : 0,
       pendingAccounts: 0,
-    });
-  }),
-
-  http.get("/api/automations/:automationId/runs", ({ params, request }) => {
-    const automationId = String(params.automationId);
-    const automation = findAutomation(automationId);
-    if (!automation) {
-      return HttpResponse.json(
-        { error: { code: "automation_not_found", message: "Automation not found" } },
-        { status: 404 },
-      );
-    }
-    const url = new URL(request.url);
-    const limit = Math.max(1, toFiniteNonNegative(url.searchParams.get("limit"), 20));
-    const all = state.automationRuns[automationId] ?? [];
-    const items = all.slice(0, limit).map((run) => ({
-      ...run,
-      jobName: automation.name,
-      model: automation.model,
-      reasoningEffort: run.reasoningEffort ?? automation.reasoningEffort ?? null,
-    }));
-    return HttpResponse.json({
-      items,
-      total: all.length,
-      hasMore: all.length > limit,
     });
   }),
 
@@ -2183,3 +2144,31 @@ export const handlers = [
     return HttpResponse.json(createApiKeyUsage7Day({ keyId }));
   }),
 ];
+
+export function createRuntimeCapacity() {
+  return {
+    host: { cpus: 6, memoryBytes: 4 * 1024 ** 3, memorySource: "physical", fileDescriptors: 524288 },
+    sizingMemoryBytes: 4 * 1024 ** 3,
+    sizingMemorySource: "physical",
+    limits: {
+      goMemoryLimitBytes: 3 * 1024 ** 3,
+      maxGenerations: 2048,
+      maxQueued: 512,
+      bodyReaders: 512,
+      clientWebSockets: 16384,
+      upstreamWebSockets: 2048,
+      upstreamConnectionsPerHost: 2048,
+      sqliteReaders: 16,
+    },
+    overridden: [],
+    usage: {
+      activeGenerations: 12,
+      queuedGenerations: 0,
+      clientWebSockets: 40,
+      goHeapBytes: 80 * 1024 ** 2,
+      goTotalBytes: 120 * 1024 ** 2,
+      residentBytes: 150 * 1024 ** 2,
+      goroutines: 90,
+    },
+  };
+}

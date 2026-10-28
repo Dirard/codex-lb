@@ -8,7 +8,13 @@ import (
 	"time"
 )
 
-const writeBatchSize = 16
+// writeBatchSize bounds one grouped commit; savepoints keep jobs independent.
+const writeBatchSize = 64
+
+// writeExecutionTimeout bounds executing one batch. It starts only after the
+// writer connection is obtained, so waiting behind another transaction never
+// fails queued jobs.
+const writeExecutionTimeout = 5 * time.Second
 
 type writeJob struct {
 	ctx  context.Context
@@ -20,6 +26,7 @@ type writeJob struct {
 // A job never returns while its callback or commit is still in progress.
 type batchWriter struct {
 	db      *sql.DB
+	timeout time.Duration
 	jobs    chan *writeJob
 	stop    chan struct{}
 	done    chan struct{}
@@ -30,7 +37,7 @@ type batchWriter struct {
 }
 
 func newBatchWriter(db *sql.DB) *batchWriter {
-	w := &batchWriter{db: db, jobs: make(chan *writeJob, 128), stop: make(chan struct{}), done: make(chan struct{})}
+	w := &batchWriter{db: db, timeout: writeExecutionTimeout, jobs: make(chan *writeJob, 128), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(w.done)
 		for {
@@ -78,6 +85,31 @@ func (s *Store) write(ctx context.Context, fn func(context.Context, *sql.Tx) err
 	}
 }
 
+type execResult struct{ lastID, affected int64 }
+
+func (r execResult) LastInsertId() (int64, error) { return r.lastID, nil }
+func (r execResult) RowsAffected() (int64, error) { return r.affected, nil }
+
+// exec runs one statement as its own batch-writer job.
+func (s *Store) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var out execResult
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		if out.affected, err = result.RowsAffected(); err != nil {
+			return err
+		}
+		out.lastID, _ = result.LastInsertId()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (w *batchWriter) close() {
 	w.once.Do(func() {
 		w.mu.Lock()
@@ -92,6 +124,7 @@ func (w *batchWriter) close() {
 func (w *batchWriter) commit(jobs []*writeJob) {
 	results := make([]error, len(jobs))
 	var fatal error
+	var conn *sql.Conn
 	var tx *sql.Tx
 	defer func() {
 		if recover() != nil {
@@ -100,6 +133,9 @@ func (w *batchWriter) commit(jobs []*writeJob) {
 		if tx != nil {
 			_ = tx.Rollback()
 		}
+		if conn != nil {
+			_ = conn.Close()
+		}
 		for i, job := range jobs {
 			if results[i] == nil {
 				results[i] = fatal
@@ -107,11 +143,17 @@ func (w *batchWriter) commit(jobs []*writeJob) {
 			job.done <- results[i]
 		}
 	}()
+	// Only migrations and the offline import open direct writer transactions;
+	// waiting for them is not part of this batch's execution budget.
+	conn, fatal = w.db.Conn(context.Background())
+	if fatal != nil {
+		return
+	}
 	// No caller can interrupt another job's SQLite transaction. A bounded batch
 	// deadline still prevents a damaged/blocked writer from running indefinitely.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), w.timeout)
 	defer cancel()
-	tx, fatal = w.db.BeginTx(ctx, nil)
+	tx, fatal = conn.BeginTx(ctx, nil)
 	if fatal != nil {
 		return
 	}

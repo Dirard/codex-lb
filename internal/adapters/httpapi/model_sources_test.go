@@ -80,7 +80,8 @@ func TestModelSourceCRUDContract(t *testing.T) {
 		Repository
 		*modelSourceMemory
 	}{nil, memory}
-	server := New(repository, testCipher{}, Config{}, nil)
+	// The fixture is a self-hosted source on loopback, which needs the opt-in.
+	server := New(repository, testCipher{}, Config{AllowPrivateModelSources: true}, nil)
 	mux := http.NewServeMux()
 	server.registerModelSourceRoutes(mux)
 
@@ -181,6 +182,43 @@ func TestModelSourceValidationFailures(t *testing.T) {
 	mux.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown field status %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestModelSourceRejectsNonPublicDestinationsByDefault(t *testing.T) {
+	repository := struct {
+		Repository
+		*modelSourceMemory
+	}{nil, newModelSourceMemory()}
+	server := New(repository, testCipher{}, Config{}, nil)
+	mux := http.NewServeMux()
+	server.registerModelSourceRoutes(mux)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	source := func(baseURL string) string {
+		return `{"name":"x","baseUrl":"` + baseURL + `","apiKey":"k","models":[{"model":"m"}]}`
+	}
+	for _, baseURL := range []string{
+		"http://127.0.0.1:8080/v1", "http://169.254.169.254/latest", "http://10.0.0.1/v1", "http://100.100.100.200/v1",
+		"http://localhost:11434/v1", "http://ollama.localhost/v1", "http://[::1]/v1", "http://[fd00:ec2::254]/v1",
+		"http://[::ffff:127.0.0.1]/v1", "http://0.0.0.0/v1",
+	} {
+		if w := call("POST", "/api/model-sources/", source(baseURL)); w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("non-public destination %s accepted: %d %s", baseURL, w.Code, w.Body.String())
+		}
+	}
+	created := call("POST", "/api/model-sources/", source("https://models.example.com/v1"))
+	var stored domain.ModelSource
+	if created.Code != http.StatusOK || json.Unmarshal(created.Body.Bytes(), &stored) != nil {
+		t.Fatalf("public destination rejected: %d %s", created.Code, created.Body.String())
+	}
+	if w := call("PATCH", "/api/model-sources/"+stored.ID, `{"baseUrl":"http://192.168.1.10/v1"}`); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("update to a private destination accepted: %d %s", w.Code, w.Body.String())
 	}
 }
 

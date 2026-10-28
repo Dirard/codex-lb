@@ -6,7 +6,7 @@ function getMatch(): boolean {
   return typeof window !== "undefined" && window.matchMedia(QUERY).matches;
 }
 
-/** Returns `true` when the user (or Playwright) prefers reduced motion. */
+/** Returns `true` when the user (or an automated browser) prefers reduced motion. */
 export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(getMatch);
 

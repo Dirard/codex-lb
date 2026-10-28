@@ -10,8 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
+
+	"codex-lb/internal/adapters/wirejson"
 )
 
 const maxErrorBodyBytes = 1 << 20
@@ -27,14 +28,24 @@ type HTTPAdapter struct {
 	sessions              websocketSessions
 	websocketPingInterval time.Duration
 	websocketPingTimeout  time.Duration
-	pings                 sync.WaitGroup // liveness pings that outlive their stopped probe
+	// A pooled socket idle at least this long proves liveness under its lease
+	// before response.create; failure there is safely redialled.
+	websocketReuseProbeAfter   time.Duration
+	websocketReuseProbeTimeout time.Duration
 }
 
 func (a *HTTPAdapter) Close() error {
 	a.sessions.close()
-	a.pings.Wait() // closed connections end in-flight pings promptly
 	a.client.CloseIdleConnections()
 	return nil
+}
+
+// SetWebSocketSessionLimit bounds live upstream WebSocket sessions; call it
+// before the adapter serves requests. Non-positive values keep the default.
+func (a *HTTPAdapter) SetWebSocketSessionLimit(limit int) {
+	a.sessions.mu.Lock()
+	a.sessions.maxLanes = limit
+	a.sessions.mu.Unlock()
 }
 
 func New(client *http.Client, continuations *ContinuationStore) *HTTPAdapter {
@@ -49,7 +60,8 @@ func New(client *http.Client, continuations *ContinuationStore) *HTTPAdapter {
 	if continuations == nil {
 		continuations = NewContinuationStore()
 	}
-	return &HTTPAdapter{client: client, store: continuations, websocketPingInterval: 30 * time.Second, websocketPingTimeout: 10 * time.Second}
+	return &HTTPAdapter{client: client, store: continuations, websocketPingInterval: 30 * time.Second, websocketPingTimeout: 10 * time.Second,
+		websocketReuseProbeAfter: 20 * time.Second, websocketReuseProbeTimeout: 3 * time.Second}
 }
 
 func (a *HTTPAdapter) Execute(ctx context.Context, target Target, request Request) (Result, error) {
@@ -68,7 +80,7 @@ func (a *HTTPAdapter) Execute(ctx context.Context, target Target, request Reques
 		if prepared.Capabilities.StreamTransport == TransportWebSocket {
 			return Result{}, &Error{Code: ErrorCodeInvalidRequest, Message: "WebSocket transport is stream-only"}
 		}
-		return a.executeResponses(ctx, prepared, req, catalog)
+		return a.executeResponses(ctx, prepared, req)
 	}
 	return a.executeChat(ctx, prepared, req, items, catalog)
 }
@@ -90,9 +102,9 @@ func (a *HTTPAdapter) OpenStream(ctx context.Context, target Target, request Req
 	}
 	if prepared.Capabilities.Protocol == ProtocolResponses {
 		if prepared.Capabilities.StreamTransport == TransportWebSocket {
-			return a.streamResponsesWebSocket(ctx, prepared, req, catalog, emit)
+			return a.streamResponsesWebSocket(ctx, prepared, req, emit)
 		}
-		return a.streamResponses(ctx, prepared, req, catalog, emit)
+		return a.streamResponses(ctx, prepared, req, emit)
 	}
 	return a.streamChat(ctx, prepared, req, items, catalog, emit)
 }
@@ -141,8 +153,7 @@ func prepareRequest(request Request, target Target) (responsesWireRequest, []res
 	return req, items, catalog, nil
 }
 
-func (a *HTTPAdapter) executeResponses(ctx context.Context, target Target, req responsesWireRequest, catalog toolCatalog) (Result, error) {
-	_ = catalog
+func (a *HTTPAdapter) executeResponses(ctx context.Context, target Target, req responsesWireRequest) (Result, error) {
 	body, err := passthroughBody(req, target.Capabilities)
 	if err != nil {
 		return Result{}, err
@@ -261,9 +272,9 @@ func rejectedHTTPResult(status int, body []byte, protocol Protocol) (Result, err
 			return result, err
 		}
 	}
-	var rejected *Error
-	if errors.As(err, &rejected) {
-		rejected.RejectedBeforeExecution = true
+	var failure *Error
+	if errors.As(err, &failure) {
+		failure.RejectedBeforeExecution = true
 	}
 	return result, err
 }
@@ -329,10 +340,11 @@ func decodeExactJSON(body []byte, value any) error {
 	return nil
 }
 
-func passthroughBody(req responsesWireRequest, cap Capabilities) (json.RawMessage, error) {
-	var object map[string]json.RawMessage
+// passthroughObject parses the Responses request once and applies provider
+// body mappings; changed reports whether the top level differs from req.Raw.
+func passthroughObject(req responsesWireRequest, cap Capabilities) (object map[string]json.RawMessage, changed bool, err error) {
 	if err := json.Unmarshal(req.Raw, &object); err != nil || object == nil {
-		return nil, &Error{Code: ErrorCodeInvalidConfiguration, Message: "could not reshape Responses request"}
+		return nil, false, &Error{Code: ErrorCodeInvalidConfiguration, Message: "could not reshape Responses request"}
 	}
 	mapped := cap.ModelMappings[req.Model]
 	if mapped != "" {
@@ -342,12 +354,21 @@ func passthroughBody(req responsesWireRequest, cap Capabilities) (json.RawMessag
 		delete(object, field)
 	}
 	for field, value := range cap.ExtraBody {
+		if !json.Valid(value) {
+			return nil, false, &Error{Code: ErrorCodeInvalidConfiguration, Message: "provider extra body field is not valid JSON"}
+		}
 		object[field] = value
 	}
-	if NormalizeWireReasoning(object) || mapped != "" || len(cap.DropBodyFields) != 0 || len(cap.ExtraBody) != 0 {
-		return mustJSON(object), nil
+	changed = NormalizeWireReasoning(object) || mapped != "" || len(cap.DropBodyFields) != 0 || len(cap.ExtraBody) != 0
+	return object, changed, nil
+}
+
+func passthroughBody(req responsesWireRequest, cap Capabilities) (json.RawMessage, error) {
+	object, changed, err := passthroughObject(req, cap)
+	if err != nil || !changed {
+		return req.Raw, err
 	}
-	return req.Raw, nil
+	return wirejson.EncodeObject(object), nil
 }
 
 func endpoint(base string, path string) string {

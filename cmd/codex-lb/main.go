@@ -23,7 +23,9 @@ func main() {
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr, true); err != nil {
 		// Underlying provider/database errors can contain secrets. Runtime errors
 		// carry safe context; do not print arbitrary wrapped error strings.
-		fmt.Fprintln(os.Stderr, err)
+		// One JSON line keeps journald/jq parsing intact.
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("codex-lb stopped", "error", err.Error())
+		stop()
 		os.Exit(1)
 	}
 }
@@ -40,8 +42,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, managed .
 	if command == "update-info" && len(args) == 0 {
 		return json.NewEncoder(stdout).Encode(runtimeDescriptor())
 	}
-	if command != "serve" && command != "import-legacy" && command != "reconcile-usage" {
-		return errors.New("expected serve, import-legacy, reconcile-usage, or version")
+	if command != "serve" && command != "import-legacy" && command != "reconcile-usage" && command != "backup" {
+		return errors.New("expected serve, backup, import-legacy, reconcile-usage, or version")
 	}
 	cfg, err := parseConfig(command, args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
@@ -56,7 +58,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, managed .
 	if command == "reconcile-usage" {
 		return reconcileUsage(ctx, cfg, stdout)
 	}
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	if command == "backup" {
+		return backupDatabase(ctx, cfg, stdout)
+	}
+	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: cfg.logLevel}))
 	if os.Getenv(workerSocketEnv) != "" || os.Getenv(controlTokenEnv) != "" {
 		return serveUpdateWorker(ctx, cfg, logger)
 	}

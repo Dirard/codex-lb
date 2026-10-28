@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 
 	"github.com/coder/websocket"
 
@@ -17,16 +18,23 @@ import (
 )
 
 type CodexOperationsHandler struct {
-	store ProxyRepository
-	ops   *application.CodexOperations
+	store   ProxyRepository
+	ops     *application.CodexOperations
+	trusted []netip.Prefix
+	mux     *http.ServeMux
 }
 
-func NewCodexOperationsHandler(store ProxyRepository, operations *application.CodexOperations) *CodexOperationsHandler {
-	return &CodexOperationsHandler{store: store, ops: operations}
+// NewCodexOperationsHandler serves the ancillary Codex operations. trusted
+// lists the reverse proxies whose forwarded client address is honoured, as for
+// Responses requests.
+func NewCodexOperationsHandler(store ProxyRepository, operations *application.CodexOperations, trusted []netip.Prefix) *CodexOperationsHandler {
+	h := &CodexOperationsHandler{store: store, ops: operations, trusted: trusted, mux: http.NewServeMux()}
+	h.RegisterRoutes(h.mux)
+	return h
 }
 
-func RegisterCodexOperationRoutes(mux *http.ServeMux, store ProxyRepository, operations *application.CodexOperations) {
-	NewCodexOperationsHandler(store, operations).RegisterRoutes(mux)
+func RegisterCodexOperationRoutes(mux *http.ServeMux, store ProxyRepository, operations *application.CodexOperations, trusted []netip.Prefix) {
+	NewCodexOperationsHandler(store, operations, trusted).RegisterRoutes(mux)
 }
 
 // RegisterRoutes attaches all owned ancillary routes to the runtime mux.
@@ -62,9 +70,7 @@ func (h *CodexOperationsHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *CodexOperationsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-	mux.ServeHTTP(w, r)
+	h.mux.ServeHTTP(w, r)
 }
 
 func (h *CodexOperationsHandler) authenticate(r *http.Request) (string, error) {
@@ -86,11 +92,11 @@ func (h *CodexOperationsHandler) compact(w http.ResponseWriter, r *http.Request)
 		writeProxyError(w, err)
 		return
 	}
-	result, err := h.ops.CompactWithOptions(r.Context(), operationOptions(r, keyID), body)
+	result, err := h.ops.CompactWithOptions(r.Context(), h.operationOptions(r, keyID), body)
 	if err == nil && !result.Failed && strings.HasPrefix(r.URL.Path, "/backend-api/codex/") {
 		result.Body = normalizeCodexCompactOutput(result.Body)
 	}
-	h.writeResult(w, r, result, err, true)
+	h.writeResult(w, result, err, true)
 }
 
 func (h *CodexOperationsHandler) control(w http.ResponseWriter, r *http.Request) {
@@ -115,10 +121,10 @@ func (h *CodexOperationsHandler) control(w http.ResponseWriter, r *http.Request)
 			query = append(query, [2]string{name, value})
 		}
 	}
-	result, err := h.ops.ControlWithOptions(r.Context(), operationOptions(r, keyID), application.CodexControlRequest{
+	result, err := h.ops.ControlWithOptions(r.Context(), h.operationOptions(r, keyID), application.CodexControlRequest{
 		Method: r.Method, Path: path, Query: query, Body: body, ContentType: mediaType(r.Header.Get("Content-Type")),
 	})
-	h.writeResult(w, r, result, err, false)
+	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) createFile(w http.ResponseWriter, r *http.Request) {
@@ -132,8 +138,8 @@ func (h *CodexOperationsHandler) createFile(w http.ResponseWriter, r *http.Reque
 		writeProxyError(w, err)
 		return
 	}
-	result, err := h.ops.CreateFileWithOptions(r.Context(), operationOptions(r, keyID), body)
-	h.writeResult(w, r, result, err, false)
+	result, err := h.ops.CreateFileWithOptions(r.Context(), h.operationOptions(r, keyID), body)
+	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) finalizeFile(w http.ResponseWriter, r *http.Request) {
@@ -142,8 +148,8 @@ func (h *CodexOperationsHandler) finalizeFile(w http.ResponseWriter, r *http.Req
 		writeProxyError(w, err)
 		return
 	}
-	result, err := h.ops.FinalizeFileWithOptions(r.Context(), operationOptions(r, keyID), r.PathValue("file_id"))
-	h.writeResult(w, r, result, err, false)
+	result, err := h.ops.FinalizeFileWithOptions(r.Context(), h.operationOptions(r, keyID), r.PathValue("file_id"))
+	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) transcribeBackend(w http.ResponseWriter, r *http.Request) {
@@ -157,8 +163,8 @@ func (h *CodexOperationsHandler) transcribeBackend(w http.ResponseWriter, r *htt
 		writeProxyError(w, err)
 		return
 	}
-	result, err := h.ops.TranscribeWithOptions(r.Context(), operationOptions(r, keyID), request)
-	h.writeResult(w, r, result, err, false)
+	result, err := h.ops.TranscribeWithOptions(r.Context(), h.operationOptions(r, keyID), request)
+	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) transcribeV1(w http.ResponseWriter, r *http.Request) {
@@ -172,8 +178,8 @@ func (h *CodexOperationsHandler) transcribeV1(w http.ResponseWriter, r *http.Req
 		writeProxyError(w, err)
 		return
 	}
-	result, err := h.ops.TranscribeWithOptions(r.Context(), operationOptions(r, keyID), request)
-	h.writeResult(w, r, result, err, false)
+	result, err := h.ops.TranscribeWithOptions(r.Context(), h.operationOptions(r, keyID), request)
+	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) createRealtimeCall(w http.ResponseWriter, r *http.Request) {
@@ -199,8 +205,8 @@ func (h *CodexOperationsHandler) createRealtimeCall(w http.ResponseWriter, r *ht
 			query = append(query, [2]string{name, value})
 		}
 	}
-	result, err := h.ops.CreateRealtimeCall(r.Context(), operationOptions(r, key.ID), application.CodexControlRequest{Body: body, ContentType: r.Header.Get("Content-Type"), Query: query, RealtimeHeaders: realtimeHeaders(r)})
-	h.writeResult(w, r, result, err, false)
+	result, err := h.ops.CreateRealtimeCall(r.Context(), h.operationOptions(r, key.ID), application.CodexControlRequest{Body: body, ContentType: r.Header.Get("Content-Type"), Query: query, RealtimeHeaders: realtimeHeaders(r)})
+	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) realtimeLive(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +215,7 @@ func (h *CodexOperationsHandler) realtimeLive(w http.ResponseWriter, r *http.Req
 		writeProxyError(w, err)
 		return
 	}
-	options := operationOptions(r, key.ID)
+	options := h.operationOptions(r, key.ID)
 	options.Transport = "websocket"
 	request := application.CodexRealtimeRequest{CallID: r.PathValue("call_id"), Query: realtimeQuery(r), Protocol: application.CodexRealtimeLive, Headers: realtimeHeaders(r)}
 	ids := r.URL.Query()["call_id"]
@@ -234,13 +240,25 @@ func (h *CodexOperationsHandler) realtimeLive(w http.ResponseWriter, r *http.Req
 	}
 	connection.SetReadLimit(application.MaxRealtimeMessageBytes)
 	defer connection.CloseNow()
+	// The realtime pump reads the client continuously, so protocol pings keep
+	// idle-timing intermediaries open; a client that stops reading is ended by
+	// the bounded realtime writes.
+	var active atomic.Bool
+	active.Store(true)
+	pingCtx, stopPings := context.WithCancel(r.Context())
+	pingerDone := make(chan struct{})
+	go func() {
+		defer close(pingerDone)
+		pingWhileActive(pingCtx, connection, downstreamPingInterval, &active)
+	}()
+	defer func() { stopPings(); connection.CloseNow(); <-pingerDone }()
 	if err := h.ops.Realtime(r.Context(), options, target, request, websocketConnection{connection}); err != nil {
 		_ = connection.Close(websocket.StatusInternalError, "realtime proxy failed")
 		return
 	}
 }
 
-func (h *CodexOperationsHandler) writeResult(w http.ResponseWriter, r *http.Request, result application.CodexOperationResult, err error, compact bool) {
+func (h *CodexOperationsHandler) writeResult(w http.ResponseWriter, result application.CodexOperationResult, err error, compact bool) {
 	if err != nil {
 		writeProxyError(w, err)
 		return
@@ -267,21 +285,34 @@ func (h *CodexOperationsHandler) writeResult(w http.ResponseWriter, r *http.Requ
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write(result.Body)
-	_ = r
 }
 
-func operationOptions(r *http.Request, keyID string) application.CodexOperationOptions {
+// operationOptions attributes an operation like a Responses request: the
+// client IP honours trusted proxies and the user-agent group is the product
+// token of User-Agent, not a client-supplied header.
+func (h *CodexOperationsHandler) operationOptions(r *http.Request, keyID string) application.CodexOperationOptions {
 	clientIP := ""
-	if address, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		clientIP = address.Addr().Unmap().String()
+	if resolved := ResolveIdentity(r, h.trusted); resolved.IP.IsValid() {
+		clientIP = resolved.IP.String()
 	}
 	identity := responseOptions(r, keyID)
 	return application.CodexOperationOptions{
 		KeyID: keyID, SessionID: identity.SessionID, TurnState: identity.TurnState,
 		ThreadID: identity.ThreadID, ClientAffinity: identity.ClientAffinity,
 		ConversationID: r.Header.Get("X-Codex-Conversation-Id"), UserAgent: r.UserAgent(),
-		UserAgentGroup: r.Header.Get("X-Codex-User-Agent-Group"), ClientIP: clientIP, Transport: "http",
+		UserAgentGroup: userAgentGroup(r.UserAgent()), ClientIP: clientIP, Transport: "http",
 	}
+}
+
+// userAgentGroup is the product token of a User-Agent ("codex_cli_rs/0.1 x"
+// -> "codex_cli_rs").
+func userAgentGroup(userAgent string) string {
+	fields := strings.Fields(userAgent)
+	if len(fields) == 0 {
+		return ""
+	}
+	group, _, _ := strings.Cut(fields[0], "/")
+	return group
 }
 
 func resultHeaderValue(headers map[string][]string, name string) string {

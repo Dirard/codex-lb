@@ -115,9 +115,7 @@ func (h *NativeAPIHandler) options(r *http.Request, keyID string) application.Re
 	if identity := ResolveIdentity(r, h.trusted); identity.IP.IsValid() {
 		options.ClientIP = identity.IP.String()
 	}
-	if fields := strings.Fields(options.UserAgent); len(fields) != 0 {
-		options.UserAgentGroup, _, _ = strings.Cut(fields[0], "/")
-	}
+	options.UserAgentGroup = userAgentGroup(options.UserAgent)
 	return options
 }
 
@@ -179,7 +177,7 @@ func (h *NativeAPIHandler) chatStream(w http.ResponseWriter, r *http.Request, op
 			}
 			return writeChunk(event.Data)
 		}
-		if event.Type == "response.completed" {
+		if event.Type == "response.completed" || event.Type == "response.incomplete" {
 			terminalStarted = true
 		}
 		for _, chunk := range translator.translate(event) {
@@ -223,7 +221,9 @@ func (h *NativeAPIHandler) chatStream(w http.ResponseWriter, r *http.Request, op
 			err := outcome.err
 			cancel()
 			if err == nil {
-				if outcome.result.Failed {
+				// An incomplete Responses terminal is a normal Chat end with
+				// finish_reason length; its queued chunks carry the usage.
+				if outcome.result.Failed && !translator.incomplete {
 					if started {
 						_ = writeChunk(nativeFailedError(outcome.result))
 					} else {
@@ -326,31 +326,46 @@ func mustNativeJSON(value any) json.RawMessage {
 
 type chatStreamTranslator struct {
 	id, model    string
-	created      bool
+	created      int64
 	toolIndexes  map[string]int
 	nextTool     int
 	includeUsage bool
+	incomplete   bool
 }
 
 func newChatStreamTranslator(includeUsage bool) *chatStreamTranslator {
-	return &chatStreamTranslator{toolIndexes: make(map[string]int), includeUsage: includeUsage}
+	return &chatStreamTranslator{toolIndexes: make(map[string]int), includeUsage: includeUsage, created: time.Now().Unix()}
+}
+
+type nativeResponsesUsage struct {
+	Input        int64 `json:"input_tokens"`
+	Output       int64 `json:"output_tokens"`
+	InputDetails struct {
+		Cached int64 `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputDetails struct {
+		Reasoning int64 `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 }
 
 func (t *chatStreamTranslator) translate(event application.NativeAPIEvent) []json.RawMessage {
-	var payload map[string]json.RawMessage
-	if json.Unmarshal(event.Data, &payload) != nil {
+	if !json.Valid(event.Data) {
 		return nil
 	}
 	switch event.Type {
 	case "response.created":
 		var created struct {
 			Response struct {
-				ID    string `json:"id"`
-				Model string `json:"model"`
+				ID        string `json:"id"`
+				Model     string `json:"model"`
+				CreatedAt int64  `json:"created_at"`
 			} `json:"response"`
 		}
 		_ = json.Unmarshal(event.Data, &created)
-		t.id, t.model, t.created = created.Response.ID, created.Response.Model, true
+		t.id, t.model = created.Response.ID, created.Response.Model
+		if created.Response.CreatedAt > 0 {
+			t.created = created.Response.CreatedAt
+		}
 		return []json.RawMessage{t.chunk(map[string]any{"role": "assistant"}, nil)}
 	case "response.output_text.delta":
 		var delta struct {
@@ -399,31 +414,31 @@ func (t *chatStreamTranslator) translate(event application.NativeAPIEvent) []jso
 		return []json.RawMessage{t.chunk(map[string]any{"tool_calls": []any{map[string]any{
 			"index": t.toolIndex(key), "function": map[string]any{"arguments": item.Delta},
 		}}}, nil)}
-	case "response.completed":
-		finish := "stop"
-		if t.nextTool != 0 {
-			finish = "tool_calls"
-		}
-		var completed struct {
+	case "response.completed", "response.incomplete":
+		var terminal struct {
 			Response struct {
-				Usage struct {
-					Input        int64 `json:"input_tokens"`
-					Output       int64 `json:"output_tokens"`
-					InputDetails struct {
-						Cached int64 `json:"cached_tokens"`
-					} `json:"input_tokens_details"`
-					OutputDetails struct {
-						Reasoning int64 `json:"reasoning_tokens"`
-					} `json:"output_tokens_details"`
-				} `json:"usage"`
+				Usage             nativeResponsesUsage `json:"usage"`
+				IncompleteDetails struct {
+					Reason string `json:"reason"`
+				} `json:"incomplete_details"`
 			} `json:"response"`
 		}
-		_ = json.Unmarshal(event.Data, &completed)
+		_ = json.Unmarshal(event.Data, &terminal)
+		finish := "stop"
+		switch {
+		case event.Type == "response.incomplete" && terminal.Response.IncompleteDetails.Reason == "content_filter":
+			finish = "content_filter"
+		case event.Type == "response.incomplete":
+			finish = "length"
+		case t.nextTool != 0:
+			finish = "tool_calls"
+		}
+		t.incomplete = event.Type == "response.incomplete"
 		result := []json.RawMessage{t.chunk(map[string]any{}, &finish)}
 		if t.includeUsage {
-			usage := completed.Response.Usage
+			usage := terminal.Response.Usage
 			counts := domain.UsageAmount{InputTokens: usage.Input, OutputTokens: usage.Output, CachedInputTokens: usage.InputDetails.Cached, ReasoningTokens: usage.OutputDetails.Reasoning}
-			result = append(result, mustNativeJSON(map[string]any{"id": t.id, "object": "chat.completion.chunk", "usage": chatUsage(counts), "choices": []any{}}))
+			result = append(result, mustNativeJSON(map[string]any{"id": t.id, "object": "chat.completion.chunk", "created": t.created, "model": t.model, "usage": chatUsage(counts), "choices": []any{}}))
 		}
 		result = append(result, json.RawMessage("[DONE]"))
 		return result
@@ -448,7 +463,7 @@ func (t *chatStreamTranslator) chunk(delta map[string]any, finish *string) json.
 		choice["finish_reason"] = *finish
 	}
 	return mustNativeJSON(map[string]any{
-		"id": t.id, "object": "chat.completion.chunk", "choices": []any{choice},
+		"id": t.id, "object": "chat.completion.chunk", "created": t.created, "model": t.model, "choices": []any{choice},
 	})
 }
 

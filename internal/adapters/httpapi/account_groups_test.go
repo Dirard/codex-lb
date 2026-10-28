@@ -28,7 +28,7 @@ func TestAccountGroupsEndpointRequiresAdminAndUpdatesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(store, vault, httpapi.Config{}, nil).Handler(nil, nil)
+	handler := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(nil, nil)
 	var cookie *http.Cookie
 	request := func(method, path string, body any, authenticated bool) *httptest.ResponseRecorder {
 		t.Helper()
@@ -50,7 +50,7 @@ func TestAccountGroupsEndpointRequiresAdminAndUpdatesAtomically(t *testing.T) {
 	if rec := request(http.MethodPut, "/api/accounts/acct-a/groups", map[string]any{"groupIds": []string{}}, false); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d", rec.Code)
 	}
-	setup := request(http.MethodPost, "/api/dashboard-auth/password/setup", map[string]string{"password": "synthetic-test-password"}, false)
+	setup := request(http.MethodPost, "/api/dashboard-auth/password/setup", map[string]string{"password": "synthetic-test-password", "bootstrapToken": "synthetic-bootstrap-token-0123456789abcdef"}, false)
 	if setup.Code != http.StatusOK || len(setup.Result().Cookies()) != 1 {
 		t.Fatalf("setup status = %d", setup.Code)
 	}

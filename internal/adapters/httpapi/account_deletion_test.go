@@ -52,7 +52,7 @@ func TestAccountDeletionHTTPPolicyAndHistory(t *testing.T) {
 			if got := request("DELETE", path+query, "", ""); got.Code != 401 {
 				t.Fatalf("unauthenticated deletion status: %d", got.Code)
 			}
-			token, err = server.auth.SetupPassword(ctx, "synthetic-test-password", time.Hour)
+			token, err = server.auth.SetupPassword(ctx, "test", "", "synthetic-test-password", false, time.Hour)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -81,7 +81,7 @@ func TestAccountDeletionHTTPPolicyAndHistory(t *testing.T) {
 			if _, err := store.GetAccountCredential(ctx, accountID); !errors.Is(err, domain.ErrNotFound) {
 				t.Fatalf("deleted credentials available: %v", err)
 			}
-			if got := request("POST", path+"/export/auth", "", "http://localhost"); got.Code != 404 {
+			if got := request("POST", path+"/export/auth", `{"currentPassword":"synthetic-test-password"}`, "http://localhost"); got.Code != 404 {
 				t.Fatalf("deleted export status: %d", got.Code)
 			}
 			if got := request("GET", "/api/accounts", "", ""); got.Code != 200 || strings.Contains(got.Body.String(), accountID) {

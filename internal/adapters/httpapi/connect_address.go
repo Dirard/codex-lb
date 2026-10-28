@@ -29,7 +29,7 @@ func resolveConnectAddress(ctx context.Context, host, override string, lookup fu
 		host = name
 	}
 	host = strings.Trim(host, "[]")
-	if !safeConnectAddress(host) || localHost(host) {
+	if !safeConnectAddress(host) || loopbackHostName(host) {
 		return placeholder
 	}
 	if ip, err := netip.ParseAddr(host); err == nil {
@@ -60,4 +60,14 @@ func safeConnectAddress(address string) bool {
 		}
 	}
 	return true
+}
+
+// loopbackHostName reports a Host value that only names this machine; it is
+// used for display decisions, never for authorization.
+func loopbackHostName(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && ip.IsLoopback()
 }

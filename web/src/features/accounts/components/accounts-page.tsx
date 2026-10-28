@@ -26,7 +26,8 @@ import { useOauth } from "@/features/accounts/hooks/use-oauth";
 import { useSettings } from "@/features/settings/hooks/use-settings";
 import { useAccountQuotaDisplayStore } from "@/hooks/use-account-quota-display";
 import type { AccountAuthExportResponse } from "@/features/accounts/schemas";
-import { useAuthStore } from "@/features/auth/hooks/use-auth";
+import { PasswordConfirmDialog } from "@/components/password-confirm-dialog";
+import { usePasswordConfirmationRequired } from "@/features/auth/hooks/use-password-confirmation";
 import { getErrorMessageOrNull } from "@/utils/errors";
 
 const OauthDialog = lazy(() =>
@@ -56,7 +57,6 @@ export function AccountsPage() {
   } = useAccounts();
   const { settingsQuery } = useSettings();
   const oauth = useOauth();
-  const canWrite = useAuthStore((state) => state.canWrite);
 
   const importDialog = useDialogState();
   const oauthDialog = useDialogState();
@@ -65,6 +65,14 @@ export function AccountsPage() {
   const resetCreditDialog = useDialogState<ResetCreditDialogTarget>();
   const usageResetDialog = useDialogState<string>();
   const exportDialog = useDialogState<AccountAuthExportResponse>();
+  const exportConfirmDialog = useDialogState<string>();
+  const passwordConfirmationRequired = usePasswordConfirmationRequired();
+  const runExport = (accountId: string, currentPassword?: string) => {
+    void exportAuthMutation
+      .mutateAsync({ accountId, currentPassword })
+      .then((result) => exportDialog.show(result))
+      .catch(() => null);
+  };
   const [deleteHistory, setDeleteHistory] = useState(false);
 
   const accounts = useMemo(
@@ -181,7 +189,6 @@ export function AccountsPage() {
                   setOauthAccountId(null);
                   oauthDialog.show();
                 }}
-                readOnly={!canWrite}
               />
             </div>
           </div>
@@ -190,7 +197,6 @@ export function AccountsPage() {
             account={selectedAccount}
             showAccountId={selectedAccount?.isEmailDuplicate === true}
             busy={mutationBusy}
-            readOnly={!canWrite}
             onPause={(accountId) => void pauseMutation.mutateAsync(accountId)}
             onResume={(accountId) => void resumeMutation.mutateAsync(accountId)}
             onProbe={(accountId) => void probeMutation.mutateAsync({ accountId })}
@@ -204,10 +210,11 @@ export function AccountsPage() {
               oauthDialog.show();
             }}
             onExportAuth={(accountId) => {
-              void exportAuthMutation
-                .mutateAsync(accountId)
-                .then((result) => exportDialog.show(result))
-                .catch(() => null);
+              if (passwordConfirmationRequired) {
+                exportConfirmDialog.show(accountId);
+              } else {
+                runExport(accountId);
+              }
             }}
             onResetCredit={(accountId) => {
               const account = accountsQuery.data?.find((item) => item.accountId === accountId);
@@ -271,6 +278,18 @@ export function AccountsPage() {
           onReset={oauth.reset}
         />
       </Suspense>
+
+      <PasswordConfirmDialog
+        open={exportConfirmDialog.open}
+        title={t("accounts.exportConfirm.title")}
+        description={t("accounts.exportConfirm.description")}
+        confirmLabel={t("accounts.exportConfirm.submit")}
+        busy={exportAuthMutation.isPending}
+        onOpenChange={exportConfirmDialog.onOpenChange}
+        onConfirm={(password) => {
+          if (exportConfirmDialog.data) runExport(exportConfirmDialog.data, password);
+        }}
+      />
 
       <AuthExportDialog
         open={exportDialog.open}

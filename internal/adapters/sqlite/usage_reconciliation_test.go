@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"testing"
-	"time"
 
 	"codex-lb/internal/domain"
 )
@@ -24,9 +23,6 @@ func TestInterruptedReservationKeepsBudgetAndSettlesExactlyOnce(t *testing.T) {
 		if count, err := store.MarkInterruptedReservations(ctx); err != nil || count != want {
 			t.Fatalf("mark interrupted: %d %v", count, err)
 		}
-	}
-	if count, err := store.ReleaseStaleReservations(ctx, fixedTime.Add(time.Hour)); err != nil || count != 0 {
-		t.Fatal("unknown upstream usage was automatically forgiven")
 	}
 	key, err := store.GetAPIKey(ctx, key.ID)
 	if err != nil || key.Limits[0].CurrentValue != 40 {

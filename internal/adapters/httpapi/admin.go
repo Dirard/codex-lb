@@ -114,14 +114,11 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	days := 0
-	if settings.RequestLogRetentionDays != nil {
-		days = *settings.RequestLogRetentionDays
-	}
-	historyDays := 0
-	if settings.UsageHistoryRetentionDays != nil {
-		historyDays = *settings.UsageHistoryRetentionDays
-	}
+	days := settings.EffectiveRequestLogRetentionDays()
+	historyDays := settings.EffectiveUsageHistoryRetentionDays()
+	// A configured second factor is always required at sign-in; the stored
+	// flag no longer controls login and is reported as the derived state.
+	settings.TOTPRequiredOnLogin = len(secret.TOTPSecretEncrypted) != 0
 	writeJSON(w, http.StatusOK, struct {
 		domain.RuntimeSettings
 		TOTPConfigured                       bool    `json:"totpConfigured"`
@@ -155,6 +152,8 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &payload) {
 		return
 	}
+	// totpRequiredOnLogin is read-only: TOTP is required whenever configured.
+	payload.TOTPRequiredOnLogin = settings.TOTPRequiredOnLogin
 	if payload.ExpectedVersion != nil && *payload.ExpectedVersion != settings.Version {
 		writeError(w, http.StatusConflict, "settings_conflict", "Settings changed; reload before saving")
 		return

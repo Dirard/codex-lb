@@ -42,6 +42,8 @@ type Config struct {
 	ResolveClientVersion     func(context.Context) (string, error)
 	Continuations            *upstream.ContinuationStore
 	ChatGPTReasoningFallback func(string) string
+	// UpstreamWebSocketSessions bounds live ChatGPT WebSocket sessions; 0 keeps the default.
+	UpstreamWebSocketSessions int
 }
 
 type Adapter struct {
@@ -52,6 +54,7 @@ type Adapter struct {
 	config       Config
 	sourceMu     sync.Mutex
 	sourceActive map[string]int
+	realtime     realtimeBounds
 }
 
 func (a *Adapter) Close() error { return a.client.Close() }
@@ -73,9 +76,11 @@ func New(store SourceStore, tokens ChatGPTTokenSource, cipher application.Secret
 	if config.CodexVersion == "" {
 		config.CodexVersion = domain.DefaultCodexClientVersion
 	}
+	client := upstream.New(config.HTTPClient, config.Continuations)
+	client.SetWebSocketSessionLimit(config.UpstreamWebSocketSessions)
 	return &Adapter{
-		store: store, cipher: cipher, chatgpt: tokens, client: upstream.New(config.HTTPClient, config.Continuations),
-		config: config,
+		store: store, cipher: cipher, chatgpt: tokens, client: client,
+		config: config, realtime: defaultRealtimeBounds,
 	}
 }
 

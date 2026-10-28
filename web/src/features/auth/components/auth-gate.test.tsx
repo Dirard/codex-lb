@@ -129,7 +129,7 @@ describe("AuthGate", () => {
   });
 
 
-  it("shows bootstrap setup screen for remote first-run access", async () => {
+  it("shows bootstrap setup screen for first-run access", async () => {
     const refreshSession = vi.fn().mockResolvedValue(undefined);
     setAuthState({
       refreshSession,
@@ -145,7 +145,7 @@ describe("AuthGate", () => {
       </AuthGate>,
     );
 
-    expect(await screen.findByText("Complete Remote Setup")).toBeInTheDocument();
+    expect(await screen.findByText("Complete Dashboard Setup")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set password" })).toBeInTheDocument();
     expect(screen.queryByText("Protected content")).not.toBeInTheDocument();
     await waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));

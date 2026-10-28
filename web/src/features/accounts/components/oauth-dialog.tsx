@@ -1,5 +1,5 @@
 import { Check, CircleAlert, Copy, ExternalLink, Loader2, RefreshCw } from "lucide-react";
-import { useCallback, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -30,6 +30,14 @@ function getStage(state: OAuthState): Stage {
 function CopyButton({ text }: { text: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  // The "Copied" reset must not fire after the dialog stage unmounts the
+  // button (it used to leak past test environments and closed dialogs).
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (resetTimerRef.current !== null) {
+      clearTimeout(resetTimerRef.current);
+    }
+  }, []);
 
   const handleCopy = useCallback(async (event: MouseEvent<HTMLButtonElement>) => {
     const trigger = event.currentTarget;
@@ -46,7 +54,13 @@ function CopyButton({ text }: { text: string }) {
       }
 
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (resetTimerRef.current !== null) {
+        clearTimeout(resetTimerRef.current);
+      }
+      resetTimerRef.current = setTimeout(() => {
+        resetTimerRef.current = null;
+        setCopied(false);
+      }, 2000);
     } catch {
       toast.error(t("components.copyButton.toasts.failed"));
     } finally {

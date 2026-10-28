@@ -13,13 +13,11 @@ import type { DashboardView } from "@/features/dashboard/schemas";
 export type DashboardViewSelectorProps = {
   value: DashboardView;
   onChange: (value: DashboardView) => void;
-  showConversations?: boolean;
 };
 
 export function DashboardViewSelector({
   value,
   onChange,
-  showConversations = true,
 }: DashboardViewSelectorProps) {
   const { t } = useTranslation();
   const label = t(`dashboard.views.${value}`);
@@ -45,11 +43,9 @@ export function DashboardViewSelector({
             <DropdownMenuRadioItem value="request-logs">
               <span>{t("dashboard.views.request-logs")}</span>
             </DropdownMenuRadioItem>
-            {showConversations ? (
-              <DropdownMenuRadioItem value="conversations">
-                <span>{t("dashboard.views.conversations")}</span>
-              </DropdownMenuRadioItem>
-            ) : null}
+            <DropdownMenuRadioItem value="conversations">
+              <span>{t("dashboard.views.conversations")}</span>
+            </DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>

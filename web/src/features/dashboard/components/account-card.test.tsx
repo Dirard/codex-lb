@@ -193,17 +193,6 @@ describe("AccountCard", () => {
     expect(screen.getByRole("button", { name: "Re-auth" })).toBeInTheDocument();
   });
 
-  it("disables the limit warm-up toggle for read-only sessions", () => {
-    const account = createAccountSummary({
-      displayName: "Read Only Account",
-      limitWarmupEnabled: false,
-    });
-
-    render(<AccountCard account={account} readOnly />);
-
-    expect(screen.getByRole("button", { name: "Enable limit warm-up for Read Only Account" })).toBeDisabled();
-  });
-
   it("shows reset action when reset credits are available", () => {
     const account = createAccountSummary({
       availableResetCredits: 2,

@@ -136,7 +136,7 @@ func fernetCiphertext(v []byte) bool {
 }
 
 func (s *Store) SaveAccountCredential(ctx context.Context, c domain.AccountCredential) error {
-	return transact(ctx, s.db, func(tx *sql.Tx) error { return saveAccountCredential(ctx, tx, c) })
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error { return saveAccountCredential(ctx, tx, c) })
 }
 
 func saveAccountCredential(ctx context.Context, db accountWriter, c domain.AccountCredential) error {
@@ -181,7 +181,7 @@ func (s *Store) GetAccountCredential(ctx context.Context, id string) (domain.Acc
 }
 
 func (s *Store) SaveAccountQuota(ctx context.Context, q domain.AccountQuota) error {
-	return transact(ctx, s.db, func(tx *sql.Tx) error { return saveAccountQuotaTx(ctx, tx, q) })
+	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error { return saveAccountQuotaTx(ctx, tx, q) })
 }
 
 func saveAccountQuotaTx(ctx context.Context, tx *sql.Tx, q domain.AccountQuota) error {
@@ -201,9 +201,35 @@ func saveAccountQuotaTx(ctx context.Context, tx *sql.Tx, q domain.AccountQuota) 
 	if err != nil {
 		return err
 	}
+	return recordAccountQuotaHistoryTx(ctx, tx, q, minutes)
+}
+
+// quotaHistoryBucketMillis is the history resolution: polling more often than
+// this updates the series' current bucket instead of adding rows.
+const quotaHistoryBucketMillis = int64(5 * time.Minute / time.Millisecond)
+
+// recordAccountQuotaHistoryTx coalesces poll observations into the series'
+// current five-minute bucket. A later bucket, an out-of-order observation or a
+// changed reset/window length always starts a new row, so resets are never
+// merged and an idle polled series keeps one sample per bucket.
+func recordAccountQuotaHistoryTx(ctx context.Context, tx *sql.Tx, q domain.AccountQuota, minutes any) error {
+	observed := millis(q.ObservedAt)
+	reset := optionalMillis(q.ResetAt)
+	res, err := tx.ExecContext(ctx, `UPDATE account_quota_history SET observed_at=?,used_percent=?
+ WHERE id=(SELECT id FROM account_quota_history WHERE account_id=? AND window=?
+ ORDER BY observed_at DESC,id DESC LIMIT 1)
+ AND observed_at<=? AND observed_at/?=?/? AND reset_at IS ? AND window_minutes IS ?`,
+		observed, q.UsedPercent, q.AccountID, q.Window,
+		observed, quotaHistoryBucketMillis, observed, quotaHistoryBucketMillis, reset, minutes)
+	if err != nil {
+		return err
+	}
+	if updated, err := res.RowsAffected(); err != nil || updated == 1 {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO account_quota_history
  (account_id,window,observed_at,used_percent,reset_at,window_minutes) VALUES(?,?,?,?,?,?)`,
-		q.AccountID, q.Window, millis(q.ObservedAt), q.UsedPercent, optionalMillis(q.ResetAt), minutes)
+		q.AccountID, q.Window, observed, q.UsedPercent, reset, minutes)
 	return err
 }
 

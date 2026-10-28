@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -38,8 +39,8 @@ func TestServesIndexAndSPAfallback(t *testing.T) {
 		if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 			t.Fatalf("GET %s: content-type = %q, want text/html", target, got)
 		}
-		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
-			t.Fatalf("GET %s: cache-control = %q, want no-store", target, got)
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Fatalf("GET %s: cache-control = %q, want no-cache", target, got)
 		}
 		if rec.Body.String() != "<!doctype html><title>codex-lb</title>" {
 			t.Fatalf("GET %s: body = %q, want index.html", target, rec.Body.String())
@@ -51,7 +52,7 @@ func TestAPIPathsNeverBecomeIndex(t *testing.T) {
 	handler := New(testFS())
 
 	for _, target := range []string{
-		"/api/accounts", "/api/", "/api", "/v1/responses", "/backend-api/codex/responses", "/health", "/health/ready",
+		"/api/accounts", "/api/", "/api", "/v1/responses", "/backend-api/codex/responses", "/health", "/health/ready", "/metrics", "/debug/pprof/",
 	} {
 		rec := do(t, handler, http.MethodGet, target)
 		if rec.Code != http.StatusNotFound {
@@ -135,7 +136,21 @@ func TestEmbeddedDistServesIndex(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("embedded handler status = %d, want 200", rec.Code)
 	}
-	if rec.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("embedded index.html must not be cached")
+	if rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatal("embedded index.html must be revalidated on every load")
+	}
+	// The embedded build ships precompressed variants for its entry assets.
+	index := rec.Body.String()
+	start := strings.Index(index, "/assets/")
+	end := strings.Index(index[start:], ".js")
+	if start < 0 || end < 0 {
+		t.Fatalf("embedded index.html references no script asset")
+	}
+	req := httptest.NewRequest(http.MethodGet, index[start:start+end+3], nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	asset := httptest.NewRecorder()
+	Handler().ServeHTTP(asset, req)
+	if asset.Code != http.StatusOK || asset.Header().Get("Content-Encoding") != "br" {
+		t.Fatalf("embedded entry script: status = %d, encoding = %q, want brotli", asset.Code, asset.Header().Get("Content-Encoding"))
 	}
 }

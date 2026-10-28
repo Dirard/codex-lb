@@ -59,7 +59,7 @@ func TestRealtimeProtocolRoutesAndNegotiation(t *testing.T) {
 			defer adapter.Close()
 			ops := application.NewCodexOperations(store, store, adapter, time.Hour)
 			ops.ConfigureAdmission(proxy)
-			handler := httpapi.NewCodexOperationsHandler(store, ops)
+			handler := httpapi.NewCodexOperationsHandler(store, ops, nil)
 			server := httptest.NewServer(handler)
 			defer server.Close()
 			separator := "?"

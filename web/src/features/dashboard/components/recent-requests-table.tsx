@@ -227,64 +227,32 @@ function RequestLogTableHead({
   );
 }
 
-function formatRequestCostSummary(request: RequestLog | null, t: ReturnType<typeof useTranslation>["t"]): string | null {
-  if (!request || (request.status !== "ok" && request.status !== "success")) {
-    return null;
+/**
+ * Token usage as Go records it: input, its cached part, and output.
+ * Returns null when the row carries no token counts.
+ */
+function formatRequestTokenSummary(request: RequestLog, t: ReturnType<typeof useTranslation>["t"]): string | null {
+  const parts: string[] = [];
+  if (request.inputTokens != null) {
+    parts.push(`${t("common.units.input")} ${formatCompactNumber(request.inputTokens)}`);
+    if (request.cachedInputTokens) {
+      parts.push(`${t("common.units.cached")} ${formatCompactNumber(request.cachedInputTokens)}`);
+    }
   }
-
-  const totalUsd = request.costBreakdown?.totalUsd ?? request.costUsd;
-  const segments: string[] = [];
-  const cachedInputTokens = request.cachedInputTokens ?? 0;
-  const nonCachedInputTokens =
-    request.inputTokens == null ? null : Math.max(0, request.inputTokens - cachedInputTokens);
-
-  if (nonCachedInputTokens != null && request.costBreakdown?.inputUsd != null) {
-    segments.push(
-      t("dashboard.requestDetails.costSegment", {
-        count: formatCompactNumber(nonCachedInputTokens),
-        label: t("common.units.input"),
-        cost: formatCurrency(request.costBreakdown.inputUsd),
-      }),
-    );
+  if (request.outputTokens != null) {
+    parts.push(`${t("common.units.output")} ${formatCompactNumber(request.outputTokens)}`);
   }
-
-  if (request.cachedInputTokens != null && request.costBreakdown?.cachedInputUsd != null) {
-    segments.push(
-      t("dashboard.requestDetails.costSegment", {
-        count: formatCompactNumber(request.cachedInputTokens),
-        label: t("common.units.cached"),
-        cost: formatCurrency(request.costBreakdown.cachedInputUsd),
-      }),
-    );
-  }
-
-  if (request.outputTokens != null && request.costBreakdown?.outputUsd != null) {
-    segments.push(
-      t("dashboard.requestDetails.costSegment", {
-        count: formatCompactNumber(request.outputTokens),
-        label: t("common.units.output"),
-        cost: formatCurrency(request.costBreakdown.outputUsd),
-      }),
-    );
-  }
-
-  if (segments.length === 0) {
-    return null;
-  }
-
-  if (totalUsd == null) {
-    return segments.join(" + ");
-  }
-
-  return `${formatCurrency(totalUsd)} = ${segments.join(" + ")}`;
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function formatGenerationSpeed(request: RequestLog): string | null {
-  if (request.outputTokensRaw == null || request.latencyMs == null || request.latencyFirstTokenMs == null) {
+  if (request.outputTokens == null || request.latencyMs == null || request.latencyFirstTokenMs == null) {
     return null;
   }
 
-  const outputCount = request.outputTokensRaw - (request.reasoningTokens ?? 0);
+  // Go reports raw output tokens, which include reasoning tokens generated
+  // before the first visible token; only visible output counts toward speed.
+  const outputCount = request.outputTokens - (request.reasoningTokens ?? 0);
   const generationMs = request.latencyMs - request.latencyFirstTokenMs;
   if (outputCount <= 0 || generationMs <= 0) {
     return null;
@@ -322,7 +290,6 @@ export function RecentRequestsTable({
   const [selectedRequest, setSelectedRequest] = useState<RequestLog | null>(null);
   const blurred = usePrivacyStore((s) => s.blurred);
   const dateDisplayFormat = useDateDisplayFormatStore((state) => state.dateDisplayFormat);
-  const selectedRequestCostSummary = formatRequestCostSummary(selectedRequest, t);
   const visibleColumns = configuredVisibleColumns ?? ALL_REQUEST_LOG_COLUMNS;
   const visibleColumnSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
   const hasConfiguredLayout =
@@ -413,12 +380,8 @@ export function RecentRequestsTable({
               const isEmailLabel = !!(request.accountId && emailLabelIds.has(request.accountId));
               const errorPreview = request.errorMessage || request.errorCode || "-";
               const hasError = !!(request.errorCode || request.errorMessage);
-              const visibleServiceTier = request.actualServiceTier ?? request.serviceTier;
-              const showRequestedTier =
-                !!request.requestedServiceTier && request.requestedServiceTier !== visibleServiceTier;
               const planType = request.planType?.trim().toLowerCase() || null;
               const planLabel = planType ? formatSlug(planType) : "--";
-              const upstreamTransport = request.upstreamTransport;
               const generationSpeed = formatGenerationSpeed(request);
               const statusLabel = t(`dashboard.requestStatus.${request.status}`, {
                 defaultValue: REQUEST_STATUS_LABELS[request.status] ?? request.status,
@@ -457,36 +420,24 @@ export function RecentRequestsTable({
                   {isColumnVisible("model") ? <TableCell className="truncate align-top">
                     <div className="leading-tight">
                       <span className="font-mono text-xs">
-                        {formatModelLabel(request.model, request.reasoningEffort, visibleServiceTier)}
+                        {formatModelLabel(request.model, request.reasoningEffort, request.serviceTier)}
                       </span>
                       {request.requestKind === "warmup" || request.requestKind === "limit_warmup" ? (
                         <div className="mt-1 text-xs text-muted-foreground">
                           {REQUEST_KIND_LABELS.warmup}
                         </div>
                       ) : null}
-                      {showRequestedTier ? (
-                        <div className="text-[11px] text-muted-foreground">
-                          {t("dashboard.requests.requestedTier", { tier: request.requestedServiceTier })}
-                        </div>
-                      ) : null}
                     </div>
                   </TableCell> : null}
                   {isColumnVisible("transport") ? <TableCell className="pr-3 align-top">
                     {request.transport ? (
-                      <div className="space-y-1">
-                        <Badge
-                          variant="outline"
-                          className={TRANSPORT_CLASS_MAP[request.transport] ?? TRANSPORT_CLASS_MAP.http}
-                          title={t("dashboard.requests.downstreamTransport")}
-                        >
-                          {TRANSPORT_LABELS[request.transport] ?? request.transport}
-                        </Badge>
-                        {upstreamTransport ? (
-                          <div className="text-[11px] text-muted-foreground">
-                            {t("dashboard.requests.upstreamTransport", { transport: TRANSPORT_LABELS[upstreamTransport] ?? upstreamTransport })}
-                          </div>
-                        ) : null}
-                      </div>
+                      <Badge
+                        variant="outline"
+                        className={TRANSPORT_CLASS_MAP[request.transport] ?? TRANSPORT_CLASS_MAP.http}
+                        title={t("dashboard.requests.downstreamTransport")}
+                      >
+                        {TRANSPORT_LABELS[request.transport] ?? request.transport}
+                      </Badge>
                     ) : (
                       <span className="text-xs text-muted-foreground">--</span>
                     )}
@@ -598,7 +549,7 @@ export function RecentRequestsTable({
               />
               <div className="grid gap-3 sm:grid-cols-3">
                 <RequestDetailField label={t("dashboard.requests.columns.status")} value={selectedRequest ? t(`dashboard.requestStatus.${selectedRequest.status}`, { defaultValue: REQUEST_STATUS_LABELS[selectedRequest.status] ?? selectedRequest.status }) : "—"} />
-                <RequestDetailField label={t("dashboard.requests.columns.model")} value={selectedRequest ? formatModelLabel(selectedRequest.model, selectedRequest.reasoningEffort, selectedRequest.actualServiceTier ?? selectedRequest.serviceTier) : "—"} mono />
+                <RequestDetailField label={t("dashboard.requests.columns.model")} value={selectedRequest ? formatModelLabel(selectedRequest.model, selectedRequest.reasoningEffort, selectedRequest.serviceTier) : "—"} mono />
                 <RequestDetailField label={t("dashboard.requestDetails.requestKind")} value={selectedRequest ? (REQUEST_KIND_LABELS[selectedRequest.requestKind] ?? selectedRequest.requestKind) : "—"} />
                 <RequestDetailField label={t("dashboard.requests.columns.plan")} value={selectedRequest?.planType ? formatSlug(selectedRequest.planType) : "—"} />
                 <RequestDetailField label={t("dashboard.requestDetails.elapsed")} value={formatElapsed(selectedRequest?.latencyMs ?? null)} />
@@ -618,40 +569,20 @@ export function RecentRequestsTable({
                 <RequestDetailField label={t("dashboard.requests.columns.time")} value={selectedRequest ? formatDateTimeInline(selectedRequest.requestedAt, dateDisplayFormat) : "—"} />
                 <RequestDetailField label={t("dashboard.requestDetails.errorCode")} value={selectedRequest?.errorCode ?? "—"} mono />
               </div>
-              {selectedRequest?.upstreamProxyRouteMode ||
-              selectedRequest?.upstreamProxyPoolId ||
-              selectedRequest?.upstreamProxyEndpointId ||
-              selectedRequest?.upstreamProxyFallbackUsed != null ||
-              selectedRequest?.upstreamProxyFailClosedReason ? (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  {selectedRequest.upstreamProxyRouteMode ? (
-                    <RequestDetailField label={t("dashboard.requestDetails.routeMode")} value={selectedRequest.upstreamProxyRouteMode} mono />
-                  ) : null}
-                  {selectedRequest.upstreamProxyPoolId ? (
-                    <RequestDetailField label={t("dashboard.requestDetails.routePool")} value={selectedRequest.upstreamProxyPoolId} mono />
-                  ) : null}
-                  {selectedRequest.upstreamProxyEndpointId ? (
-                    <RequestDetailField label={t("dashboard.requestDetails.routeEndpoint")} value={selectedRequest.upstreamProxyEndpointId} mono />
-                  ) : null}
-                  {selectedRequest.upstreamProxyFallbackUsed != null ? (
-                    <RequestDetailField
-                      label={t("dashboard.requestDetails.routeFallback")}
-                      value={t(
-                        selectedRequest.upstreamProxyFallbackUsed
-                          ? "dashboard.requestDetails.routeFallbackUsed"
-                          : "dashboard.requestDetails.routeFallbackNotUsed",
-                      )}
-                    />
-                  ) : null}
-                  {selectedRequest.upstreamProxyFailClosedReason ? (
-                    <RequestDetailField
-                      label={t("dashboard.requestDetails.routeFailClosedReason")}
-                      value={selectedRequest.upstreamProxyFailClosedReason}
-                      mono
-                    />
-                  ) : null}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="sm:col-span-2">
+                  <RequestDetailField
+                    label={t("dashboard.requests.columns.tokens")}
+                    value={(selectedRequest ? formatRequestTokenSummary(selectedRequest, t) : null) ?? "—"}
+                    mono
+                  />
                 </div>
-              ) : null}
+                <RequestDetailField
+                  label={t("dashboard.requests.columns.cost")}
+                  value={selectedRequest?.costUsd != null ? formatCurrency(selectedRequest.costUsd) : "—"}
+                  mono
+                />
+              </div>
               <RequestDetailField
                 label={t("dashboard.requestDetails.userAgent")}
                 value={selectedRequest?.useragent ?? "—"}
@@ -705,20 +636,9 @@ export function RecentRequestsTable({
             </div>
 
             <RequestArchivePanel
-              requestId={selectedRequest?.archiveRequestId ?? selectedRequest?.requestId}
+              requestId={selectedRequest?.requestId}
               requestedAt={selectedRequest?.requestedAt}
             />
-
-            {selectedRequestCostSummary ? (
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium">{t("dashboard.requests.columns.cost")}</h3>
-                <div className="rounded-md bg-muted/50 p-3">
-                  <p className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
-                    {selectedRequestCostSummary}
-                  </p>
-                </div>
-              </div>
-            ) : null}
 
             <div className="space-y-2">
               <div className="flex items-center gap-2">

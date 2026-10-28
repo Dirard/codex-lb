@@ -24,12 +24,21 @@ func TestWeeklyPaceHistoryCoversSixHoursAndDemandIncludesBoundary(t *testing.T) 
 	save(fixedTime.Add(-8*24*time.Hour), 20)
 	save(fixedTime.Add(-7*24*time.Hour), 25)
 	save(fixedTime.Add(-6*24*time.Hour), 3) // Reset is not positive demand.
+	buckets := map[int64]bool{}
 	for i := 0; i < 101; i++ {
-		save(fixedTime.Add(time.Duration(i-100)*3*time.Minute), float64(i)*0.5+3)
+		at := fixedTime.Add(time.Duration(i-100) * 3 * time.Minute)
+		buckets[millis(at)/quotaHistoryBucketMillis] = true
+		save(at, float64(i)*0.5+3)
 	}
+	// Three-minute polling coalesces into five-minute buckets; the horizon still
+	// covers all five hours and the 64-row tail reaches the older samples.
 	history, err := s.RecentAccountQuotaHistory(ctx, fixedTime.Add(-30*24*time.Hour), fixedTime)
-	if err != nil || len(history) != 101 || !history[0].ObservedAt.Equal(fixedTime.Add(-5*time.Hour)) {
-		t.Fatalf("pace history silently truncated to the old 64-row tail: count=%d err=%v", len(history), err)
+	if err != nil || len(history) != len(buckets)+3 || !history[0].ObservedAt.Equal(fixedTime.Add(-8*24*time.Hour)) ||
+		!history[len(history)-1].ObservedAt.Equal(fixedTime) || history[len(history)-1].UsedPercent != 53 {
+		t.Fatalf("pace history lost horizon buckets or the tail: count=%d buckets=%d err=%v", len(history), len(buckets), err)
+	}
+	if len(buckets) >= quotaPaceTail {
+		t.Fatalf("fixture must leave room for the tail: %d buckets", len(buckets))
 	}
 	demand, err := s.PositiveQuotaDeltas(ctx, fixedTime.Add(-7*24*time.Hour), fixedTime)
 	if err != nil || demand["pace"]["secondary"] != 55 {

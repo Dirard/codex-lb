@@ -27,12 +27,11 @@ func affinityFixture(t *testing.T) (*Store, func(string, string, string, domain.
 		t.Helper()
 		sequence++
 		reservation := fmt.Sprintf("affinity-reservation-%d", sequence)
-		if _, err := store.ReserveUsage(context.Background(), domain.ReservationRequest{ID: reservation, APIKeyID: keyID,
-			AccountID: account, Model: "gpt-6-sol", Now: at, Budget: domain.UsageAmount{InputTokens: 1, OutputTokens: 1}}); err != nil {
-			t.Fatal(err)
-		}
-		return store.SaveAffinity(context.Background(), domain.AffinityBinding{Key: key, Kind: kind, APIKeyID: keyID,
-			AccountID: account, UpdatedAt: at}, expected, reservation)
+		reserved, err := store.ReserveUsage(context.Background(), domain.ReservationRequest{ID: reservation, APIKeyID: keyID,
+			AccountID: account, Model: "gpt-6-sol", Now: at, Budget: domain.UsageAmount{InputTokens: 1, OutputTokens: 1},
+			Affinity: &domain.AffinityCAS{Binding: domain.AffinityBinding{Key: key, Kind: kind, APIKeyID: keyID,
+				AccountID: account, UpdatedAt: at}, ExpectedVersion: expected}})
+		return reserved.AffinityChanged, err
 	}
 	return store, save
 }
@@ -126,5 +125,42 @@ func TestAffinityAdminFilteringPurgeAndAccountInvalidationPreserveHardOwners(t *
 	}
 	if actual, err := store.GetContinuation(ctx, "key-a", "hard", time.Now()); err != nil || actual.AccountID != owner.AccountID {
 		t.Fatalf("affinity cleanup deleted correctness owner: %+v %v", actual, err)
+	}
+}
+
+// The soft binding shares the reservation's job: a binding write failure must
+// leave neither the reservation nor its key-limit charge behind.
+func TestReservationAffinityFailureRollsBackTheReservation(t *testing.T) {
+	ctx := context.Background()
+	store, _ := affinityFixture(t)
+	key, err := store.GetAPIKey(ctx, "key-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key.Limits = []domain.LimitRule{{Type: domain.LimitTotalTokens, Window: domain.WindowWeekly, MaxValue: 1000}}
+	if err := store.SaveAPIKey(ctx, key, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER fail_affinity BEFORE INSERT ON affinity_bindings
+ BEGIN SELECT RAISE(ABORT,'synthetic affinity failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.ReserveUsage(ctx, domain.ReservationRequest{ID: "with-affinity", APIKeyID: "key-a", AccountID: "account-a",
+		Model: "gpt-6-sol", Now: fixedTime, Budget: domain.UsageAmount{InputTokens: 10, OutputTokens: 10},
+		Affinity: &domain.AffinityCAS{Binding: domain.AffinityBinding{Key: "hint", Kind: domain.AffinityPromptCache,
+			APIKeyID: "key-a", AccountID: "account-a", UpdatedAt: fixedTime}}})
+	if !errors.Is(err, domain.ErrAffinityPersistence) {
+		t.Fatalf("affinity failure not reported: %v", err)
+	}
+	if _, err := store.GetReservation(ctx, "with-affinity"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reservation survived its failed affinity write: %v", err)
+	}
+	current, err := store.GetAPIKey(ctx, "key-a")
+	if err != nil || current.Limits[0].CurrentValue != 0 {
+		t.Fatalf("rolled-back reservation kept its limit charge: %+v %v", current.Limits, err)
+	}
+	if _, err := store.ReserveUsage(ctx, domain.ReservationRequest{ID: "without-affinity", APIKeyID: "key-a", AccountID: "account-a",
+		Model: "gpt-6-sol", Now: fixedTime, Budget: domain.UsageAmount{InputTokens: 10, OutputTokens: 10}}); err != nil {
+		t.Fatalf("reservation without affinity failed: %v", err)
 	}
 }

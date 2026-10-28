@@ -72,7 +72,7 @@ func TestCompactCapacitySelectsFreeAccountButNeverMovesOwner(t *testing.T) {
 	operations.ConfigureAdmission(proxy)
 	operations.ConfigureAccountSelection(proxy)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	t.Cleanup(func() { once.Do(func() { close(unblock) }) })

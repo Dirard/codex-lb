@@ -14,7 +14,7 @@ func (s *Store) DeleteAccount(ctx context.Context, id string, deleteHistory bool
 	if id == "" {
 		return ErrInvalid
 	}
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		return markAccountDeletedTx(ctx, tx, id, deleteHistory)
 	})
 	if err != nil {

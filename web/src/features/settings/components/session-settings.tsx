@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { TimerReset } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { logoutAllSessions } from "@/features/auth/api";
+import { useAuthStore } from "@/features/auth/hooks/use-auth";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import type { DashboardSettings, SettingsUpdateRequest } from "@/features/settings/schemas";
 
@@ -27,6 +31,21 @@ function formatStoredHours(ttlSeconds: number): string {
 export function SessionSettings({ settings, busy, onSave }: SessionSettingsProps) {
   const { t } = useTranslation();
   const [sessionHours, setSessionHours] = useState(formatStoredHours(settings.dashboardSessionTtlSeconds));
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const refreshSession = useAuthStore((state) => state.refreshSession);
+  const signOutEverywhere = async () => {
+    setSigningOut(true);
+    try {
+      await logoutAllSessions();
+    } catch {
+      toast.error(t("settings.session.signOutEverywhere.failed"));
+    } finally {
+      setSigningOut(false);
+    }
+    // Every session, including this one, is now revoked.
+    await refreshSession().catch(() => null);
+  };
 
   const trimmed = sessionHours.trim();
   const isInteger = INTEGER_HOURS_PATTERN.test(trimmed);
@@ -105,7 +124,33 @@ export function SessionSettings({ settings, busy, onSave }: SessionSettingsProps
             {t("settings.session.lifetime.longWarning")}
           </div>
         ) : null}
+
+        <div className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">{t("settings.session.signOutEverywhere.label")}</p>
+            <p className="text-xs text-muted-foreground">{t("settings.session.signOutEverywhere.description")}</p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs text-destructive hover:text-destructive"
+            disabled={busy || signingOut}
+            onClick={() => setConfirmSignOut(true)}
+          >
+            {t("settings.session.signOutEverywhere.action")}
+          </Button>
+        </div>
       </div>
+      <ConfirmDialog
+        open={confirmSignOut}
+        onOpenChange={setConfirmSignOut}
+        title={t("settings.session.signOutEverywhere.confirm")}
+        description={t("settings.session.signOutEverywhere.description")}
+        confirmLabel={t("settings.session.signOutEverywhere.action")}
+        confirmDisabled={signingOut}
+        onConfirm={() => void signOutEverywhere()}
+      />
     </section>
   );
 }

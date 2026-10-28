@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -99,6 +102,9 @@ func (value *NullableString) UnmarshalJSON(raw []byte) error {
 type ModelSourceService struct {
 	store  ModelSourceRepository
 	cipher SecretCipher
+	// AllowPrivateDestinations accepts base URLs on non-public addresses for
+	// self-hosted sources; otherwise such URLs are rejected when set.
+	AllowPrivateDestinations bool
 }
 
 func NewModelSourceService(store ModelSourceRepository, cipher SecretCipher) *ModelSourceService {
@@ -135,10 +141,33 @@ func (s *ModelSourceService) Create(ctx context.Context, request ModelSourceCrea
 	if err := source.Validate(); err != nil {
 		return domain.ModelSource{}, err
 	}
+	if err := s.validateDestination(source.BaseURL); err != nil {
+		return domain.ModelSource{}, err
+	}
 	if err := s.store.SaveModelSource(ctx, source, credential); err != nil {
 		return domain.ModelSource{}, err
 	}
 	return s.store.GetModelSource(ctx, source.ID)
+}
+
+// validateDestination rejects base URLs that name this host or a non-public
+// address literal. Names are checked again on every connection by the dial guard.
+func (s *ModelSourceService) validateDestination(baseURL string) error {
+	if s.AllowPrivateDestinations {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return fmt.Errorf("%w: model source base URL must be absolute HTTP(S)", domain.ErrInvalid)
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("%w: model source base URL must use a public address", domain.ErrInvalid)
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && !domain.PublicUnicast(ip) {
+		return fmt.Errorf("%w: model source base URL must use a public address", domain.ErrInvalid)
+	}
+	return nil
 }
 
 func (s *ModelSourceService) Update(ctx context.Context, id string, request ModelSourceUpdateRequest) (domain.ModelSource, error) {
@@ -186,6 +215,11 @@ func (s *ModelSourceService) Update(ctx context.Context, id string, request Mode
 	}
 	if err := source.Validate(); err != nil {
 		return domain.ModelSource{}, err
+	}
+	if request.BaseURL != nil {
+		if err := s.validateDestination(source.BaseURL); err != nil {
+			return domain.ModelSource{}, err
+		}
 	}
 	if err := s.store.SaveModelSource(ctx, source, credential); err != nil {
 		return domain.ModelSource{}, err

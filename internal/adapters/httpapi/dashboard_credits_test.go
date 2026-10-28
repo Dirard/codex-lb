@@ -48,7 +48,7 @@ func TestDashboardAccountCreditFieldsMatchAccountList(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	token, err := server.auth.SetupPassword(ctx, "synthetic-test-password", time.Hour)
+	token, err := server.auth.SetupPassword(ctx, "test", "", "synthetic-test-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

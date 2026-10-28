@@ -36,7 +36,7 @@ func TestCodexStandaloneCompactNormalizesV2WithoutChangingV1(t *testing.T) {
 		service := application.NewCodexOperations(store, &codexOwnerStore{}, provider, time.Hour)
 		service.ConfigureAdmission(codexTestAdmission{})
 		service.ConfigureAccountSelection(application.NewProxy(store, nil, nil, application.ProxyConfig{}))
-		handler := NewCodexOperationsHandler(store, service)
+		handler := NewCodexOperationsHandler(store, service, nil)
 		for _, route := range []string{"/backend-api/codex/responses/compact", "/backend-api/codex/responses/compact/", "/v1/responses/compact", "/v1/responses/compact/"} {
 			request := httptest.NewRequest("POST", route, strings.NewReader(`{"model":"gpt-6-sol","instructions":"","input":"history"}`))
 			request.Header.Set("Content-Type", "application/json")

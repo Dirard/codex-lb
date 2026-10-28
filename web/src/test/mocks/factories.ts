@@ -34,6 +34,7 @@ import { AuthSessionSchema } from "@/features/auth/schemas";
 import type {
 	DashboardOverview,
 	DashboardProjections,
+	DashboardStatus,
 	RequestLog,
 	RequestLogFilterOptions,
 	RequestLogsResponse,
@@ -47,6 +48,7 @@ import {
 	DEFAULT_OVERVIEW_TIMEFRAME,
 	DashboardOverviewSchema,
 	DashboardProjectionsSchema,
+	DashboardStatusSchema,
 	RequestLogFilterOptionsSchema,
 	RequestLogSchema,
 	RequestLogsResponseSchema,
@@ -235,6 +237,12 @@ function createOverviewTimeframe(
 	}
 }
 
+export function createDashboardStatus(
+	overrides: Partial<DashboardStatus> = {},
+): DashboardStatus {
+	return DashboardStatusSchema.parse({ lastSyncAt: offsetIso(-5), ...overrides });
+}
+
 export function createDashboardOverview(
 	overrides: Partial<DashboardOverview> = {},
 ): DashboardOverview {
@@ -370,8 +378,6 @@ export function createRequestLogEntry(
 		clientIp: null,
 		conversationId: null,
 		serviceTier: null,
-		requestedServiceTier: null,
-		actualServiceTier: null,
 		status: "ok",
 		errorCode: null,
 		errorMessage: null,
@@ -381,12 +387,6 @@ export function createRequestLogEntry(
 		cachedInputTokens: 320,
 		reasoningEffort: null,
 		costUsd: 0.0132,
-		costBreakdown: {
-			inputUsd: 0.0054,
-			cachedInputUsd: 0.0012,
-			outputUsd: 0.0066,
-			totalUsd: 0.0132,
-		},
 		latencyMs: 920,
 		...overrides,
 	});
@@ -466,8 +466,6 @@ export function createDashboardAuthSession(
 		authMode: "standard",
 		passwordManagementEnabled: true,
 		passwordSessionActive: false,
-		role: "admin",
-		permissions: ["read", "write"],
 		...overrides,
 	});
 }

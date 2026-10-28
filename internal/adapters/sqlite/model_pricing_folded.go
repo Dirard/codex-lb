@@ -19,70 +19,78 @@ type foldedPriceBucket struct {
 	costUSD                                float64
 }
 
-func repriceFoldedPriceHistoryTx(ctx context.Context, tx *sql.Tx, affected []string,
+// foldedCursor is the keyset position inside one model's hourly rollups.
+type foldedCursor struct {
+	set                      bool
+	epoch                    int64
+	account, key, tier, kind string
+	deleted                  bool
+}
+
+// repriceFoldedChunkTx reprices at most repriceBucketChunk rollup buckets of
+// one model after the cursor. Buckets still covered by their raw events are
+// recomputed exactly; the others are reported as partial.
+func repriceFoldedChunkTx(ctx context.Context, tx *sql.Tx, model string, after foldedCursor, resolve priceResolver,
 	limits map[string][]currentCostLimit, totals map[pricingScope]int64, limitDeltas map[int64]int64,
-	summary *application.ModelRepriceSummary) error {
-	for _, model := range affected {
-		price, priced, err := resolveCodexPriceTx(ctx, tx, model)
-		if err != nil || !priced {
-			return err
-		}
-		for offset := 0; ; offset += 500 {
-			rows, err := tx.QueryContext(ctx, `SELECT h.bucket_epoch,h.account_id,h.api_key_id,h.model,
+	summary *application.ModelRepriceSummary, write bool) (foldedCursor, bool, error) {
+	price, priced, err := resolve(ctx, tx, model)
+	if err != nil || !priced {
+		return after, true, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT h.bucket_epoch,h.account_id,h.api_key_id,h.model,
  h.service_tier,h.request_kind,h.is_deleted,h.request_count,h.input_tokens,
  h.output_or_reasoning_tokens,h.cached_input_tokens,h.cost_usd,coalesce(a.kind,'')
  FROM legacy_hourly_usage h LEFT JOIN accounts a ON a.id=CASE
  WHEN h.account_id=char(31) THEN NULL
  WHEN substr(h.account_id,1,1)=char(31) THEN substr(h.account_id,2)
- ELSE h.account_id END WHERE h.model=? ORDER BY h.bucket_epoch,h.account_id,h.api_key_id,
- h.service_tier,h.request_kind,h.is_deleted LIMIT 500 OFFSET ?`, model, offset)
-			if err != nil {
-				return err
-			}
-			buckets := make([]foldedPriceBucket, 0, 500)
-			for rows.Next() {
-				var bucket foldedPriceBucket
-				if err := rows.Scan(&bucket.epoch, &bucket.account, &bucket.key, &bucket.model,
-					&bucket.tier, &bucket.kind, &bucket.deleted, &bucket.requests, &bucket.input,
-					&bucket.output, &bucket.cached, &bucket.costUSD, &bucket.accountKind); err != nil {
-					rows.Close()
-					return err
-				}
-				buckets = append(buckets, bucket)
-			}
-			err = rows.Err()
+ ELSE h.account_id END WHERE h.model=? AND (?=0 OR
+ (h.bucket_epoch,h.account_id,h.api_key_id,h.service_tier,h.request_kind,h.is_deleted)>(?,?,?,?,?,?))
+ ORDER BY h.bucket_epoch,h.account_id,h.api_key_id,h.service_tier,h.request_kind,h.is_deleted LIMIT ?`,
+		model, boolInt(after.set), after.epoch, after.account, after.key, after.tier, after.kind, boolInt(after.deleted), repriceBucketChunk)
+	if err != nil {
+		return after, false, err
+	}
+	buckets := make([]foldedPriceBucket, 0, repriceBucketChunk)
+	for rows.Next() {
+		var bucket foldedPriceBucket
+		if err := rows.Scan(&bucket.epoch, &bucket.account, &bucket.key, &bucket.model,
+			&bucket.tier, &bucket.kind, &bucket.deleted, &bucket.requests, &bucket.input,
+			&bucket.output, &bucket.cached, &bucket.costUSD, &bucket.accountKind); err != nil {
 			rows.Close()
+			return after, false, err
+		}
+		buckets = append(buckets, bucket)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return after, false, err
+	}
+	for _, bucket := range buckets {
+		if bucket.accountKind == domain.AccountExternal {
+			continue
+		}
+		covered := false
+		if bucket.accountKind == domain.AccountChatGPT && bucket.kind != "transcription" && bucket.kind != "reconciled" {
+			covered, err = repriceCoveredBucketTx(ctx, tx, bucket, price, limits, totals, limitDeltas, summary, write)
 			if err != nil {
-				return err
+				return after, false, err
 			}
-			if len(buckets) == 0 {
-				break
-			}
-			for _, bucket := range buckets {
-				if bucket.accountKind == domain.AccountExternal {
-					continue
-				}
-				covered := false
-				if bucket.accountKind == domain.AccountChatGPT && bucket.kind != "transcription" && bucket.kind != "reconciled" {
-					covered, err = repriceCoveredBucketTx(ctx, tx, bucket, price, limits, totals, limitDeltas, summary)
-					if err != nil {
-						return err
-					}
-				}
-				if !covered {
-					summary.PartialFoldedBuckets++
-					summary.PartialFoldedRequests, err = addPriceDelta(summary.PartialFoldedRequests, bucket.requests)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			if len(buckets) < 500 {
-				break
+		}
+		if !covered {
+			summary.PartialFoldedBuckets++
+			summary.PartialFoldedRequests, err = addPriceDelta(summary.PartialFoldedRequests, bucket.requests)
+			if err != nil {
+				return after, false, err
 			}
 		}
 	}
-	return nil
+	if len(buckets) == 0 {
+		return after, true, nil
+	}
+	last := buckets[len(buckets)-1]
+	next := foldedCursor{set: true, epoch: last.epoch, account: last.account, key: last.key, tier: last.tier, kind: last.kind, deleted: last.deleted}
+	return next, len(buckets) < repriceBucketChunk, nil
 }
 
 func foldedRawWhere(bucket foldedPriceBucket) (string, []any) {
@@ -108,7 +116,7 @@ func foldedRawWhere(bucket foldedPriceBucket) (string, []any) {
 
 func repriceCoveredBucketTx(ctx context.Context, tx *sql.Tx, bucket foldedPriceBucket, price pricing.Price,
 	limits map[string][]currentCostLimit, totals map[pricingScope]int64, limitDeltas map[int64]int64,
-	summary *application.ModelRepriceSummary) (bool, error) {
+	summary *application.ModelRepriceSummary, write bool) (bool, error) {
 	where, args := foldedRawWhere(bucket)
 	var count, input, output, cached, oldCost, invalid int64
 	err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(e.input_tokens),0),
@@ -158,7 +166,7 @@ func repriceCoveredBucketTx(ctx context.Context, tx *sql.Tx, bucket foldedPriceB
 			break
 		}
 		for _, event := range events {
-			delta, err := applyPriceEventTx(ctx, tx, event, price, limits, totals, limitDeltas, summary, true)
+			delta, err := applyPriceEventTx(ctx, tx, event, price, limits, totals, limitDeltas, summary, true, write)
 			if err != nil {
 				return false, err
 			}
@@ -176,6 +184,9 @@ func repriceCoveredBucketTx(ctx context.Context, tx *sql.Tx, bucket foldedPriceB
 	newUSD := bucket.costUSD + float64(deltaTotal)/1e6
 	if newUSD < -0.000001 {
 		return false, ErrInvalid
+	}
+	if !write {
+		return true, nil
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE legacy_hourly_usage SET cost_usd=?
  WHERE bucket_epoch=? AND account_id=? AND api_key_id=? AND model=? AND service_tier=?

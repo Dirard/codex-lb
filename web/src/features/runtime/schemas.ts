@@ -29,3 +29,36 @@ export const RuntimeUpdateStatusSchema = z.object({
 });
 
 export type RuntimeUpdateStatus = z.infer<typeof RuntimeUpdateStatusSchema>;
+
+export const RuntimeCapacitySchema = z.object({
+  host: z.object({
+    cpus: z.number().int(),
+    memoryBytes: z.number(),
+    memorySource: z.string(),
+    fileDescriptors: z.number(),
+  }),
+  sizingMemoryBytes: z.number(),
+  sizingMemorySource: z.string(),
+  limits: z.object({
+    goMemoryLimitBytes: z.number(),
+    maxGenerations: z.number().int(),
+    maxQueued: z.number().int(),
+    bodyReaders: z.number().int(),
+    clientWebSockets: z.number().int(),
+    upstreamWebSockets: z.number().int(),
+    upstreamConnectionsPerHost: z.number().int(),
+    sqliteReaders: z.number().int(),
+  }),
+  overridden: z.array(z.string()),
+  usage: z.object({
+    activeGenerations: z.number().int(),
+    queuedGenerations: z.number().int(),
+    clientWebSockets: z.number().int(),
+    goHeapBytes: z.number(),
+    goTotalBytes: z.number(),
+    residentBytes: z.number(),
+    goroutines: z.number().int(),
+  }),
+});
+
+export type RuntimeCapacity = z.infer<typeof RuntimeCapacitySchema>;

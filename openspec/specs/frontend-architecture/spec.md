@@ -3,7 +3,9 @@
 ## Purpose
 
 Define dashboard surface contracts so settings, account management, and operational views stay coherent across the SPA.
+
 ## Requirements
+
 ### Requirement: Account views display subscription time remaining
 
 The Accounts list, dashboard account cards, and dashboard account list SHALL show two subscription countdowns beside each account when `subscriptionActiveUntil` is available: time remaining to the recorded end, followed by `/` and time remaining to that timestamp plus 14 × 24 hours. The second countdown SHALL be labeled as a +14-day reference, not a confirmed extension. Both countdowns SHALL remain visible in the account layout. The presentation SHALL include a tooltip with both exact dates, following the date-display preference, and explain that the date comes from saved authorization metadata and may lag renewal. Missing or invalid dates SHALL be visibly unknown, without inventing a second date. Each past date SHALL be labeled as elapsed independently rather than definitive loss of subscription access. Subscription labels SHALL be localized through the existing translation system. The derived date SHALL NOT alter stored subscription metadata, account eligibility, routing or quotas.
@@ -39,33 +41,30 @@ sticky-session administration. API key create/edit controls that expose
 reasoning effort choices MUST include upstream-supported extended efforts such
 as `max` and `ultra`.
 
-Advanced sections — routing settings, upstream proxy administration, model
-sources, firewall, quota phase planner, and sticky-session administration —
-SHALL render inside an Advanced settings group that is collapsed by default.
-Expanding the group SHALL take exactly one interaction, after which every
-previously mandated section SHALL be reachable and fully functional. While the
-group is collapsed, its sections SHALL NOT mount, and the sections that
-self-fetch on mount — model sources, firewall, quota phase planner, and
+Advanced sections — routing settings, model sources, firewall, and
+sticky-session administration — SHALL render inside an Advanced settings group
+that is collapsed by default. Expanding the group SHALL take exactly one
+interaction, after which every previously mandated section SHALL be reachable
+and fully functional. While the group is collapsed, its sections SHALL NOT
+mount, and the sections that self-fetch on mount — model sources, firewall, and
 sticky-session administration — SHALL NOT issue their data requests; those
-requests fire when the group is expanded. The upstream-proxy administration
-and accounts queries remain page-level requests issued when the Settings page
-loads; their data feeds the advanced Routing and Upstream Proxy sections once
-the group is expanded. Core sections (appearance, import, guest access,
+requests fire when the group is expanded. Core sections (appearance, import,
 password management, session, TOTP, and API key management) SHALL remain
-visible without expanding the group.
+visible without expanding the group. The Settings page SHALL NOT render upstream
+proxy administration, quota phase planner or guest-access controls, which the
+Go runtime does not provide.
 
 #### Scenario: Advanced settings collapsed by default
 
 - **WHEN** a user opens the Settings page
 - **THEN** appearance, import, and API key management sections are visible
-- **AND** the advanced sections (routing, upstream proxy, model sources, firewall, quota planner, sticky sessions) are not mounted
-- **AND** the self-fetching sections (model sources, firewall, quota planner, sticky sessions) have not issued their data requests
-- **AND** the page-level upstream-proxy admin and accounts queries are still issued on Settings load, feeding the Routing and Upstream Proxy sections once expanded
+- **AND** the advanced sections (routing, model sources, firewall, sticky sessions) are not mounted
+- **AND** the self-fetching sections (model sources, firewall, sticky sessions) have not issued their data requests
 
 #### Scenario: One interaction expands every advanced section
 
 - **WHEN** a user activates the Advanced settings group trigger
-- **THEN** the routing, upstream proxy, model sources, firewall, quota planner, and sticky-session sections mount and become fully functional
+- **THEN** the routing, model sources, firewall, and sticky-session sections mount and become fully functional
 
 #### Scenario: API key dialog offers extended reasoning efforts
 
@@ -188,15 +187,6 @@ When a request log entry is associated with an account, the dashboard request-lo
 - **WHEN** a request log entry has no related account
 - **THEN** the `GET /api/request-logs` response includes `planType: null` or omits it
 - **AND** the dashboard recent-requests table still renders the row without failing
-
-### Requirement: Request logs distinguish actual and requested service tiers
-When a request log entry includes service-tier data, the dashboard request-log API response MUST expose the billable tier, requested tier, and actual tier separately. The recent-requests UI MUST display the actual tier when available and MUST show the requested tier when it differs from the visible actual tier.
-
-#### Scenario: Dashboard shows upstream-selected tier and requested tier
-- **WHEN** a request log entry is recorded with `requested_service_tier: "priority"`, `actual_service_tier: "default"`, and billable `service_tier: "default"`
-- **THEN** the `GET /api/request-logs` response includes `requestedServiceTier: "priority"`, `actualServiceTier: "default"`, and `serviceTier: "default"`
-- **AND** the dashboard renders the model label with `default`
-- **AND** the dashboard also shows that the request asked for `priority`
 
 ### Requirement: Accounts list surfaces quota reset timing
 
@@ -385,45 +375,16 @@ The SPA settings page SHALL expose a dashboard password session lifetime control
 - **THEN** the Settings page shows a warning explaining that the longer lifetime increases the impact of a leaked browser profile or stolen cookie
 - **AND** the admin can still save the configured lifetime
 
-### Requirement: Account summary duplicate email indicator
-
-The dashboard accounts API SHALL expose an `isEmailDuplicate` boolean on each
-`AccountSummary` returned by `GET /api/accounts`. The field MUST be `true` when
-another account row in the same response has the same real email address and
-the same ChatGPT account identity, and MUST be `false` for unique real
-email/identity pairs. Missing, blank, and legacy placeholder emails equal to
-`DEFAULT_EMAIL` (`unknown@example.com`) MUST be excluded from duplicate
-detection and MUST NOT be flagged as duplicates. Rows that share an email but
-belong to different ChatGPT account identities MUST NOT be flagged as
-duplicates.
-
-#### Scenario: Duplicate real email and identity pairs are flagged
-
-- **WHEN** `GET /api/accounts` returns two or more account rows with the same real non-placeholder email and the same ChatGPT account identity
-- **THEN** every row in that email and identity group includes `isEmailDuplicate: true`
-
-#### Scenario: Same email across identities is not flagged
-
-- **WHEN** `GET /api/accounts` returns account rows with the same real non-placeholder email but different ChatGPT account identities
-- **THEN** those rows include `isEmailDuplicate: false`
-
-#### Scenario: Placeholder emails are ignored
-
-- **WHEN** `GET /api/accounts` returns two or more account rows whose email is `unknown@example.com`
-- **THEN** those rows include `isEmailDuplicate: false`
-
-#### Scenario: Unique emails are not flagged
-
-- **WHEN** `GET /api/accounts` returns an account row with an email that appears only once in the response
-- **THEN** that row includes `isEmailDuplicate: false`
-
 ### Requirement: Dashboard projections load after the primary dashboard data
 
 The dashboard SPA SHALL render primary dashboard content from `GET /api/dashboard/overview`
 and recent request-log data without waiting for depletion or weekly-credit projection
 calculations. Projection-only data, including safe-line depletion markers and weekly-credit
 pace, SHALL be available from `GET /api/dashboard/projections` and fetched after overview
-data is available.
+data is available. Because projections derive from persisted quota observations, the SPA
+SHALL refetch them when the overview `lastSyncAt` value changes, when the operator refreshes
+the dashboard manually, or at most every 5 minutes, and SHALL NOT refetch them on every
+overview poll.
 
 #### Scenario: Main dashboard renders before projections finish
 
@@ -438,6 +399,17 @@ data is available.
 - **THEN** the response includes depletion safe-line data and weekly-credit pace data when those calculations are available
 - **AND** the overview endpoint does not need to compute those fields for initial page render
 
+#### Scenario: Overview polls without new quota data do not refetch projections
+
+- **GIVEN** the dashboard has loaded projections for the current `lastSyncAt`
+- **WHEN** later overview polls return the same `lastSyncAt` within 5 minutes
+- **THEN** no further `GET /api/dashboard/projections` request is issued
+
+#### Scenario: New quota observation refreshes projections
+
+- **WHEN** an overview poll returns a newer `lastSyncAt`
+- **THEN** the dashboard requests `GET /api/dashboard/projections` once for that value
+
 ### Requirement: Dashboard usage donuts present credits as stacked remaining and capacity
 
 The dashboard's primary and secondary usage donuts MUST present remaining credits and capacity as two stacked values separated by a horizontal divider: the remaining count above (bold, `data-testid="donut-center-remaining"`) and the capacity count below (muted, `data-testid="donut-center-capacity"`). Both values MUST use locale-aware thousands separators (e.g. `7,331` and `7,560`). Compact-format abbreviation (e.g. `7.33k`) MUST NOT be used in the donut center for these panels.
@@ -450,38 +422,6 @@ The primary donut title MUST read `5-Hour Credits`. The secondary donut title MU
 - **THEN** the donut title reads `5-Hour Credits` or `Weekly Credits`
 - **AND** the center renders `7,331` in the remaining element and `7,560` in the capacity element
 - **AND** a divider separates the two values
-
-### Requirement: API sidebar shows pooled credit bars
-
-The APIs page left sidebar SHALL render pooled credit bars on each API key list item. Each bar SHALL display a label, percentage, and colored progress bar using the same `MiniQuotaBar` component as the Accounts sidebar.
-
-Labels SHALL be "Pooled 5h" for the primary window and "Pooled Weekly" for the secondary window. No reset countdown text SHALL be shown.
-
-When `pooledCapacityCreditsPrimary > 0` and `pooledRemainingPercentPrimary` is not null, the "Pooled 5h" bar SHALL be visible. Otherwise it SHALL be hidden. The "Pooled Weekly" bar SHALL be visible when `pooledRemainingPercentSecondary` is not null.
-
-When both bars are visible, they SHALL be laid out in a 2-column grid. When only one bar is visible, it SHALL use a 1-column layout.
-
-When API key limit rules exist, the sidebar SHALL also render the legacy limit progress bar below the pooled bars with an "API Limit" label and percentage value so it remains clearly distinct from the pooled-account bars.
-
-#### Scenario: Both pooled bars visible
-
-- **WHEN** an API key has both primary and secondary pooled credit data
-- **THEN** the sidebar item shows "Pooled 5h" and "Pooled Weekly" bars in a 2-column grid
-
-#### Scenario: Primary bar hidden for free-tier accounts
-
-- **WHEN** an API key's pooled primary capacity is 0
-- **THEN** only the "Pooled Weekly" bar is shown in a 1-column layout
-
-#### Scenario: No credit data hides bars
-
-- **WHEN** an API key has no pooled credit data
-- **THEN** no credit bars are rendered on that list item
-
-#### Scenario: API limit bar is labeled distinctly
-
-- **WHEN** an API key has configured limit rules
-- **THEN** the sidebar renders the legacy limit bar with an "API Limit" label below the pooled bars
 
 ### Requirement: Footer version update indicator
 
@@ -676,42 +616,6 @@ The weekly credits pace card header MUST align the title and gauge icon to the f
 
 - **WHEN** the weekly credits pace card renders
 - **THEN** the header row uses `justify-between` without `items-center`
-
-### Requirement: Request logs expose cost breakdown details
-When a request log has sufficient usage data, the dashboard request-log API MUST expose raw input/output token counts and a cost breakdown that separates non-cached input, cached input, and output cost.
-
-#### Scenario: Successful request log exposes token and cost segments
-- **WHEN** a successful request log row has persisted input, cached-input, and output usage
-- **THEN** `GET /api/request-logs` includes `inputTokens`, `outputTokens`, and `costBreakdown`
-- **AND** `costBreakdown` includes `inputUsd`, `cachedInputUsd`, `outputUsd`, and `totalUsd`
-
-#### Scenario: Request log output falls back to reasoning tokens
-- **WHEN** a successful request log row has no persisted `output_tokens` and does have `reasoning_tokens`
-- **THEN** `GET /api/request-logs` uses the reasoning-token value for `outputTokens`
-
-#### Scenario: Request log response preserves shape for legacy partial data
-- **WHEN** a successful request log row is missing one or more persisted token or cost segments
-- **THEN** `GET /api/request-logs` still includes `inputTokens`, `outputTokens`, and `costBreakdown`
-- **AND** any unavailable top-level token field is returned as `null`
-- **AND** `costBreakdown` includes `inputUsd`, `cachedInputUsd`, `outputUsd`, and `totalUsd`
-- **AND** any unavailable `costBreakdown` field is returned as `null`
-- **AND** clients can render only the available token and cost segments without treating the row as invalid
-
-### Requirement: Request detail dialog renders successful cost breakdowns
-The dashboard request-log `View Details` dialog MUST render a `Cost` section under `Archive` for successful request rows and MUST hide the section for non-success rows.
-
-#### Scenario: Successful request displays ordered cost details
-- **WHEN** a request log detail dialog opens for an `ok` row with available breakdown data
-- **THEN** the dialog displays the total cost first
-- **AND** the dialog lists available cost segments in this order: input, cached, output
-- **AND** each displayed segment includes its token count and matching currency value
-- **AND** token counts use the same compact formatting as the request-log tokens column
-- **AND** currency values are rounded to two decimals
-
-#### Scenario: Missing cost segments are omitted without breaking the dialog
-- **WHEN** a successful request log row is missing one or more token or cost segments
-- **THEN** the dialog renders only the available segments
-- **AND** if no segments are available the `Cost` section is hidden
 
 ### Requirement: Reports page renders English user-facing labels
 
@@ -1010,24 +914,6 @@ The compact list SHALL sort subscription and purchased credits independently. A 
 - **THEN** the dashboard migrates it to the purchased-credit sort key
 - **AND** persists the migrated preference
 
-### Requirement: Dashboard settings must expose upstream proxy routing controls
-The settings dashboard MUST allow operators to inspect upstream proxy routing state, enable or disable routing, choose the default proxy pool, create proxy endpoints, create proxy pools, and add endpoints to pools.
-
-#### Scenario: Operator creates a pool from existing endpoints
-- **GIVEN** the upstream proxy admin API returns at least one endpoint
-- **WHEN** an operator creates a pool and selects endpoint members
-- **THEN** the dashboard MUST call the pool creation API with the selected endpoint ids
-- **AND** refresh the displayed upstream proxy admin state.
-
-### Requirement: Dashboard accounts must expose account proxy bindings
-The accounts dashboard MUST allow operators to bind an account to a proxy pool and disable an existing account binding.
-
-#### Scenario: Operator binds an account to a pool
-- **GIVEN** upstream proxy routing has at least one proxy pool
-- **WHEN** an operator selects a pool for an account and saves the binding
-- **THEN** the dashboard MUST call the account binding API for that account
-- **AND** display the selected pool as the account binding.
-
 ### Requirement: Accounts list supports explicit sort modes
 
 The Accounts page account list SHALL expose sort modes for reset time
@@ -1215,93 +1101,6 @@ The dashboard overview `Est. API Cost` summary card SHALL render its meta text a
 - **WHEN** `GET /api/dashboard/overview?timeframe=1d` returns an `Est. API Cost` total
 - **THEN** the dashboard renders the cost-card meta text as `Avg/hr <currency value>`
 - **AND** the same meta text does not include any extra suffix text
-
-### Requirement: Upstream proxy admin creation flows use modal dialogs
-
-The Settings upstream proxy section SHALL present endpoint creation, pool creation, and
-pool-member addition as modal dialogs opened from explicit trigger buttons. The creation form
-fields (endpoint name/scheme/host/port/credentials, pool name/member selection, pool-member
-pool/endpoint selectors) SHALL NOT be rendered in the always-visible Settings layout; they
-SHALL only mount when their dialog is open. Submitting a creation dialog SHALL call the existing
-upstream proxy admin mutation, refresh the displayed admin state, and close the dialog on success;
-a failed submission SHALL keep the dialog open so the operator can retry.
-
-#### Scenario: Creation forms are hidden until a dialog opens
-
-- **WHEN** an operator views the Settings page upstream proxy section
-- **THEN** no endpoint, pool, or pool-member creation input fields are present in the document
-- **AND** the section shows trigger buttons for adding an endpoint, creating a pool, and adding a pool member
-
-#### Scenario: Operator creates a pool from a dialog
-
-- **GIVEN** the upstream proxy admin API returns at least one endpoint
-- **WHEN** an operator opens the create-pool dialog, names the pool, selects endpoint members, and submits
-- **THEN** the dashboard calls the pool creation API with the selected endpoint ids
-- **AND** refreshes the displayed upstream proxy admin state
-- **AND** closes the dialog
-
-#### Scenario: Failed creation keeps the dialog open
-
-- **WHEN** a creation dialog submission rejects with an error
-- **THEN** the dialog remains open
-- **AND** the entered values are preserved so the operator can retry
-
-### Requirement: Upstream proxy admin section summarizes configured endpoints and pools
-
-The always-visible Settings upstream proxy section SHALL render a summary/management view that
-shows the routing-enabled toggle, the default-pool selector, and readable lists of the configured
-endpoints and pools (including each pool's active state and endpoint count). When no endpoints or
-no pools are configured, the section SHALL show an explicit empty state for that list rather than
-a blank region.
-
-#### Scenario: Configured endpoints and pools are listed
-
-- **WHEN** the upstream proxy admin state includes endpoints and pools
-- **THEN** the section lists each endpoint with its scheme, host, and port
-- **AND** lists each pool with its active state and endpoint count
-
-#### Scenario: Empty proxy configuration shows an empty state
-
-- **WHEN** the upstream proxy admin state has no endpoints and no pools
-- **THEN** the section shows an explicit empty-state message for endpoints and for pools
-
-### Requirement: Account routing and proxy-binding controls size predictably
-
-The account detail routing-policy selector and the account proxy-pool selector SHALL size
-themselves responsively within their container instead of using an arbitrary fixed pixel width,
-and SHALL truncate long option labels gracefully rather than overflowing their container or
-collapsing below a usable minimum width.
-
-#### Scenario: Routing-policy select fills its control row
-
-- **WHEN** the account detail panel renders the routing-policy selector
-- **THEN** the selector trigger constrains its width to its container with a usable minimum
-- **AND** does not hardcode a fixed `w-44` width
-
-#### Scenario: Long proxy-pool name is truncated
-
-- **WHEN** the account proxy-pool selector renders a pool whose name is longer than the trigger width
-- **THEN** the selected label is truncated with an ellipsis within the trigger
-- **AND** the selector does not overflow its container
-
-### Requirement: Account proxy binding can test the selected pool
-
-The account detail proxy-binding panel SHALL expose an in-place test action for the selected proxy
-pool when that pool has at least one endpoint. Activating the action SHALL call the existing upstream
-proxy endpoint-test API for the selected pool's first endpoint and SHALL display the latest bounded
-reachability result without showing proxy credentials or account tokens.
-
-#### Scenario: Operator tests the selected account proxy pool
-
-- **GIVEN** an account proxy binding panel has a selected pool with at least one endpoint
-- **WHEN** an operator activates the pool test action
-- **THEN** the dashboard calls the existing endpoint-test API with the selected pool's first endpoint id
-- **AND** displays whether the endpoint was reachable, plus bounded status/latency details when provided
-
-#### Scenario: Pool test is disabled when no endpoint is available
-
-- **WHEN** the selected account proxy pool has no endpoints
-- **THEN** the pool test action is disabled
 
 ### Requirement: Account list presents a single add-account entry point with a chooser dialog
 
@@ -1564,7 +1363,7 @@ The dashboard SHALL render a visible sort icon on every sortable `/reports` `Dai
 
 ### Requirement: Dashboard supports runtime locale selection
 
-The dashboard SHALL load translations through `i18next` + `react-i18next`, support at least `en` (default) and `zh-CN` locales, persist the user's selection in `localStorage` under the key `codex-lb-language`, and apply the active locale to the document's `lang` attribute. When no persisted preference exists, the dashboard SHALL detect the browser language and use `zh-CN` for any `zh*` tag and `en` otherwise.
+The dashboard SHALL load translations through `i18next` + `react-i18next`, support at least `en` (default) and `zh-CN` locales, persist the user's selection in `localStorage` under the key `codex-lb-language`, and apply the active locale to the document's `lang` attribute. When no persisted preference exists, the dashboard SHALL detect the browser language and use `zh-CN` for any `zh*` tag and `en` otherwise. Only the English catalogue SHALL be bundled with the entry chunks; other catalogues SHALL be fetched on demand, and the first render SHALL wait until the detected language's catalogue is available.
 
 #### Scenario: First visit with a Chinese browser
 
@@ -1589,6 +1388,12 @@ The dashboard SHALL load translations through `i18next` + `react-i18next`, suppo
 
 - **WHEN** the user reloads the dashboard after selecting a language
 - **THEN** the previously selected language is reapplied before the first paint
+
+#### Scenario: English sessions do not download other catalogues
+
+- **WHEN** the dashboard loads with English as the detected language
+- **THEN** no Korean or Simplified Chinese catalogue is requested
+- **AND** the entry chunks contain no Korean or Simplified Chinese strings
 
 ### Requirement: Settings page renders in the active locale
 
@@ -2300,22 +2105,33 @@ The dashboard request-log `View Details` dialog SHALL display `latency_ms` as an
 
 ### Requirement: Dashboard serving is compressed, cache-correct, and chart-lazy
 
-Dashboard API and static-asset responses MUST be served gzip-compressed when the client accepts it, while proxy paths MUST NOT pass through a compressing wrapper. Content-hashed assets under `/assets/` MUST be served with immutable year-long `Cache-Control`; `index.html` MUST remain `no-cache`. Chart vendor code MUST NOT load before first paint: it MUST live in an async-only chunk that is neither statically imported by the entry chunk nor modulepreloaded.
+The build MUST emit brotli (`.br`) and gzip (`.gz`) variants for compressible text assets of at least 1 KiB, and the Go UI handler MUST serve the best variant the request accepts with non-zero quality (brotli before gzip), with the original `Content-Type`, the variant's `Content-Length`, `Content-Encoding` and `Vary: Accept-Encoding`; otherwise it MUST serve the original bytes. Every UI response MUST carry a strong `ETag` of the bytes sent and honor `If-None-Match`. Variant files MUST NOT be addressable directly. Authenticated admin JSON responses under `/api/` of at least 1 KiB MUST be gzip-compressed when the client accepts gzip, while proxy paths, authentication and key-report session routes, server-sent events and WebSocket upgrades MUST NOT pass through a compressing wrapper. Content-hashed assets under `/assets/`, including fonts, MUST be served with immutable year-long `Cache-Control`; `index.html` MUST remain `no-cache`. Chart vendor code MUST NOT load before first paint: it MUST live in an async-only chunk that is neither statically imported by the entry chunk nor modulepreloaded, and the default `/dashboard` route MUST NOT load it.
 
 #### Scenario: Assets are compressed and immutable
 
-- **WHEN** a browser requests a hashed asset under `/assets/` with `Accept-Encoding: gzip`
-- **THEN** the response is gzip-encoded
+- **WHEN** a browser requests a hashed asset under `/assets/` with `Accept-Encoding: gzip, br`
+- **THEN** the response is brotli-encoded with `Vary: Accept-Encoding`
 - **AND** carries `Cache-Control: public, max-age=31536000, immutable`
+
+#### Scenario: Plain-HTTP browsers receive gzip
+
+- **WHEN** a browser requests a hashed asset with `Accept-Encoding: gzip, deflate`
+- **THEN** the response is gzip-encoded
 
 #### Scenario: index.html stays fresh across deploys
 
 - **WHEN** the SPA shell is requested
-- **THEN** the response carries `Cache-Control: no-cache`
+- **THEN** the response carries `Cache-Control: no-cache` and an `ETag`
+- **AND** a repeated request with that `If-None-Match` value receives `304`
+
+#### Scenario: Admin JSON is compressed
+
+- **WHEN** an authenticated client requests `GET /api/dashboard/overview` with `Accept-Encoding: gzip` and the JSON body is at least 1 KiB
+- **THEN** the response is gzip-encoded with `Vary: Accept-Encoding`
 
 #### Scenario: Proxy streaming paths are never compressed by the dashboard wrapper
 
-- **WHEN** a request targets a proxy path (`/backend-api/*`, `/v1/*`)
+- **WHEN** a request targets a proxy path (`/backend-api/*`, `/v1/*`, `/api/codex/*`)
 - **THEN** the dashboard gzip middleware passes it through untouched
 
 #### Scenario: Ranged asset requests bypass compression
@@ -2327,7 +2143,8 @@ Dashboard API and static-asset responses MUST be served gzip-compressed when the
 
 - **WHEN** the built dashboard entry page loads
 - **THEN** the recharts chunk is not statically imported by the entry chunk and not modulepreloaded
-- **AND** charts render correctly once their async chunk loads
+- **AND** opening `/dashboard` does not request the recharts chunk
+- **AND** charts on other routes render correctly once their async chunk loads
 
 ### Requirement: Account quota displays hide expired windows
 
@@ -2396,49 +2213,6 @@ to the Advanced menu unless a spec explicitly designates it as core.
 
 - **WHEN** a user opens `/firewall`
 - **THEN** the app redirects to `/settings`
-
-### Requirement: Guest dashboard hides the Conversations view
-
-The dashboard view selector MUST render the Conversations option only for an
-admin principal. For a guest principal, the effective dashboard view MUST be
-Request Logs even when the URL contains `view=conversations`. Guests MUST NOT
-mount the Conversations view or issue conversation list/detail API requests.
-Admin navigation, filtering, and conversation detail behavior MUST remain
-unchanged.
-
-#### Scenario: Guest selector hides Conversations
-
-- **GIVEN** the dashboard principal has role `guest`
-- **WHEN** the dashboard view selector opens
-- **THEN** it exposes Request Logs and does not expose Conversations
-
-#### Scenario: Guest conversation deep link falls back safely
-
-- **GIVEN** the dashboard principal has role `guest`
-- **AND** the URL contains `view=conversations`
-- **WHEN** the dashboard renders
-- **THEN** the effective view is Request Logs
-- **AND** the Conversations view is not mounted
-- **AND** no `/api/conversations` request is issued
-
-#### Scenario: Conversation access fails closed during auth hydration
-
-- **GIVEN** auth initialization is incomplete and the auth store still has its
-  default admin role
-- **AND** the URL contains `view=conversations`
-- **WHEN** the dashboard renders before the session resolves
-- **THEN** Request Logs is shown and the Conversations view is not mounted
-- **AND** no conversation request is enabled
-- **AND** the URL retains `view=conversations`
-- **WHEN** the session resolves to a guest principal
-- **THEN** the conversation surface remains closed and the URL is normalized to
-  Request Logs
-
-#### Scenario: Admin retains Conversations navigation
-
-- **GIVEN** the dashboard principal has role `admin`
-- **WHEN** the dashboard view selector opens
-- **THEN** it exposes both Request Logs and Conversations
 
 ### Requirement: Dashboard routes are code-split
 
@@ -2761,9 +2535,12 @@ UTC-converted filter boundaries.
 The fixed dashboard status bar MUST render independent `Service ready` and
 `Usage synced` signals. `Service ready` MUST use the existing `/health/ready`
 response and MUST treat a failed request or a non-`ok` status as not ready.
-`Usage synced` MUST remain derived only from the dashboard overview
-`lastSyncAt` value and MUST be fresh only while that timestamp is less than 60
-seconds old. The service-readiness signal MUST NOT use upstream account or
+`Usage synced` MUST be derived only from the `lastSyncAt` value returned by
+`GET /api/dashboard/status`, which MUST equal the dashboard overview
+`lastSyncAt` (the latest quota observation of non-deleted ChatGPT accounts)
+without computing traffic reports, and MUST be fresh only while that timestamp
+is less than 60 seconds old. The status bar MUST NOT request the dashboard
+overview. The service-readiness signal MUST NOT use upstream account or
 provider health. The dashboard layout MUST reserve at least the status bar's
 rendered height so wrapped status rows do not cover page content.
 
@@ -2794,6 +2571,12 @@ rendered height so wrapped status rows do not cover page content.
 - **THEN** the dashboard updates its reserved bottom space to the rendered
   status-bar height
 - **AND** the fixed status bar does not cover page content
+
+#### Scenario: Non-dashboard pages do not load the overview
+
+- **WHEN** an operator stays on the Settings page
+- **THEN** the status bar refreshes `lastSyncAt` from `GET /api/dashboard/status`
+- **AND** no `GET /api/dashboard/overview` request is issued
 
 ### Requirement: Dashboard conversation listing
 
@@ -3381,3 +3164,56 @@ The x-axis tick format of the Account Trend and API Trend charts SHALL be `MM-DD
 
 - **WHEN** the API Trend chart renders with timestamp data
 - **THEN** the x-axis tick labels SHALL be in `MM-DD` format (e.g., `"08-09"`)
+
+### Requirement: Account lists mark duplicate e-mails on the client
+
+The dashboard SHALL derive an `isEmailDuplicate` marker on the client for every
+account list it renders (`GET /api/accounts` rows and dashboard overview
+accounts), so rows whose visible label is the same e-mail can be told apart.
+The marker MUST be `true` when another row of the same list has the same real
+e-mail after trimming and case-insensitive comparison, and MUST be `false`
+otherwise. Missing, blank, and placeholder e-mails equal to `unknown@example.com`
+MUST be excluded from duplicate detection. Rows flagged as duplicates MUST show
+a compact account identifier next to the e-mail label. The server is not
+required to send this field.
+
+#### Scenario: Duplicate real emails are flagged
+
+- **WHEN** an account list contains two or more rows with the same real non-placeholder email, ignoring case and surrounding whitespace
+- **THEN** every row in that group is rendered with its compact account identifier
+
+#### Scenario: Placeholder emails are ignored
+
+- **WHEN** an account list contains two or more rows whose email is blank or `unknown@example.com`
+- **THEN** those rows are not flagged as duplicates
+
+#### Scenario: Unique emails are not flagged
+
+- **WHEN** an email appears only once in an account list
+- **THEN** that row is rendered without the duplicate account identifier
+
+### Requirement: Account routing-policy control sizes predictably
+
+The account detail routing-policy selector SHALL size itself responsively
+within its container instead of using an arbitrary fixed pixel width, and SHALL
+truncate long option labels gracefully rather than overflowing its container
+or collapsing below a usable minimum width.
+
+#### Scenario: Routing-policy select fills its control row
+
+- **WHEN** the account detail panel renders the routing-policy selector
+- **THEN** the selector trigger constrains its width to its container with a usable minimum
+- **AND** does not hardcode a fixed `w-44` width
+
+### Requirement: Dashboard API mocks follow the Go router
+
+Every dashboard test mock handler for an `/api/` route MUST correspond to a
+route registered by the Go HTTP server with the same method and path, as
+resolved by the Go router itself; a mock for a path that Go serves only through
+a broader subtree pattern MUST be treated as missing. Mock factories MUST NOT
+produce response fields the Go server never sends.
+
+#### Scenario: Mock for an unregistered route fails the build
+
+- **WHEN** a mock handler is added for `GET /api/automations/:id/runs`
+- **THEN** the Go route-contract test fails because the Go router resolves that path only to `GET /api/automations/`

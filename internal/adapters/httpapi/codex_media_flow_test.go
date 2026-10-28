@@ -133,7 +133,7 @@ func TestCodexRealtimeCallLiveWebSocketKeepsOwner(t *testing.T) {
 	operations := application.NewCodexOperations(store, store, adapter, time.Hour)
 	operations.ConfigureAdmission(proxy)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/backend-api/codex/realtime/calls", strings.NewReader(`{"model":"gpt-6-sol"}`))

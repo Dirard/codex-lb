@@ -58,10 +58,11 @@ type WarmupExecutor interface {
 }
 
 type AutomationsService struct {
-	store    AutomationsStore
-	accounts Accounts
-	warmups  WarmupExecutor
-	now      func() time.Time
+	background BackgroundSchedule
+	store      AutomationsStore
+	accounts   Accounts
+	warmups    WarmupExecutor
+	now        func() time.Time
 }
 
 func NewAutomationsService(store AutomationsStore, accounts Accounts, warmups WarmupExecutor, now func() time.Time) *AutomationsService {
@@ -465,16 +466,16 @@ func (s *AutomationsService) RunNow(ctx context.Context, jobID string) (domain.A
 // RunAutomationsPoller blocks until ctx is done; wire one goroutine from the
 // composition root and join it before closing the store.
 func (s *AutomationsService) RunAutomationsPoller(ctx context.Context) {
-	ticker := time.NewTicker(automationPollerInterval)
-	defer ticker.Stop()
-	for {
-		_, _ = s.RunDueJobs(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	RunPeriodic(ctx, "automations", s.background, automationPollerInterval, nil, func(ctx context.Context) error {
+		_, err := s.RunDueJobs(ctx)
+		return err
+	})
+}
+
+// ConfigureBackground sets the poller's start delay and outcome reporting;
+// call it before RunAutomationsPoller.
+func (s *AutomationsService) ConfigureBackground(schedule BackgroundSchedule) {
+	s.background = schedule
 }
 
 func LatestDueSlotUTC(now time.Time, schedule domain.AutomationSchedule) time.Time {

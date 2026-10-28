@@ -10,7 +10,6 @@ import {
 } from "@/features/auth/api";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
 import { TotpSettings } from "@/features/settings/components/totp-settings";
-import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import { createDashboardSettings } from "@/test/mocks/factories";
 
 vi.mock("@/features/auth/api", () => ({
@@ -65,7 +64,6 @@ describe("TotpSettings", () => {
     renderWithClient(
       <TotpSettings
         settings={baseSettings}
-        onSave={vi.fn().mockResolvedValue(undefined)}
       />,
     );
     expect(
@@ -80,7 +78,6 @@ describe("TotpSettings", () => {
     renderWithClient(
       <TotpSettings
         settings={{ ...baseSettings, totpConfigured: true }}
-        onSave={vi.fn().mockResolvedValue(undefined)}
       />,
     );
     expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
@@ -91,7 +88,6 @@ describe("TotpSettings", () => {
 
   it("supports setup flow via dialog", async () => {
     const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(undefined);
 
     vi.mocked(startTotpSetup).mockResolvedValue({
       secret: "SECRET123",
@@ -100,7 +96,7 @@ describe("TotpSettings", () => {
     });
     vi.mocked(confirmTotpSetup).mockResolvedValue({ status: "ok" });
 
-    renderWithClient(<TotpSettings settings={baseSettings} onSave={onSave} />);
+    renderWithClient(<TotpSettings settings={baseSettings} />);
 
     await user.click(screen.getByRole("button", { name: "Enable TOTP" }));
 
@@ -128,7 +124,7 @@ describe("TotpSettings", () => {
     });
 
     renderWithClient(
-      <TotpSettings settings={baseSettings} onSave={vi.fn().mockResolvedValue(undefined)} />,
+      <TotpSettings settings={baseSettings} />,
     );
 
     await user.click(screen.getByRole("button", { name: "Enable TOTP" }));
@@ -142,16 +138,15 @@ describe("TotpSettings", () => {
     expect(confirmTotpSetup).not.toHaveBeenCalled();
   });
 
-  it("toggles require-on-login via switch", async () => {
-    const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(undefined);
+  it("states that a configured TOTP is required at every sign-in", () => {
+    const { unmount } = renderWithClient(<TotpSettings settings={baseSettings} />);
+    expect(screen.queryByTestId("totp-required-on-login")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    unmount();
 
-    renderWithClient(<TotpSettings settings={baseSettings} onSave={onSave} />);
-
-    await user.click(screen.getByRole("switch"));
-    expect(onSave).toHaveBeenCalledWith(
-      buildSettingsUpdateRequest(baseSettings, { totpRequiredOnLogin: true }),
-    );
+    renderWithClient(<TotpSettings settings={{ ...baseSettings, totpConfigured: true }} />);
+    expect(screen.getByTestId("totp-required-on-login")).toHaveTextContent("Required at every sign-in");
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("supports disable flow via dialog", async () => {
@@ -165,7 +160,6 @@ describe("TotpSettings", () => {
           totpConfigured: true,
           totpRequiredOnLogin: true,
         }}
-        onSave={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 
@@ -187,7 +181,6 @@ describe("TotpSettings", () => {
           totpConfigured: true,
           totpRequiredOnLogin: true,
         }}
-        onSave={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 

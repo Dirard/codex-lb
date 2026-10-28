@@ -186,8 +186,10 @@ func TestReservationReleaseAndReset(t *testing.T) {
 		Model: "gpt-test", Budget: domain.UsageAmount{InputTokens: 1}, Now: fixedTime}); !errors.Is(err, ErrLimitReached) {
 		t.Fatalf("exhausted limit admitted: %v", err)
 	}
-	if released, err := s.ReleaseStaleReservations(ctx, fixedTime.Add(time.Second)); err != nil || released != 2 {
-		t.Fatalf("release stale: %d, %v", released, err)
+	for _, id := range []string{"r1", "r2"} {
+		if released, err := s.SettleUsage(ctx, id, domain.UsageSettlement{Status: "released"}); err != nil || !released {
+			t.Fatalf("release %s: %v, %v", id, released, err)
+		}
 	}
 	key, err := s.GetAPIKey(ctx, "key")
 	if err != nil || key.Limits[0].CurrentValue != 0 {
@@ -371,5 +373,24 @@ func TestRejectLegacyDatabaseWithoutMutation(t *testing.T) {
 	var tables int
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='runtime_settings'").Scan(&tables); err != nil || tables != 0 {
 		t.Fatalf("legacy schema modified: %d, %v", tables, err)
+	}
+}
+
+func TestOpenWithOptionsSizesTheReadPool(t *testing.T) {
+	store, err := OpenWithOptions("file:"+filepath.Join(t.TempDir(), "sized.sqlite3"), Options{ReadConnections: 13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if got := store.readDB.Stats().MaxOpenConnections; got != 13 {
+		t.Fatalf("read pool = %d, want 13", got)
+	}
+	defaulted, err := Open("file:" + filepath.Join(t.TempDir(), "default.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer defaulted.Close()
+	if got := defaulted.readDB.Stats().MaxOpenConnections; got != defaultReadConnections {
+		t.Fatalf("default read pool = %d", got)
 	}
 }

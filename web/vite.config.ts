@@ -1,6 +1,9 @@
 import path from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 
 import react from "@vitejs/plugin-react-swc";
 import tailwindcss from "@tailwindcss/vite";
@@ -17,7 +20,6 @@ const manualChunkPackages: Record<string, string[]> = {
   // the bundler hoist shared helper modules into that group, which turned
   // the (lazy-only) 580 KB chart bundle into a static import of the entry
   // chunk, modulepreloaded before first paint.
-  "vendor-ui": ["radix-ui"],
 };
 
 function manualChunks(id: string): string | undefined {
@@ -46,8 +48,68 @@ function keepGoEmbedPlaceholder(): Plugin {
   };
 }
 
+// Text types the Go server can label from the original extension; fonts and
+// images are already compressed. Tiny files gain nothing from an encoding.
+const COMPRESSIBLE_EXTENSIONS = new Set([".html", ".js", ".mjs", ".css", ".svg", ".json", ".xml"]);
+const MIN_COMPRESSIBLE_BYTES = 1024;
+const brotliAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+// Writes `<file>.br` and `<file>.gz` next to every compressible build output.
+// internal/adapters/webui negotiates these per request, so the server never
+// compresses static files on the fly. A variant is kept only when smaller.
+function precompressAssets(): Plugin {
+  let outDir = "";
+  let report: (message: string) => void = () => {};
+  return {
+    name: "precompress-assets",
+    apply: "build",
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir);
+      report = (message) => config.logger.info(message);
+    },
+    async closeBundle() {
+      const entries = await readdir(outDir, { recursive: true, withFileTypes: true });
+      const files = entries
+        .filter((entry) => entry.isFile() && COMPRESSIBLE_EXTENSIONS.has(path.extname(entry.name)))
+        .map((entry) => path.join(entry.parentPath, entry.name));
+      const totals = { files: 0, raw: 0, br: 0, gzip: 0 };
+      await Promise.all(
+        files.map(async (file) => {
+          const source = await readFile(file);
+          if (source.length < MIN_COMPRESSIBLE_BYTES) {
+            return;
+          }
+          const [br, gz] = await Promise.all([
+            brotliAsync(source, {
+              params: {
+                [zlibConstants.BROTLI_PARAM_MODE]: zlibConstants.BROTLI_MODE_TEXT,
+                [zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+                [zlibConstants.BROTLI_PARAM_SIZE_HINT]: source.length,
+              },
+            }),
+            gzipAsync(source, { level: zlibConstants.Z_BEST_COMPRESSION }),
+          ]);
+          totals.files += 1;
+          totals.raw += source.length;
+          if (br.length < source.length) {
+            await writeFile(`${file}.br`, br);
+            totals.br += br.length;
+          }
+          if (gz.length < source.length) {
+            await writeFile(`${file}.gz`, gz);
+            totals.gzip += gz.length;
+          }
+        }),
+      );
+      const kib = (bytes: number) => `${(bytes / 1024).toFixed(1)} KiB`;
+      report(`precompressed ${totals.files} files: ${kib(totals.raw)} -> br ${kib(totals.br)}, gzip ${kib(totals.gzip)}`);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), keepGoEmbedPlaceholder()],
+  plugins: [react(), tailwindcss(), keepGoEmbedPlaceholder(), precompressAssets()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
@@ -80,8 +142,6 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    exclude: ["browser-smoke/**", "screenshots/**", "node_modules/**"],
-    fileParallelism: false,
     testTimeout: 15_000,
     coverage: {
       provider: "v8",

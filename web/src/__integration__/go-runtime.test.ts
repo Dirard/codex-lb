@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -14,7 +14,7 @@ import { AccountGroupListSchema, AccountGroupSchema } from "@/features/account-g
 import { ApiKeyCreateResponseSchema, ApiKeyListSchema, ApiKeySchema, ModelsResponseSchema } from "@/features/api-keys/schemas";
 import { DashboardSettingsSchema } from "@/features/settings/schemas";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
-import { ConversationsResponseSchema, DashboardOverviewSchema, DashboardProjectionsSchema, RequestLogsResponseSchema } from "@/features/dashboard/schemas";
+import { ConversationsResponseSchema, DashboardOverviewSchema, DashboardProjectionsSchema, DashboardStatusSchema, RequestLogsResponseSchema } from "@/features/dashboard/schemas";
 import { ReportsResponseSchema } from "@/features/reports/schemas";
 import { ModelSourceSchema, ModelSourcesResponseSchema } from "@/features/model-sources/schemas";
 import { ModelPriceDeleteSchema, ModelPriceSaveSchema, ModelPricesSchema } from "@/features/model-prices/model-price";
@@ -38,14 +38,17 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     directory = await mkdtemp(path.join(tmpdir(), "codex-lb-contract-"));
     await startRuntime();
     const initial = AuthSessionSchema.parse(await request("/api/dashboard-auth/session"));
-    expect(initial).toMatchObject({ authenticated: false, bootstrapRequired: true, bootstrapTokenRequired: false });
-    const session = AuthSessionSchema.parse(await request("/api/dashboard-auth/password/setup", "POST", { password: "synthetic-test-password" }));
+    // First-run setup always needs the one-time token the server writes to its data directory.
+    expect(initial).toMatchObject({ authenticated: false, bootstrapRequired: true, bootstrapTokenRequired: true, bootstrapTokenSource: "file" });
+    const bootstrapToken = (await readFile(path.join(directory, "dashboard-bootstrap-token"), "utf8")).trim();
+    const session = AuthSessionSchema.parse(await request("/api/dashboard-auth/password/setup", "POST", { password: "synthetic-test-password", bootstrapToken }));
     expect(session.authenticated).toBe(true);
     expect(session.bootstrapTokenRequired).toBe(false);
   });
 
   async function startRuntime() {
-    child = spawn(binary!, ["serve", "--listen", "127.0.0.1:0", "--data-dir", directory, "--shutdown-grace", "0s"], {
+    // Offline model sources are loopback stubs, which need the private-source opt-in.
+    child = spawn(binary!, ["serve", "--listen", "127.0.0.1:0", "--data-dir", directory, "--shutdown-grace", "0s", "--allow-private-model-sources"], {
       env: { PATH: process.env.PATH },
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -111,6 +114,7 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     DashboardSettingsSchema.parse(await request("/api/settings"));
     DashboardOverviewSchema.parse(await request("/api/dashboard/overview"));
     DashboardProjectionsSchema.parse(await request("/api/dashboard/projections"));
+    expect(DashboardStatusSchema.parse(await request("/api/dashboard/status")).lastSyncAt).toBeNull();
     RequestLogsResponseSchema.parse(await request("/api/request-logs"));
     ConversationsResponseSchema.parse(await request("/api/conversations"));
     ReportsResponseSchema.parse(await request("/api/reports"));

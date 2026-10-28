@@ -88,7 +88,7 @@ func TestCompactRoutesApplyCatalogBeforeDispatchWithoutReplacingOwner(t *testing
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, operations)
+	httpapi.RegisterCodexOperationRoutes(mux, store, operations, nil)
 	standalone := httptest.NewServer(mux)
 	defer standalone.Close()
 	if err := store.SaveContinuation(ctx, domain.Continuation{ResponseID: "resp_unsupported_owner", KeyID: key.ID, AccountID: "wire-account", ProviderID: "openai", Model: "gpt-6-sol", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}, domain.ContinuationBounds{MaxRecords: 10, MaxContextBytes: 1 << 20}); err != nil {

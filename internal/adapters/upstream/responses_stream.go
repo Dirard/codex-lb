@@ -8,10 +8,9 @@ import (
 	"strings"
 )
 
-func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req responsesWireRequest, catalog toolCatalog, emit func(Event) error) (Result, error) {
-	_ = catalog
+func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req responsesWireRequest, emit func(Event) error) (Result, error) {
 	if target.Capabilities.StreamTransport == TransportWebSocket {
-		return a.streamResponsesWebSocket(ctx, target, req, catalog, emit)
+		return a.streamResponsesWebSocket(ctx, target, req, emit)
 	}
 	body, err := passthroughBody(req, target.Capabilities)
 	if err != nil {
@@ -25,25 +24,17 @@ func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req re
 
 	var terminal Result
 	terminalSeen := false
-	eventCount := 0
 	err = readSSE(response.Body, func(eventName string, data []byte) error {
-		eventCount++
-		if eventCount > maxSSEEvents {
-			return &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream event count exceeds bounded limit"}
-		}
 		if len(bytes.TrimSpace(data)) == 0 {
 			return nil
 		}
-		var object map[string]json.RawMessage
-		if err := decodeExactJSON(data, &object); err != nil {
+		header, err := decodeEventHeader(data)
+		if err != nil {
 			return err
 		}
-		eventType := strings.TrimSpace(eventName)
-		if raw, ok := object["type"]; ok {
-			var typeName string
-			if json.Unmarshal(raw, &typeName) == nil {
-				eventType = typeName
-			}
+		eventType := header.Type
+		if eventType == "" {
+			eventType = strings.TrimSpace(eventName)
 		}
 		if eventType == "" {
 			return &Error{Code: ErrorCodeInvalidStream, Message: "upstream SSE event omitted its type"}
@@ -66,15 +57,19 @@ func (a *HTTPAdapter) streamResponses(ctx context.Context, target Target, req re
 			if err != nil {
 				return err
 			}
-			if err := emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)}); err != nil {
+			if err := emit(Event{Type: eventType, Data: data}); err != nil {
 				return err
 			}
 			return errResponsesTerminalReached
 		}
-		return emit(Event{Type: eventType, Data: append(json.RawMessage(nil), data...)})
+		// readSSE hands each event its own buffer; no further copy is needed.
+		return emit(Event{Type: eventType, Data: data})
 	})
 	if err != nil && !errors.Is(err, errResponsesTerminalReached) {
 		return terminal, wrapContext(ctx, err)
+	}
+	if terminalSeen {
+		FinishStreamBody(response)
 	}
 	if !terminalSeen {
 		return Result{}, &Error{Code: ErrorCodeStreamIncomplete, Message: "upstream stream disconnected before a terminal event"}

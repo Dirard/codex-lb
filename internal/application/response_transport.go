@@ -64,6 +64,14 @@ func autoTransportRequiresHTTP(wire json.RawMessage) bool {
 	if len(wire) > 14<<20 {
 		return true
 	}
+	if !mayContainMarker(wire, imageMarkers) && json.Valid(wire) {
+		return false
+	}
+	return transportRequiresHTTPDecoded(wire)
+}
+
+// transportRequiresHTTPDecoded is the exact image walk the prefilter must agree with.
+func transportRequiresHTTPDecoded(wire json.RawMessage) bool {
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(wire))
 	decoder.UseNumber()

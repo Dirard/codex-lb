@@ -65,6 +65,9 @@ func stubTokenSet(sub string) application.OAuthTokens {
 	}
 }
 
+// testBootstrapToken is the operator bootstrap token of test servers.
+const testBootstrapToken = "synthetic-bootstrap-token-0123456789abcdef"
+
 func newAccountsTestServer(t *testing.T, stub *httpStubOAuth) (*Server, *sqlite.Store, http.Handler) {
 	t.Helper()
 	dir := t.TempDir()
@@ -77,7 +80,7 @@ func newAccountsTestServer(t *testing.T, stub *httpStubOAuth) (*Server, *sqlite.
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := New(store, vault, Config{}, nil)
+	server := New(store, vault, Config{BootstrapToken: testBootstrapToken}, nil)
 	server.setAccountsService(application.NewAccountsService(store, store, vault, stub, time.Now))
 	auth := http.NewServeMux()
 	server.registerAuth(auth)
@@ -106,7 +109,7 @@ func TestAccountRoutesImportCRUDAndExportAuth(t *testing.T) {
 	stub := &httpStubOAuth{tokens: stubTokenSet("user-http")}
 	_, store, handler := newAccountsTestServer(t, stub)
 
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.Header.Set("Content-Type", "application/json")
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setupRec := httptest.NewRecorder()
@@ -205,8 +208,15 @@ func TestAccountRoutesImportCRUDAndExportAuth(t *testing.T) {
 		t.Fatalf("missing pause = %d", rec.Code)
 	}
 
+	// Exporting tokens requires re-entering the dashboard password.
+	for _, body := range []string{`{}`, `{"currentPassword":"wrong-password"}`} {
+		if rec := request(http.MethodPost, "/api/accounts/"+accountID+"/export/auth", "application/json", []byte(body)); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), "reauthentication_required") || strings.Contains(rec.Body.String(), "refreshToken") {
+			t.Fatalf("export without password = %d %s", rec.Code, rec.Body.String())
+		}
+	}
 	// Authorized export with no-store.
-	export := request(http.MethodPost, "/api/accounts/"+accountID+"/export/auth", "", nil)
+	export := request(http.MethodPost, "/api/accounts/"+accountID+"/export/auth", "application/json", []byte(`{"currentPassword":"synthetic-test-password"}`))
 	if export.Code != http.StatusOK {
 		t.Fatalf("export status = %d body %s", export.Code, export.Body.String())
 	}
@@ -253,7 +263,7 @@ func TestAccountRoutesImportCRUDAndExportAuth(t *testing.T) {
 func TestOAuthRoutesBrowserFlowWithManualCallback(t *testing.T) {
 	stub := &httpStubOAuth{tokens: stubTokenSet("user-oauth")}
 	_, _, handler := newAccountsTestServer(t, stub)
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.Header.Set("Content-Type", "application/json")
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setupRec := httptest.NewRecorder()

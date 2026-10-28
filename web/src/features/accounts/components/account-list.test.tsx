@@ -570,7 +570,7 @@ describe("AccountList", () => {
     expect(screen.getByText("reauth@example.com")).toBeInTheDocument();
   });
 
-  it("uses the backend duplicate indicator instead of recomputing by email", () => {
+  it("shows the account id only for rows marked as e-mail duplicates", () => {
     render(
       <AccountList
         accounts={[

@@ -73,7 +73,7 @@ func TestCompactStreamReleasesCreateButRetainsStreamCapacity(t *testing.T) {
 	ops.ConfigureAdmission(proxy)
 	ops.ConfigureAccountSelection(proxy)
 	mux := http.NewServeMux()
-	httpapi.RegisterCodexOperationRoutes(mux, store, ops)
+	httpapi.RegisterCodexOperationRoutes(mux, store, ops, nil)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	defer release.Do(func() { close(unblock) })
