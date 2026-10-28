@@ -2,7 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"strings"
+	"time"
+
+	"codex-lb/internal/domain"
 )
 
 // MarkInterruptedReservations preserves the budget of open reservations whose
@@ -54,4 +58,48 @@ func (s *Store) MarkInstanceReservationsInterrupted(ctx context.Context, instanc
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// ReleaseUnreconciledReservations releases, without charging, at most limit
+// reservations that have waited for reconciliation since before cutoff. Their
+// requests are over and nothing settles them: an interrupted worker or usage
+// the provider never reported. Release refunds a limit only within its window.
+func (s *Store) ReleaseUnreconciledReservations(ctx context.Context, cutoff time.Time, limit int) (int, error) {
+	if limit < 1 || limit > 1000 {
+		return 0, ErrInvalid
+	}
+	released := 0
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		released = 0
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM usage_reservations INDEXED BY idx_usage_reservations_open
+ WHERE status='reserved' AND needs_reconciliation=1 AND created_at<? ORDER BY id LIMIT ?`, millis(cutoff), limit)
+		if err != nil {
+			return err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			applied, err := settleUsageTx(ctx, tx, id, domain.UsageSettlement{Status: "released"})
+			if err != nil {
+				return err
+			}
+			if applied {
+				released++
+			}
+		}
+		return nil
+	})
+	return released, err
 }

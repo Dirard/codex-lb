@@ -17,12 +17,24 @@ const (
 	retentionBudget          = 20 * time.Second
 )
 
+// Reservations waiting for reconciliation are released without charge after
+// unreconciledGrace (owner decision): their requests are over and nobody
+// reconciles them, while they keep inflating pending request logs.
+const (
+	unreconciledGrace  = time.Hour
+	unreconciledBatch  = 500
+	unreconciledBudget = 5 * time.Second
+)
+
 // maintainReports runs one maintenance pass; RunPeriodic schedules it every
 // minute and reports failures. Retention follows its own budgeted cadence.
 func (r *runtime) maintainReports(ctx context.Context) error {
 	cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
 	_, err := r.data.store.CleanupDeletedAccounts(cleanup, 1000)
 	cancel()
+	if releaseErr := r.releaseUnreconciled(ctx); releaseErr != nil && err == nil {
+		err = releaseErr
+	}
 	if r.retention == nil {
 		r.retention = application.NewRetentionService(r.data.store, time.Now)
 		r.nextOptimize = time.Now().Add(time.Hour)
@@ -34,6 +46,32 @@ func (r *runtime) maintainReports(ctx context.Context) error {
 	}
 	r.maintainDatabaseFiles(ctx, &r.nextOptimize)
 	return err
+}
+
+// releaseUnreconciled releases batches of unreconciled reservations within
+// its budget; a backlog continues on the next pass.
+func (r *runtime) releaseUnreconciled(ctx context.Context) error {
+	deadline := time.Now().Add(unreconciledBudget)
+	total := 0
+	for time.Now().Before(deadline) {
+		batch, cancel := context.WithDeadline(ctx, deadline)
+		released, err := r.data.store.ReleaseUnreconciledReservations(batch, time.Now().Add(-unreconciledGrace), unreconciledBatch)
+		cancel()
+		total += released
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
+			return err
+		}
+		if released < unreconciledBatch {
+			break
+		}
+	}
+	if total > 0 {
+		r.logger.Info("released unreconciled usage reservations without charge", "count", total)
+	}
+	return nil
 }
 
 // maintainReportRetention runs one budgeted retention cycle and returns the
