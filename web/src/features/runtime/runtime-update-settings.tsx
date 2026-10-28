@@ -170,7 +170,7 @@ export function RuntimeUpdateSettings() {
         title={confirmation?.kind === "rollback"
           ? t("settings.runtime.confirmRollback", { version: confirmation.version })
           : t("settings.runtime.confirmUpdate", { version: confirmation?.version ?? "" })}
-        description={t("settings.runtime.restartWarning")}
+        description={status?.seamless ? t("settings.runtime.seamlessNote") : t("settings.runtime.restartWarning")}
         confirmLabel={confirmation?.kind === "rollback" ? t("settings.runtime.rollback") : t("settings.runtime.update")}
         confirmDisabled={disabled || (passwordRequired && !password)}
         onConfirm={() => {

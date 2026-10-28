@@ -58,6 +58,23 @@ describe("RuntimeUpdateSettings", () => {
     expect(screen.getByRole("button", { name: "Roll back to go-v0.9.0" })).toBeDisabled();
   });
 
+  it("explains a seamless switch and labels its phases", async () => {
+    const user = userEvent.setup();
+    let phase = "idle";
+    server.use(http.get("/api/runtime/updates", () => HttpResponse.json({ ...updateStatus, seamless: true, phase })));
+    renderWithProviders(<RuntimeUpdateSettings />);
+
+    await user.click(await screen.findByRole("button", { name: "Update to go-v1.1.0" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText(/new requests go to the new one, without a restart/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/restart briefly/)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    phase = "switching";
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText("Status: Moving new requests to the new version")).toBeInTheDocument();
+  });
+
   it("requires the dashboard password before applying an update", async () => {
     const user = userEvent.setup();
     const posted: unknown[] = [];
