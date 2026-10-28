@@ -157,7 +157,15 @@ func checkSnapshotSchema(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, "SELECT application_id,user_version FROM pragma_application_id(),pragma_user_version()").Scan(&appID, &version); err != nil {
 		return err
 	}
-	if appID != applicationID || version < 1 || version > len(migrations) {
+	compatible := appID == applicationID && version >= 1 && version <= len(migrations)
+	if appID == applicationID && version > len(migrations) {
+		// A newer schema this code may operate on is also one it may back up.
+		var err error
+		if compatible, err = newerSchemaCompatible(ctx, db); err != nil {
+			return err
+		}
+	}
+	if !compatible {
 		return fmt.Errorf("database is not a supported codex-lb schema (version=%d): %w", version, ErrInvalid)
 	}
 	return nil

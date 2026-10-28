@@ -70,8 +70,8 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 			return err
 		}
 		inserted, err := tx.ExecContext(ctx, `INSERT INTO usage_reservations
-	 (id,api_key_id,account_id,account_generation,route_revision,model,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'reserved',?,?)`,
-			req.ID, req.APIKeyID, req.AccountID, req.AccountGeneration, req.RouteRevision, req.Model, millis(req.Now), millis(req.Now))
+	 (id,api_key_id,account_id,account_generation,route_revision,model,status,created_at,updated_at,owner_instance) VALUES(?,?,?,?,?,?,'reserved',?,?,?)`,
+			req.ID, req.APIKeyID, req.AccountID, req.AccountGeneration, req.RouteRevision, req.Model, millis(req.Now), millis(req.Now), s.instanceID)
 		if err != nil {
 			return err
 		}

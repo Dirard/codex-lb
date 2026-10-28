@@ -2,13 +2,14 @@ package sqlite
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +33,10 @@ const defaultReadConnections = 8
 // Options sizes the store for the host it runs on; zero values use defaults.
 type Options struct {
 	ReadConnections int
+	// InstanceID identifies this process among the workers of one installation
+	// that share the database; new reservations record it. Empty generates a
+	// random id at open.
+	InstanceID string
 }
 
 // analyticsPoolSize bounds dashboard reports and request-log listing on their
@@ -42,7 +47,13 @@ const walSizeLimit = 64 << 20
 
 var memoryDBSequence atomic.Int64
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34, schemaV35, schemaV36, schemaV37, schemaV38, schemaV39, schemaV40}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34, schemaV35, schemaV36, schemaV37, schemaV38, schemaV39, schemaV40, schemaV41}
+
+// additiveMigrations are the migrations (by resulting version) that code of
+// the previous schema keeps working on: they only add defaulted columns and
+// tables older code never needs. Migrations 1-40 predate the classification
+// and count as non-additive; see SchemaFloor.
+var additiveMigrations = map[int]bool{41: true}
 
 type Store struct {
 	db                  *sql.DB
@@ -53,10 +64,7 @@ type Store struct {
 	writer              *batchWriter
 	accountAdmissionEnv accountAdmissionEnvironment
 	affinityStartupTTL  int
-	// background owns store-internal recovery work (interrupted repricing);
-	// Close cancels and joins it before the writer stops.
-	background     sync.WaitGroup
-	stopBackground context.CancelFunc
+	instanceID          string
 }
 
 // Open accepts a new Go database or one previously created by this adapter.
@@ -71,6 +79,14 @@ func OpenWithOptions(path string, options Options) (*Store, error) {
 	}
 	if path == "" {
 		return nil, fmt.Errorf("sqlite path: %w", ErrInvalid)
+	}
+	instanceID := options.InstanceID
+	if instanceID == "" {
+		var raw [16]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return nil, err
+		}
+		instanceID = hex.EncodeToString(raw[:])
 	}
 	accountEnv, err := loadAccountAdmissionEnvironment()
 	if err != nil {
@@ -105,7 +121,7 @@ func OpenWithOptions(path string, options Options) (*Store, error) {
 	// WAL readers use a separate pool; every durable mutation still uses one writer.
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	store := &Store{db: db, filePath: filePath, accountAdmissionEnv: accountEnv, affinityStartupTTL: affinityTTL}
+	store := &Store{db: db, filePath: filePath, accountAdmissionEnv: accountEnv, affinityStartupTTL: affinityTTL, instanceID: instanceID}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -167,20 +183,16 @@ func OpenWithOptions(path string, options Options) (*Store, error) {
 	store.maintenance.SetMaxOpenConns(1)
 	store.maintenance.SetConnMaxLifetime(0)
 	store.writer = newBatchWriter(db)
-	background, stop := context.WithCancel(context.Background())
-	store.stopBackground = stop
-	if err := store.resumeModelReprices(background); err != nil {
-		_ = store.Close()
-		return nil, err
-	}
 	return store, nil
 }
 
+// InstanceID is the id this store records as the owner of new reservations.
+func (s *Store) InstanceID() string { return s.instanceID }
+
 // Close finishes accepted writes, refreshes planner statistics and closes every
-// connection; an optimize failure does not prevent closing.
+// connection; an optimize failure does not prevent closing. Callers join their
+// own store work (such as ResumeModelReprices) first.
 func (s *Store) Close() error {
-	s.stopBackground()
-	s.background.Wait()
 	s.writer.close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_, _ = s.db.ExecContext(ctx, "PRAGMA optimize")
@@ -248,6 +260,11 @@ func sqliteDSN(path string, readonly bool) (string, error) {
 	if readonly {
 		values.Set("_query_only", "1")
 	} else {
+		// Another worker of the installation may write the same file during an
+		// update. A deferred read-then-write transaction would then fail with
+		// SQLITE_BUSY_SNAPSHOT; IMMEDIATE takes the write lock at BEGIN and waits
+		// for it within the busy timeout instead.
+		values.Set("_txlock", "immediate")
 		// A checkpoint that resets the WAL truncates it to this size, so one
 		// large transaction or a long reader cannot grow the file forever.
 		values.Add("_pragma", fmt.Sprintf("journal_size_limit(%d)", walSizeLimit))
@@ -271,6 +288,17 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount); err != nil {
 		return err
+	}
+	if version > len(migrations) && appID == applicationID {
+		// A newer release migrated this database; operate on it unchanged when
+		// every later migration is one this code keeps working on.
+		compatible, err := newerSchemaCompatible(ctx, s.db)
+		if err != nil {
+			return err
+		}
+		if compatible {
+			return nil
+		}
 	}
 	if version < 0 || (version == 0 && tableCount != 0) || (version != 0 && appID != applicationID) || version > len(migrations) {
 		return fmt.Errorf("refusing to modify foreign or unsupported SQLite schema (version=%d, application_id=%d): %w", version, appID, ErrInvalid)
@@ -303,6 +331,11 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	// Older code reads the floor to decide whether it may open the result.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_compatibility(id,reader_floor) VALUES(1,?)
+ ON CONFLICT(id) DO UPDATE SET reader_floor=excluded.reader_floor`, SchemaFloor()); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id=%d", applicationID)); err != nil {
 		return err
 	}
@@ -310,6 +343,21 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// newerSchemaCompatible reports whether a database of this application at a
+// newer schema records a floor this code satisfies. It only reads.
+func newerSchemaCompatible(ctx context.Context, db *sql.DB) (bool, error) {
+	var tables int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_compatibility'`).Scan(&tables); err != nil || tables == 0 {
+		return false, err
+	}
+	var floor int
+	err := db.QueryRowContext(ctx, `SELECT reader_floor FROM schema_compatibility WHERE id=1`).Scan(&floor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && floor <= len(migrations), err
 }
 
 func transact(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {

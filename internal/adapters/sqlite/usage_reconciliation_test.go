@@ -20,7 +20,7 @@ func TestInterruptedReservationKeepsBudgetAndSettlesExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []int64{1, 0} {
-		if count, err := store.MarkInterruptedReservations(ctx); err != nil || count != want {
+		if count, err := store.MarkInterruptedReservations(ctx, nil); err != nil || count != want {
 			t.Fatalf("mark interrupted: %d %v", count, err)
 		}
 	}

@@ -77,7 +77,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		data.close()
 		return nil, errors.New("cannot initialize local proxy accounting principal")
 	}
-	interrupted, err := data.store.MarkInterruptedReservations(ctx)
+	interrupted, err := data.store.MarkInterruptedReservations(ctx, nil)
 	if err != nil {
 		data.close()
 		return nil, errors.New("cannot preserve interrupted usage reservations")
@@ -253,7 +253,7 @@ func (r *runtime) serve(ctx context.Context) error {
 }
 
 func (r *runtime) serveListener(ctx context.Context, listener net.Listener) error {
-	r.background.Add(5)
+	r.background.Add(6)
 	go func() {
 		defer r.background.Done()
 		application.RunPeriodic(r.backgroundCtx, "maintenance", application.BackgroundSchedule{Report: r.reporter.report}, time.Minute, nil, r.maintainReports)
@@ -262,6 +262,7 @@ func (r *runtime) serveListener(ctx context.Context, listener net.Listener) erro
 	go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
 	go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
 	go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()
+	go func() { defer r.background.Done(); _ = r.data.store.ResumeModelReprices(r.backgroundCtx) }()
 	served := make(chan error, 1)
 	go func() {
 		if r.onServing != nil {

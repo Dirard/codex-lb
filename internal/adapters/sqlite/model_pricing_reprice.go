@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -172,15 +173,25 @@ func (s *Store) readSnapshot(ctx context.Context, fn func(*sql.Tx) error) error 
 	return fn(tx)
 }
 
-// resumeModelReprices finishes repricing interrupted by a restart. It runs in
-// the background owned by the store and stops with it.
-func (s *Store) resumeModelReprices(ctx context.Context) error {
+// ResumeModelReprices finishes repricing interrupted by a restart and returns
+// when every pending change is done, one fails or ctx is cancelled; unfinished
+// work stays pending for the next call. It belongs to the process that runs
+// background work. Should another store on the same database resume the same
+// change concurrently, each chunk still reads the stored costs and applies
+// their deltas inside one write transaction, which IMMEDIATE serializes, so a
+// chunk already repriced yields no further delta.
+func (s *Store) ResumeModelReprices(ctx context.Context) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("model reprice resumption failed")
+		}
+	}()
 	type pending struct {
 		model       string
 		requestedAt int64
 	}
 	var work []pending
-	err := s.readSnapshot(ctx, func(tx *sql.Tx) error {
+	err = s.readSnapshot(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT model,requested_at FROM model_reprice_pending ORDER BY requested_at,model`)
 		if err != nil {
 			return err
@@ -195,20 +206,15 @@ func (s *Store) resumeModelReprices(ctx context.Context) error {
 		}
 		return rows.Err()
 	})
-	if err != nil || len(work) == 0 {
+	if err != nil {
 		return err
 	}
-	s.background.Add(1)
-	go func() {
-		defer s.background.Done()
-		defer func() { _ = recover() }() // A failed resume stays pending for the next start.
-		for _, item := range work {
-			var summary application.ModelRepriceSummary
-			if s.repriceModelHistory(ctx, item.model, item.requestedAt, &summary) != nil {
-				return
-			}
+	for _, item := range work {
+		var summary application.ModelRepriceSummary
+		if err := s.repriceModelHistory(ctx, item.model, item.requestedAt, &summary); err != nil {
+			return err
 		}
-	}()
+	}
 	return nil
 }
 
