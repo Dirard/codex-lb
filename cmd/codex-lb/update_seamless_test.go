@@ -264,7 +264,16 @@ func TestBootstrapDelegatesToNewerInstalledLauncher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed, err := store.Install(ctx, domain.RuntimeBinary{Path: newer, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}, newerDescriptor)
+	stage, err := store.Stage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(stage, "codex-lb")
+	if err := os.WriteFile(staged, content, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.Install(ctx, domain.RuntimeBinary{Path: staged, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}, newerDescriptor)
+	store.DiscardStage(stage)
 	if err != nil {
 		t.Fatal(err)
 	}

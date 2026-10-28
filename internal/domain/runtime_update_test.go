@@ -6,7 +6,9 @@ func TestRuntimeDescriptorSwitchRules(t *testing.T) {
 	t.Parallel()
 	base := RuntimeDescriptor{Version: "go-v1.2.0", GOOS: "linux", GOARCH: "amd64", SchemaVersion: 41, UpdateProtocol: 1, Handoff: 1, SchemaFloor: 40}
 	with := func(change func(*RuntimeDescriptor)) RuntimeDescriptor { d := base; change(&d); return d }
-	legacy := with(func(d *RuntimeDescriptor) { d.Version, d.SchemaVersion, d.Handoff, d.SchemaFloor = "go-v1.1.1", 40, 0, 0 })
+	legacy := with(func(d *RuntimeDescriptor) {
+		d.Version, d.SchemaVersion, d.Handoff, d.SchemaFloor = "go-v1.1.1", 40, 0, 0
+	})
 	additive := with(func(d *RuntimeDescriptor) { d.Version, d.SchemaVersion = "go-v1.3.0", 42 })
 	breaking := with(func(d *RuntimeDescriptor) { d.Version, d.SchemaVersion, d.SchemaFloor = "go-v1.4.0", 43, 43 })
 	cases := []struct {

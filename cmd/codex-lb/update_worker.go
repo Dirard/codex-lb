@@ -244,7 +244,9 @@ func (r *runtime) registerHandoffControl(mux *http.ServeMux, started <-chan stru
 				return
 			}
 		}
-		interrupted, err := r.data.store.MarkInterruptedReservations(request.Context(), exit.Live)
+		// This worker's own reservations are live whatever the launcher sent.
+		live := append(exit.Live, r.data.store.InstanceID())
+		interrupted, err := r.data.store.MarkInterruptedReservations(request.Context(), live)
 		if err != nil {
 			http.Error(w, "Cannot mark interrupted usage", http.StatusServiceUnavailable)
 			return

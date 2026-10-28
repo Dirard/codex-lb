@@ -126,6 +126,14 @@ func (h *updateHost) own() error {
 	if h.listener != nil {
 		return nil
 	}
+	// The lock creates the database file, so the data directory must already
+	// be private, exactly as a worker would require it.
+	if err := os.MkdirAll(h.dataDir, 0o700); err != nil {
+		return errors.New("cannot create data directory")
+	}
+	if info, err := os.Lstat(h.dataDir); err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("data directory must be a private directory (mode 0700), not a symlink")
+	}
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", h.listen)
 	if err != nil {
 		return listenError("managed listener", h.listen, err)
