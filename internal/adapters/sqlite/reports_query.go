@@ -15,12 +15,7 @@ import (
 func reportFacts(filter domain.ReportFilter, start, end time.Time) (string, []any) {
 	hWhere, hArgs := hourlyReportWhere(filter, start, end)
 	rWhere, rArgs := rawReportWhere(filter, start, end)
-	query := `WITH facts AS (
- SELECT h.bucket_epoch*1000 AS at_ms,h.account_id,h.api_key_id,h.model,
- h.request_count,h.input_tokens,h.output_or_reasoning_tokens AS output_tokens,
- h.reasoning_tokens,h.reasoning_known_count,
- h.cached_input_tokens_clamped AS cached_input_tokens,h.cost_usd,0 AS cost_micro,
- h.error_count,h.cancelled_count FROM legacy_hourly_usage h WHERE ` + hWhere + `
+	query := `WITH facts AS (` + legacyReportFactsArm + hWhere + `
  UNION ALL
  SELECT e.requested_at,
  CASE WHEN e.account_id IS NULL THEN char(31) WHEN substr(e.account_id,1,1)=char(31)
@@ -34,6 +29,24 @@ func reportFacts(filter domain.ReportFilter, start, end time.Time) (string, []an
  FROM usage_events e WHERE ` + rWhere + `)
 `
 	return query, append(hArgs, rArgs...)
+}
+
+// legacyReportFactsArm is the folded-hours arm of the facts relation, closed
+// by a legacy_hourly_usage WHERE clause.
+const legacyReportFactsArm = `
+ SELECT h.bucket_epoch*1000 AS at_ms,h.account_id,h.api_key_id,h.model,
+ h.request_count,h.input_tokens,h.output_or_reasoning_tokens AS output_tokens,
+ h.reasoning_tokens,h.reasoning_known_count,
+ h.cached_input_tokens_clamped AS cached_input_tokens,h.cost_usd,0 AS cost_micro,
+ h.error_count,h.cancelled_count FROM legacy_hourly_usage h WHERE `
+
+// legacyReportFacts is the facts relation of folded hours only. Rollup reads
+// run the raw path's outer queries over it, so SQLite sums folded REAL costs
+// in the same order and they combine with rollup microdollars bit for bit.
+func legacyReportFacts(filter domain.ReportFilter, start, end time.Time) (string, []any) {
+	hWhere, hArgs := hourlyReportWhere(filter, start, end)
+	return `WITH facts AS (` + legacyReportFactsArm + hWhere + `)
+`, hArgs
 }
 
 func hourlyReportWhere(filter domain.ReportFilter, start, end time.Time) (string, []any) {
@@ -81,27 +94,12 @@ func rollupConversationSQL(alias string) string {
 }
 
 func rawReportWhere(filter domain.ReportFilter, start, end time.Time) (string, []any) {
-	parts := []string{"e.requested_at>=?", "e.requested_at<?", rollupInReportsSQL("e")}
-	args := []any{millis(start), millis(end)}
-	if len(filter.AccountIDs) > 0 {
-		parts, args = appendInCondition(parts, args, "e.account_id", filter.AccountIDs)
-	}
-	if len(filter.APIKeyIDs) > 0 {
-		parts, args = appendInCondition(parts, args, "e.api_key_id", filter.APIKeyIDs)
-	}
-	if filter.Model != "" {
-		parts = append(parts, "e.model=?")
-		args = append(args, filter.Model)
-	}
-	if filter.UserAgentGroup != "" {
-		if filter.UserAgentGroup == "Missing User-Agent" {
-			parts = append(parts, "e.useragent_group IS NULL")
-		} else {
-			parts = append(parts, "e.useragent_group=?")
-			args = append(args, filter.UserAgentGroup)
-		}
-	}
-	return strings.Join(parts, " AND "), args
+	where, args := reportEventWhere(reportDims(filter))
+	return "e.requested_at>=? AND e.requested_at<? AND " + where, append([]any{millis(start), millis(end)}, args...)
+}
+
+func reportDims(filter domain.ReportFilter) reportFilterDims {
+	return reportFilterDims{accounts: filter.AccountIDs, keys: filter.APIKeyIDs, model: filter.Model, userAgent: filter.UserAgentGroup}
 }
 
 func appendInCondition(parts []string, args []any, column string, values []string) ([]string, []any) {
