@@ -117,12 +117,13 @@ func (r *runtime) startMetrics() error {
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	r.metricsServer = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
 	r.metricsMu.Lock()
+	r.metricsServer = server
 	r.metricsAddress = listener.Addr().String()
 	r.metricsMu.Unlock()
 	go func() {
-		if err := r.metricsServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			r.logger.Warn("metrics listener stopped", "reason", err.Error())
 		}
 	}()
@@ -130,13 +131,18 @@ func (r *runtime) startMetrics() error {
 	return nil
 }
 
+// stopMetrics may race startMetrics: background work can start from the
+// private control listener while the worker begins to drain.
 func (r *runtime) stopMetrics() {
-	if r.metricsServer == nil {
+	r.metricsMu.Lock()
+	server := r.metricsServer
+	r.metricsMu.Unlock()
+	if server == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = r.metricsServer.Shutdown(ctx)
+	_ = server.Shutdown(ctx)
 }
 
 func isLoopbackHost(host string) bool {

@@ -11,23 +11,27 @@ import (
 	"strings"
 )
 
-// Backup holds the existing database lock after the old worker has stopped.
-// VACUUM INTO includes a remaining WAL without copying a live database file.
+// Backup snapshots the database under the installation's lock: online through
+// a read-only connection while the host lends the lock to its workers, or
+// after the old worker has stopped. VACUUM INTO includes a remaining WAL
+// without copying a live database file.
 func (h *updateHost) Backup(ctx context.Context) error {
-	if h.current() != nil {
-		return errors.New("cannot back up an active runtime")
-	}
 	dbPath := filepath.Join(h.dataDir, "codex-lb.sqlite3")
-	if info, err := os.Lstat(dbPath); err != nil || !info.Mode().IsRegular() {
+	if info, err := os.Lstat(dbPath); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return errors.New("runtime database is missing or unsafe")
 	}
-	lock, created, err := lockDatabase(dbPath)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if created {
-		return errors.New("runtime database is missing")
+	if !h.ownsLock() {
+		if h.current() != nil {
+			return errors.New("cannot back up an active runtime")
+		}
+		lock, created, err := lockDatabase(dbPath)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if created {
+			return errors.New("runtime database is missing")
+		}
 	}
 	root := filepath.Join(h.dataDir, "updates")
 	backup, err := os.MkdirTemp(root, "backup-")
@@ -127,7 +131,7 @@ func copyPrivateKey(source, target string) error {
 // database and then failed leaves its WAL behind; it is removed first so it
 // can never be replayed onto the restored file.
 func (h *updateHost) RestoreBackup(ctx context.Context) error {
-	if h.current() != nil {
+	if h.anyWorker() {
 		return errors.New("cannot restore beneath an active runtime")
 	}
 	root := filepath.Join(h.dataDir, "updates")
@@ -141,13 +145,15 @@ func (h *updateHost) RestoreBackup(ctx context.Context) error {
 		return errors.New("pre-update backup is missing or unsafe")
 	}
 	dbPath := filepath.Join(h.dataDir, "codex-lb.sqlite3")
-	lock, created, err := lockDatabase(dbPath)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if created {
-		return errors.New("runtime database is missing")
+	if !h.ownsLock() {
+		lock, created, err := lockDatabase(dbPath)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if created {
+			return errors.New("runtime database is missing")
+		}
 	}
 	staged, err := os.CreateTemp(h.dataDir, ".restore-")
 	if err != nil {
@@ -175,5 +181,33 @@ func (h *updateHost) RestoreBackup(ctx context.Context) error {
 	if err := os.Rename(staged.Name(), dbPath); err != nil {
 		return errors.New("cannot restore the pre-update backup")
 	}
-	return syncUpdatePath(h.dataDir)
+	if err := syncUpdatePath(h.dataDir); err != nil {
+		return err
+	}
+	return h.relock(dbPath)
+}
+
+func (h *updateHost) ownsLock() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.lock != nil }
+
+func (h *updateHost) anyWorker() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.child != nil || h.candidate != nil || len(h.retiring) != 0
+}
+
+// relock moves an owned lock to the restored inode: the old one was replaced,
+// and workers verify that their inherited lock is the database file's.
+func (h *updateHost) relock(dbPath string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lock == nil {
+		return nil
+	}
+	lock, _, err := lockDatabase(dbPath)
+	if err != nil {
+		return err
+	}
+	h.lock.Close()
+	h.lock = lock
+	return nil
 }

@@ -18,10 +18,12 @@ type persistentData struct {
 }
 
 func openData(ctx context.Context, directory string) (*persistentData, error) {
-	return openDataWithOptions(ctx, directory, sqlite.Options{})
+	return openDataWithOptions(ctx, directory, sqlite.Options{}, nil)
 }
 
-func openDataWithOptions(ctx context.Context, directory string, options sqlite.Options) (*persistentData, error) {
+// openDataWithOptions locks the database itself unless a launcher lent its
+// verified lock (inherited); then an empty database file is a new store.
+func openDataWithOptions(ctx context.Context, directory string, options sqlite.Options, inherited *os.File) (*persistentData, error) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, errors.New("cannot create data directory")
 	}
@@ -30,9 +32,16 @@ func openDataWithOptions(ctx context.Context, directory string, options sqlite.O
 		return nil, errors.New("data directory must be a private directory (mode 0700), not a symlink")
 	}
 	path := filepath.Join(directory, "codex-lb.sqlite3")
-	file, newStore, err := lockDatabase(path)
-	if err != nil {
-		return nil, err
+	file, newStore := inherited, false
+	if file == nil {
+		file, newStore, err = lockDatabase(path)
+		if err != nil {
+			return nil, err
+		}
+	} else if info, statErr := file.Stat(); statErr != nil {
+		return nil, errors.New("cannot open private database")
+	} else {
+		newStore = info.Size() == 0
 	}
 	ok := false
 	defer func() {

@@ -190,6 +190,9 @@ A launcher whose selected version is newer than itself and handoff-capable SHALL
   R27:
 The delegated launcher SHALL confirm the delegation after its first worker is active. A launcher that finds an unconfirmed delegation for the selected digest SHALL NOT delegate again, SHALL record that the delegation failed and SHALL serve with its own launcher logic.
 
+  R30:
+When a replaced bootstrap is adopted and its schema is newer than the retained version's, the launcher SHALL back up an existing database before the adopted worker migrates it, so the one manual installation that enables this slice is as recoverable as an update.
+
 ### 7. Administrator interface
 
 status --seamless capability--> confirmation text; phases --preparing, switching--> progress labels
@@ -218,7 +221,7 @@ Not part of this slice. Recorded so the handoff protocol keeps workers independe
 6. [ ] Launcher-owned listener and lock, inherited descriptors, lifeline, instance ids, legacy-worker release/re-acquire (R5–R8).
 7. [ ] Worker handoff endpoints (`/background`, `/retire`, `/load`, `/peer-load`, `/peer-exited`), deferred background, retirement drain, memory limit (R13, R15, R18–R20).
 8. [ ] Application seamless flow with failure paths; host multi-worker bookkeeping and relay (R9–R12, R16, R25).
-9. [ ] Boot delegation with crash guard (R26, R27).
+9. [ ] Boot delegation with crash guard; backup before an adopted bootstrap migrates (R26, R27, R30).
 10. [ ] Status flag, phases, confirmation text, locales and tests (R28).
 11. [ ] Integration test with real binaries: switch under continuous load and a long stream, no refused connection, stream completes on the old worker, background on one worker; classic fallback and delegation tests.
 12. [ ] go vet, golangci-lint, go test, go test -race, web checks; record results.

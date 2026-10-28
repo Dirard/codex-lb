@@ -39,6 +39,7 @@ type config struct {
 	publicOrigin                              string
 	allowPrivateModelSources                  bool
 	updater                                   application.RuntimeUpdater
+	handoff                                   *workerHandoff // lent by the launcher, never a flag
 }
 
 func parseConfig(command string, args []string, output io.Writer) (config, error) {

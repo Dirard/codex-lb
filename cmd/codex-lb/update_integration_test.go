@@ -159,7 +159,8 @@ func startManagedIntegrationRuntime(t *testing.T, ctx context.Context, dataDir, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.host = &updateHost{args: []string{"--data-dir", dataDir, "--listen", address, "--dashboard-auth-mode", "disabled", "--shutdown-grace", "1s"}, dataDir: dataDir, privateDir: m.dir, parentSocket: parentSocket, token: token, stdout: io.Discard, stderr: io.Discard, fatal: make(chan struct{}, 1)}
+	m.host = &updateHost{args: []string{"--data-dir", dataDir, "--listen", address, "--dashboard-auth-mode", "disabled", "--shutdown-grace", "1s"}, dataDir: dataDir, privateDir: m.dir, parentSocket: parentSocket, token: token, stdout: io.Discard, stderr: io.Discard, fatal: make(chan struct{}, 1),
+		listen: address}
 	m.service = application.NewRuntimeUpdates(ctx, source, m.store, m.host, state, application.RuntimeUpdateConfig{WaitTimeout: 5 * time.Second})
 	m.server = &http.Server{Handler: updatecontrol.Protect(token, updatecontrol.Handler(m.service))}
 	go func() { _ = m.server.Serve(m.control) }()
@@ -340,7 +341,7 @@ func TestManagedBinaryUpdateRollbackAndFailedCandidate(t *testing.T) {
 	source.set("go-v9.0.1", newBinary)
 	first := startManagedIntegrationRuntime(t, ctx, dataDir, address, oldBinary, source)
 	assertPrivateControlDenied(t, first.host.parentSocket, "/status")
-	assertPrivateControlDenied(t, filepath.Join(first.host.privateDir, "worker.sock"), "/ready")
+	assertPrivateControlDenied(t, first.host.current().socket, "/ready")
 	if err := first.host.current().control.Call(ctx, http.MethodPost, "/prepare-stop", nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +395,7 @@ func TestManagedBinaryUpdateRollbackAndFailedCandidate(t *testing.T) {
 	waitManagedLatest(t, second.service, "go-v9.0.2")
 	managedAction(t, address, "/api/runtime/updates/apply", "go-v9.0.2")
 	status := waitManagedPhase(t, second.service, "failed", "go-v9.0.0")
-	if !strings.Contains(status.LastError, "previous version restored") {
+	if !strings.Contains(status.LastError, "current version keeps serving") {
 		t.Fatalf("failed startup was not recovered: %s", status.LastError)
 	}
 	waitManagedHTTPVersion(t, address, "go-v9.0.0")

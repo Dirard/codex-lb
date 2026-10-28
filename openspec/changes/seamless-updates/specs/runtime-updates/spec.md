@@ -71,6 +71,19 @@ An update to a version with a newer database schema SHALL take the consistent pr
 - **WHEN** a handoff-capable version on schema 41 is updated to one on schema 42 whose floor is 40 and the administrator rolls back
 - **THEN** the previous version runs on the schema-42 database without a restore and the new data remains
 
+### Requirement: A replaced bootstrap executable takes effect
+
+When the managed runtime starts from a bootstrap executable whose digest differs from the recorded bootstrap digest, it SHALL adopt that executable as the current version whether its version is newer or older, retaining the previously current version as the rollback candidate, and SHALL log the bootstrap and selected versions. When the adopted version has a newer schema than the retained one, the launcher SHALL take the pre-update backup of an existing database before the adopted worker opens it. Restarting with the recorded bootstrap MUST keep the current selection, including an administrator's rollback. State without a recorded bootstrap digest SHALL keep adopting only newer bootstraps. Adoption MUST NOT restore data; an older binary still refuses a database it cannot operate on.
+
+#### Scenario: Emergency downgrade by binary replacement
+- **WHEN** an operator replaces go-v1.0.4 with the go-v1.0.2 binary and restarts the service
+- **THEN** go-v1.0.2 runs, go-v1.0.4 is retained as the previous version, and the launcher logs the selection
+- **AND** restarting again with the same go-v1.0.2 binary keeps that selection
+
+#### Scenario: Manual upgrade across a schema change
+- **WHEN** an operator replaces the go-v1.0.10 bootstrap (schema 33) with go-v1.2.0 and restarts the service
+- **THEN** the database is backed up to `updates/` before go-v1.2.0 migrates it, and go-v1.0.10 is retained with the note that returning to it requires that backup
+
 ## ADDED Requirements
 
 ### Requirement: A seamless switch shares the listening socket

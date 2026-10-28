@@ -462,3 +462,20 @@ func TestStoreInitializeAdoptsAManuallyReplacedOlderBootstrap(t *testing.T) {
 		t.Fatalf("restart with the same bootstrap changed the selection: %+v %v", again, err)
 	}
 }
+
+func TestLauncherDelegationRoundTrip(t *testing.T) {
+	store, _ := newTestStore(t)
+	if delegation, err := store.LoadDelegation(); err != nil || delegation != (LauncherDelegation{}) {
+		t.Fatalf("missing delegation = %+v, %v", delegation, err)
+	}
+	want := LauncherDelegation{SHA256: strings.Repeat("c", 64)}
+	if err := store.SaveDelegation(want); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.LoadDelegation(); err != nil || got != want {
+		t.Fatalf("delegation = %+v, %v", got, err)
+	}
+	if err := store.SaveDelegation(LauncherDelegation{SHA256: "../x"}); err == nil {
+		t.Fatal("invalid digest accepted")
+	}
+}
