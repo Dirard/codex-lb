@@ -10,6 +10,8 @@ import (
 
 // reportFacts combines folded hourly measures with the unfurled event tail.
 // Imported raw rows below their historical fold watermark are excluded once.
+// Folded hours carry their REAL cost in cost_usd and raw events integer
+// microdollars in cost_micro; reportCostUSD combines both sums.
 func reportFacts(filter domain.ReportFilter, start, end time.Time) (string, []any) {
 	hWhere, hArgs := hourlyReportWhere(filter, start, end)
 	rWhere, rArgs := rawReportWhere(filter, start, end)
@@ -17,7 +19,7 @@ func reportFacts(filter domain.ReportFilter, start, end time.Time) (string, []an
  SELECT h.bucket_epoch*1000 AS at_ms,h.account_id,h.api_key_id,h.model,
  h.request_count,h.input_tokens,h.output_or_reasoning_tokens AS output_tokens,
  h.reasoning_tokens,h.reasoning_known_count,
- h.cached_input_tokens_clamped AS cached_input_tokens,h.cost_usd,
+ h.cached_input_tokens_clamped AS cached_input_tokens,h.cost_usd,0 AS cost_micro,
  h.error_count,h.cancelled_count FROM legacy_hourly_usage h WHERE ` + hWhere + `
  UNION ALL
  SELECT e.requested_at,
@@ -26,7 +28,7 @@ func reportFacts(filter domain.ReportFilter, start, end time.Time) (string, []an
  CASE WHEN e.api_key_id IS NULL THEN char(31) WHEN substr(e.api_key_id,1,1)=char(31)
  THEN char(31)||e.api_key_id ELSE e.api_key_id END,
  e.model,1,e.input_tokens,e.output_tokens,e.reasoning_tokens,e.reasoning_tokens_known,
- max(0,min(e.cached_input_tokens,e.input_tokens)),e.cost_microdollars/1000000.0,
+ max(0,min(e.cached_input_tokens,e.input_tokens)),NULL,e.cost_microdollars,
  CASE WHEN e.status NOT IN ('success','completed','cancelled') THEN 1 ELSE 0 END,
  CASE WHEN e.status='cancelled' THEN 1 ELSE 0 END
  FROM usage_events e WHERE ` + rWhere + `)
@@ -61,11 +63,25 @@ func hourlyReportWhere(filter domain.ReportFilter, start, end time.Time) (string
 	return strings.Join(parts, " AND "), args
 }
 
+// rollupInReportsSQL is the in_reports predicate of design §1.1 over the event
+// image columns of alias, a usage_events or usage_rollup_journal row: no
+// warmup, and an imported row only from the historical fold watermark on. The
+// raw report path, the rollup folder and its journal reader share it.
+func rollupInReportsSQL(alias string) string {
+	return alias + `.request_kind NOT IN ('warmup','limit_warmup') AND (` + alias + `.legacy_request_id IS NULL OR ` +
+		alias + `.requested_at>=coalesce(
+ (SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))`
+}
+
+// rollupConversationSQL selects the events that count for a conversation:
+// a non-blank id (trim removes spaces only) and no warmup.
+func rollupConversationSQL(alias string) string {
+	return alias + `.conversation_id IS NOT NULL AND trim(` + alias + `.conversation_id)!=''
+ AND ` + alias + `.request_kind NOT IN ('warmup','limit_warmup')`
+}
+
 func rawReportWhere(filter domain.ReportFilter, start, end time.Time) (string, []any) {
-	parts := []string{"e.requested_at>=?", "e.requested_at<?",
-		"e.request_kind NOT IN ('warmup','limit_warmup')",
-		`(e.legacy_request_id IS NULL OR e.requested_at>=coalesce(
- (SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))`}
+	parts := []string{"e.requested_at>=?", "e.requested_at<?", rollupInReportsSQL("e")}
 	args := []any{millis(start), millis(end)}
 	if len(filter.AccountIDs) > 0 {
 		parts, args = appendInCondition(parts, args, "e.account_id", filter.AccountIDs)

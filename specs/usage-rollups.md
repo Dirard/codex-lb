@@ -71,7 +71,7 @@ On a production copy the seven-day overview, a thirty-day report and request-log
 ## Implementation checklist
 
 1. [ ] OpenSpec change `usage-rollups` with design; strict validation.
-2. [ ] Histogram codec; raw path uses histogram medians and integer costs (R6).
+2. [x] Histogram codec; raw path uses histogram medians and integer costs (R6).
 3. [ ] Migration 42, triggers and state; floor tests (R1, R3).
 4. [ ] Folder, rebuild, verifier and service wiring; fold, crash, late-event, rowid-reuse and two-store tests (R2, R4, R8).
 5. [ ] Window planner, sources and rollup readers for every endpoint; randomized equivalence tests (R5–R7).

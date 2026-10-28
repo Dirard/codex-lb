@@ -1,6 +1,6 @@
 ## 1. Shared rules
 
-- [ ] 1.1 Histogram codec with merge, subtract and median; raw path uses histogram medians and integer-microdollar costs.
+- [x] 1.1 Histogram codec with merge, subtract and median; raw path uses histogram medians and integer-microdollar costs.
 
 ## 2. Schema and folder
 

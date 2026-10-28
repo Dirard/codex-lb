@@ -10,8 +10,7 @@ import (
 )
 
 func conversationWhere(filter domain.ConversationFilter) (string, []any) {
-	where := `e.conversation_id IS NOT NULL AND trim(e.conversation_id)!=''
- AND e.request_kind NOT IN ('warmup','limit_warmup') AND e.legacy_deleted=0`
+	where := rollupConversationSQL("e") + ` AND e.legacy_deleted=0`
 	args := []any{}
 	if !filter.Since.IsZero() {
 		where += " AND e.requested_at>=?"

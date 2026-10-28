@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"reflect"
 	"testing"
 	"time"
 
@@ -13,7 +12,8 @@ import (
 
 // The single-pass QueryReports must return the same response as the former
 // per-day statements for mixed raw/folded data, filters and time zones,
-// including daylight-saving and fractional-offset days.
+// including daylight-saving and fractional-offset days; costs are integer
+// sums and medians histogram approximations (design §1.3, §1.5).
 func TestQueryReportsMatchesPerDayReference(t *testing.T) {
 	ctx := context.Background()
 	s, _ := testStore(t)
@@ -119,9 +119,7 @@ func TestQueryReportsMatchesPerDayReference(t *testing.T) {
 					got.ByUserAgent[len(got.ByUserAgent)-1].Requests == 0) {
 				t.Fatalf("fixture does not exercise the report: %+v", got.Summary)
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("%s %+v differs:\n got %+v\nwant %+v", window.zone, filter, got, want)
-			}
+			assertReportNearReference(t, fmt.Sprintf("%s %+v", window.zone, filter), got, want)
 		}
 	}
 }
