@@ -200,6 +200,15 @@ func (s *Server) importAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) exportAccountAuth(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		CurrentPassword string `json:"currentPassword"`
+	}
+	if !s.alternativeAdmin(r) && !decodeJSON(w, r, &payload) {
+		return
+	}
+	if !s.confirmPassword(w, r, payload.CurrentPassword) {
+		return
+	}
 	result, err := s.accountsService().ExportAuth(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, err)

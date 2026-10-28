@@ -7,7 +7,15 @@ import (
 	"strings"
 )
 
-var diagnosticTokens = regexp.MustCompile(`(?i)Bearer\s+[^\s"'<>]+|\bsk-[A-Za-z0-9_-]{8,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+// diagnosticTokens masks credentials that commonly appear in free text:
+// bearer values, OpenAI/Anthropic keys, JWTs, AWS access key IDs, Google API
+// keys, GitHub and Slack tokens and PEM private-key blocks.
+var diagnosticTokens = regexp.MustCompile(`(?i)Bearer\s+[^\s"'<>]+|\bsk-[A-Za-z0-9_-]{8,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+` +
+	`|(?-i:\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35})|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})|\bxox[abposr]-[A-Za-z0-9-]{10,}` +
+	`|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)`)
+
+// diagnosticURLCredentials masks the userinfo part of URLs (scheme://user:secret@host).
+var diagnosticURLCredentials = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@"'<>]+@`)
 
 func sensitiveDiagnosticField(name string) bool {
 	normalized := strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(name))
@@ -54,7 +62,7 @@ func redactDiagnostic(raw json.RawMessage) json.RawMessage {
 			}
 			return v
 		case string:
-			return diagnosticTokens.ReplaceAllString(v, "[redacted]")
+			return diagnosticURLCredentials.ReplaceAllString(diagnosticTokens.ReplaceAllString(v, "[redacted]"), "${1}[redacted]@")
 		default:
 			return v
 		}

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"codex-lb/internal/adapters/credentials"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/application"
 )
@@ -34,6 +35,8 @@ type config struct {
 	maxGenerations, maxClientWebSockets       int
 	logLevel                                  slog.Level
 	metricsListen                             string
+	publicOrigin                              string
+	allowPrivateModelSources                  bool
 	updater                                   application.RuntimeUpdater
 }
 
@@ -63,7 +66,9 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		flags.StringVar(&cfg.metricsListen, "metrics-listen", "", "optional address for Prometheus /metrics and /debug/pprof, e.g. 127.0.0.1:9464; unauthenticated, keep it on loopback")
 		flags.Func("max-generations", "concurrent generation bound; default derived from detected memory (512 on a 1 GB host)", positiveIntFlag("max-generations", &cfg.maxGenerations))
 		flags.Func("max-client-websockets", "client WebSocket bound; default derived from detected memory and descriptor limit (4096 on a 1 GB host)", positiveIntFlag("max-client-websockets", &cfg.maxClientWebSockets))
-		flags.Func("unauthenticated-client", "socket CIDR permitted without a key only while API-key auth is disabled", func(raw string) error {
+		flags.StringVar(&cfg.publicOrigin, "public-origin", "", "HTTPS origin browsers use for the dashboard, e.g. https://lb.example.com; enables Secure cookies and HSTS")
+		flags.BoolVar(&cfg.allowPrivateModelSources, "allow-private-model-sources", false, "allow model sources on loopback, private and link-local addresses (self-hosted sources)")
+		flags.Func("unauthenticated-client", "client CIDR (resolved through trusted proxies) permitted without a key only while API-key auth is disabled", func(raw string) error {
 			prefix, err := netip.ParsePrefix(raw)
 			if err != nil {
 				return errors.New("unauthenticated-client must be a CIDR")
@@ -110,7 +115,7 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		return cfg, errors.New("data-dir must be a dedicated private directory")
 	}
 	if command == "serve" {
-		if err := httpapi.ValidateConfig(httpapi.Config{DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader, TrustedProxies: cfg.trusted, ConnectAddress: cfg.connectAddress}); err != nil {
+		if err := httpapi.ValidateConfig(cfg.apiConfig("")); err != nil {
 			return cfg, err
 		}
 		host, port, err := net.SplitHostPort(cfg.listen)
@@ -121,6 +126,9 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 			if _, port, err := net.SplitHostPort(cfg.metricsListen); err != nil || port == "" {
 				return cfg, errors.New("invalid metrics-listen address")
 			}
+		}
+		if cfg.authMode == "disabled" && !loopbackListenHost(host) {
+			return cfg, errors.New("dashboard-auth-mode=disabled requires a loopback --listen address")
 		}
 	} else if command == "reconcile-usage" {
 		if cfg.reservation == "" && (cfg.settlement != "" || cfg.releaseReservation) || cfg.reservation != "" && (cfg.afterReservation != "" || cfg.releaseReservation == (cfg.settlement != "")) {
@@ -133,6 +141,26 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		return cfg, errors.New("import-legacy requires absolute --source and --source-key paths")
 	}
 	return cfg, nil
+}
+
+// apiConfig is the HTTP adapter configuration derived from command options.
+func (cfg config) apiConfig(version string) httpapi.Config {
+	return httpapi.Config{
+		TrustedProxies: cfg.trusted, BootstrapToken: cfg.bootstrapToken,
+		BootstrapTokenFile: credentials.NewBootstrapTokenFile(filepath.Join(cfg.dataDir, "dashboard-bootstrap-token")),
+		Version:            version, ConnectAddress: cfg.connectAddress,
+		DashboardAuthMode: cfg.authMode, DashboardAuthHeader: cfg.authHeader,
+		UnauthenticatedClientCIDRs: cfg.unauthenticatedClients,
+		PublicOrigin:               cfg.publicOrigin, AllowPrivateModelSources: cfg.allowPrivateModelSources,
+	}
+}
+
+func loopbackListenHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }
 
 // listenError names the address and the operating-system reason (for example

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/netip"
 	"strings"
 	"time"
 
@@ -17,17 +16,28 @@ type localProxyAccess struct{}
 
 func (s *Server) proxyIngress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity := ResolveIdentity(r, s.config.TrustedProxies)
-		local := identity.Local && !identity.Forwarded
-		peer, err := netip.ParseAddrPort(r.RemoteAddr)
-		if err == nil && containsIP(s.config.UnauthenticatedClientCIDRs, peer.Addr().Unmap()) {
-			local = true
-		}
-		if local {
+		if s.keylessClient(r) {
 			r = r.WithContext(context.WithValue(r.Context(), localProxyAccess{}, true))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// keylessClient admits a request to keyless proxy access only when its client
+// address belongs to an operator-listed unauthenticated network. The client is
+// the raw peer for direct connections and the trusted-proxy-resolved address
+// for proxied ones; a trusted proxy without client identity, or forwarded
+// headers from an untrusted peer, never qualify. Socket or Host locality is
+// not considered.
+func (s *Server) keylessClient(r *http.Request) bool {
+	if len(s.config.UnauthenticatedClientCIDRs) == 0 {
+		return false
+	}
+	id := ResolveIdentity(r, s.config.TrustedProxies)
+	if !id.IP.IsValid() || id.Forwarded != id.TrustedPeer {
+		return false
+	}
+	return containsIP(s.config.UnauthenticatedClientCIDRs, id.IP)
 }
 
 func authenticateProxyKey(r *http.Request, store ProxyRepository) (domain.APIKey, error) {

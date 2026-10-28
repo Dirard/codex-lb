@@ -27,9 +27,9 @@ func TestArchiveAccessIsAdminOnlyAndCannotReadFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := New(store, vault, Config{}, nil)
+	server := New(store, vault, Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil)
 	server.ConfigureErrorArchives(store)
-	token, err := server.auth.SetupPassword(ctx, "synthetic-password", time.Hour)
+	token, err := server.auth.SetupPassword(ctx, "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

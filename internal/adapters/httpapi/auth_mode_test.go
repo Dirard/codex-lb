@@ -29,7 +29,7 @@ func TestTrustedHeaderRequiresSocketProvenanceAndKeepsPasswordFallback(t *testin
 	}
 	cfg := Config{DashboardAuthMode: "trusted_header", DashboardAuthHeader: "X-Auth-Request-Email", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}}
 	server := New(store, vault, cfg, nil)
-	token, err := server.auth.SetupPassword(context.Background(), "synthetic-password", time.Hour)
+	token, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,22 +112,22 @@ func TestAuthModeConfigurationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestBootstrapSessionMatchesPasswordSetupIdentityPolicy(t *testing.T) {
-	for _, tc := range []struct {
-		name, peer, forwarded string
-		requiresToken         bool
-	}{
-		{"direct local", "127.0.0.1:123", "", false},
-		{"remote", "192.0.2.1:123", "", true},
-		{"remote spoofs local", "192.0.2.1:123", "127.0.0.1", true},
-		{"trusted proxy forwards remote", "127.0.0.1:123", "192.0.2.1", true},
+// No socket peer or Host makes first-run setup local: a same-host reverse
+// proxy presents every internet client as a loopback peer.
+func TestBootstrapSetupAlwaysRequiresToken(t *testing.T) {
+	for _, tc := range []struct{ name, peer, host, forwarded string }{
+		{"loopback peer and Host", "127.0.0.1:123", "127.0.0.1:2455", ""},
+		{"loopback peer named localhost", "[::1]:123", "localhost:2455", ""},
+		{"remote", "192.0.2.1:123", "lb.example", ""},
+		{"remote spoofs local", "192.0.2.1:123", "localhost:2455", "127.0.0.1"},
+		{"trusted proxy forwards loopback", "127.0.0.1:123", "localhost:2455", "127.0.0.1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server, _, _ := newAccountsTestServer(t, &httpStubOAuth{})
 			server.config.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
 			handler := server.Handler(nil, nil)
 			call := func(method, path, body string) *httptest.ResponseRecorder {
-				r := httptest.NewRequest(method, "http://localhost:2455"+path, strings.NewReader(body))
+				r := httptest.NewRequest(method, "http://"+tc.host+path, strings.NewReader(body))
 				r.RemoteAddr = tc.peer
 				r.Header.Set("Content-Type", "application/json")
 				if tc.forwarded != "" {
@@ -139,19 +139,21 @@ func TestBootstrapSessionMatchesPasswordSetupIdentityPolicy(t *testing.T) {
 			}
 			response := call(http.MethodGet, "/api/dashboard-auth/session", "")
 			var state application.AuthState
-			if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &state) != nil || !state.BootstrapRequired || state.BootstrapTokenRequired != tc.requiresToken || state.Authenticated {
+			if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &state) != nil || !state.BootstrapRequired || !state.BootstrapTokenRequired ||
+				state.BootstrapTokenSource != application.BootstrapSourceEnvironment || state.Authenticated {
 				t.Fatalf("initial state: %d %s", response.Code, response.Body.String())
 			}
 			if call(http.MethodGet, "/api/accounts", "").Code != 401 {
 				t.Fatal("bootstrap state granted administrator access")
 			}
-			setup := call(http.MethodPost, "/api/dashboard-auth/password/setup", `{"password":"synthetic-password"}`)
-			if tc.requiresToken {
-				if setup.Code != 403 {
-					t.Fatalf("remote setup bypassed token: %d", setup.Code)
+			for _, body := range []string{`{"password":"synthetic-password"}`, `{"password":"synthetic-password","bootstrapToken":"wrong-token"}`} {
+				if setup := call(http.MethodPost, "/api/dashboard-auth/password/setup", body); setup.Code != 403 {
+					t.Fatalf("setup without the token: %d", setup.Code)
 				}
-			} else if setup.Code != 200 || json.Unmarshal(setup.Body.Bytes(), &state) != nil || !state.Authenticated || state.BootstrapRequired || state.BootstrapTokenRequired {
-				t.Fatalf("local setup: %d %s", setup.Code, setup.Body.String())
+			}
+			setup := call(http.MethodPost, "/api/dashboard-auth/password/setup", `{"password":"synthetic-password","bootstrapToken":"`+testBootstrapToken+`"}`)
+			if setup.Code != 200 || json.Unmarshal(setup.Body.Bytes(), &state) != nil || !state.Authenticated || state.BootstrapRequired || state.BootstrapTokenRequired {
+				t.Fatalf("setup with token: %d %s", setup.Code, setup.Body.String())
 			}
 		})
 	}

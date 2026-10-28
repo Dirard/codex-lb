@@ -49,7 +49,7 @@ func TestWeeklyOnlyQuotaReachesAccountAndDashboardWithoutPhantomPrimary(t *testi
 	}
 	server.ConfigureUsage(usage)
 	handler := server.Handler(nil, nil)
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setup.Header.Set("Content-Type", "application/json")
 	setupRec := httptest.NewRecorder()

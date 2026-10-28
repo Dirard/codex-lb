@@ -68,3 +68,13 @@ type Settings interface {
 	InitializeAdminSecret(context.Context, domain.AdminSecret) (bool, error)
 	AdvanceTOTPStep(context.Context, int64) (bool, error)
 }
+
+// DashboardSessions persists dashboard session revocation and the digests of
+// consumed one-time bootstrap tokens. Digests are SHA-256 hex strings.
+type DashboardSessions interface {
+	RevokeDashboardSession(ctx context.Context, sessionDigest string, expiresAt time.Time) error
+	DashboardSessionRevoked(ctx context.Context, sessionDigest string) (bool, error)
+	AdvanceDashboardSessionEpoch(ctx context.Context) error
+	BootstrapTokenConsumed(ctx context.Context, tokenDigest string) (bool, error)
+	ConsumeBootstrapToken(ctx context.Context, tokenDigest string, at time.Time) error
+}

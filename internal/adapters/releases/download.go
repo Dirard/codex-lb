@@ -15,11 +15,13 @@ import (
 )
 
 // Download verifies the release descriptor against the fixed origin, fetches
-// SHA256SUMS, streams the archive into the caller's private staging
-// directory, validates its digest before extraction and extracts only the
-// codex-lb regular file; known auxiliary entries are validated and skipped.
-// The returned digest describes the extracted binary itself; no downloaded
-// content is executed here.
+// SHA256SUMS and, when this build embeds trusted release keys, verifies its
+// ed25519 signature (SHA256SUMS.sig) before anything else is downloaded. It
+// then streams the archive into the caller's private staging directory,
+// validates its digest before extraction and extracts only the codex-lb
+// regular file; known auxiliary entries are validated and skipped. The
+// returned digest describes the extracted binary itself; no downloaded content
+// is executed here. Builds without embedded keys verify checksums only.
 func (s *Source) Download(ctx context.Context, release domain.RuntimeRelease, stagingDir string) (domain.RuntimeBinary, error) {
 	release, err := s.validateRelease(release)
 	if err != nil {
@@ -55,6 +57,18 @@ func (s *Source) archiveChecksum(ctx context.Context, release domain.RuntimeRele
 	body, err := s.fetchBytes(ctx, release.ChecksumURL, binaryAccept, checksumLimit, "checksum file")
 	if err != nil {
 		return "", err
+	}
+	if s.keysErr != nil {
+		return "", s.keysErr
+	}
+	if len(s.keys) != 0 {
+		signature, err := s.fetchBytes(ctx, release.ChecksumURL+".sig", binaryAccept, signatureLimit, "checksum signature")
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrSignature, err)
+		}
+		if err := VerifyChecksumSignature(body, signature, s.keys); err != nil {
+			return "", err
+		}
 	}
 	return parseChecksum(body, release.ArchiveName)
 }

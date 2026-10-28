@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 
 	"codex-lb/internal/application"
@@ -12,6 +13,19 @@ import (
 func ValidateConfig(config Config) error {
 	if address := strings.TrimSpace(config.ConnectAddress); address != "" && !safeConnectAddress(address) {
 		return errors.New("CODEX_LB_CONNECT_ADDRESS must be a hostname or IP address")
+	}
+	if config.PublicOrigin != "" && !httpsOrigin(config.PublicOrigin) {
+		return errors.New("public-origin must be an https://host[:port] origin without path, query or credentials")
+	}
+	if token := config.BootstrapToken; token != "" && (len(token) < 32 || len(token) > 1024 || strings.ContainsFunc(token, func(r rune) bool { return r <= ' ' || r == 0x7f })) {
+		return errors.New("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN must contain 32 to 1024 printable characters without spaces")
+	}
+	for _, open := range config.UnauthenticatedClientCIDRs {
+		for _, proxy := range config.TrustedProxies {
+			if open.Overlaps(proxy) {
+				return errors.New("unauthenticated-client networks must not overlap trusted-proxy networks")
+			}
+		}
 	}
 	switch config.DashboardAuthMode {
 	case "", "standard", "disabled":
@@ -68,11 +82,13 @@ func (s *Server) alternativeAdmin(r *http.Request) bool {
 	return true
 }
 
-func (s *Server) authorizeDashboard(r *http.Request) error {
+// authorizeDashboard admits an administrator and returns a session renewal
+// when the idle deadline of a cookie session should move forward.
+func (s *Server) authorizeDashboard(r *http.Request) (application.SessionRenewal, error) {
 	if s.alternativeAdmin(r) {
-		return nil
+		return application.SessionRenewal{}, nil
 	}
-	return s.auth.Authorize(r.Context(), sessionToken(r))
+	return s.auth.Authorize(r.Context(), s.sessionToken(r))
 }
 
 func (s *Server) dashboardState(r *http.Request, token string) (application.AuthState, error) {
@@ -89,4 +105,10 @@ func (s *Server) dashboardState(r *http.Request, token string) (application.Auth
 		state.TOTPRequiredOnLogin = false
 	}
 	return state, nil
+}
+
+func httpsOrigin(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.Hostname() != "" && parsed.User == nil &&
+		parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && !parsed.ForceQuery
 }

@@ -34,10 +34,11 @@ func localKeyFixture(t *testing.T) (*sqlite.Store, *Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, New(store, vault, Config{}, nil)
+	loopback := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	return store, New(store, vault, Config{UnauthenticatedClientCIDRs: loopback}, nil)
 }
 
-func TestLocalKeylessPolicyIsSocketBoundAndRechecksSetting(t *testing.T) {
+func TestKeylessAccessRequiresExplicitClientNetwork(t *testing.T) {
 	store, server := localKeyFixture(t)
 	handler := server.proxyIngress(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key, err := authenticateProxyKey(r, store)
@@ -50,7 +51,7 @@ func TestLocalKeylessPolicyIsSocketBoundAndRechecksSetting(t *testing.T) {
 		}{key.ID})
 	}))
 	call := func(peer, forwarded, path string, capability bool) *httptest.ResponseRecorder {
-		r := httptest.NewRequest("POST", "http://localhost:2455"+path, nil)
+		r := httptest.NewRequest("POST", "http://127.0.0.1:2455"+path, nil)
 		r.RemoteAddr = peer
 		if forwarded != "" {
 			r.Header.Set("X-Forwarded-For", forwarded)
@@ -62,11 +63,20 @@ func TestLocalKeylessPolicyIsSocketBoundAndRechecksSetting(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
+	// A loopback peer and Host are not evidence of a local operator.
+	server.config.UnauthenticatedClientCIDRs = nil
+	if call("127.0.0.1:123", "", "/v1/responses", false).Code != 401 || call("[::1]:123", "", "/v1/models", false).Code != 401 {
+		t.Fatal("loopback peer received keyless access without an explicit network")
+	}
+	server.config.UnauthenticatedClientCIDRs = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
 	if response := call("127.0.0.1:123", "", "/v1/responses", false); response.Code != 200 || !strings.Contains(response.Body.String(), domain.LocalProxyKeyID) {
-		t.Fatal("keyless local unavailable")
+		t.Fatal("explicit loopback network ignored")
 	}
 	if call("198.51.100.1:123", "127.0.0.1", "/v1/responses", false).Code != 401 {
 		t.Fatal("forwarded localhost bypassed key auth")
+	}
+	if call("127.0.0.1:123", "127.0.0.1", "/v1/responses", false).Code != 401 {
+		t.Fatal("forwarded headers from an untrusted peer granted keyless access")
 	}
 	if call("127.0.0.1:123", "", "/v1/responses", true).Code != 401 {
 		t.Fatal("required-capability request did not require a key")
@@ -74,9 +84,22 @@ func TestLocalKeylessPolicyIsSocketBoundAndRechecksSetting(t *testing.T) {
 	if call("127.0.0.1:123", "", "/v1/usage", false).Code != 401 {
 		t.Fatal("self-service usage did not require a key")
 	}
-	server.config.UnauthenticatedClientCIDRs = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
-	if call("192.0.2.9:123", "", "/v1/responses", false).Code != 200 {
-		t.Fatal("explicit socket CIDR ignored")
+	// Behind a trusted proxy the resolved client, not the proxy, must match.
+	server.config.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	server.config.UnauthenticatedClientCIDRs = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	for _, tc := range []struct {
+		peer, forwarded string
+		want            int
+	}{
+		{"127.0.0.1:123", "10.1.2.3", 200},
+		{"127.0.0.1:123", "198.51.100.7", 401},
+		{"127.0.0.1:123", "", 401},
+		{"192.0.2.9:123", "10.1.2.3", 401},
+		{"10.1.2.3:123", "", 200},
+	} {
+		if got := call(tc.peer, tc.forwarded, "/v1/responses", false).Code; got != tc.want {
+			t.Fatalf("peer %s forwarded %q: status %d, want %d", tc.peer, tc.forwarded, got, tc.want)
+		}
 	}
 	settings, err := store.LoadSettings(context.Background())
 	if err != nil {
@@ -86,7 +109,7 @@ func TestLocalKeylessPolicyIsSocketBoundAndRechecksSetting(t *testing.T) {
 	if err := store.SaveSettings(context.Background(), settings); err != nil {
 		t.Fatal(err)
 	}
-	if call("127.0.0.1:123", "", "/v1/responses", false).Code != 401 || call("192.0.2.9:123", "", "/v1/responses", false).Code != 401 {
+	if call("127.0.0.1:123", "10.1.2.3", "/v1/responses", false).Code != 401 || call("10.1.2.3:123", "", "/v1/responses", false).Code != 401 {
 		t.Fatal("enabling auth did not revoke keyless access")
 	}
 	key, err := store.GetAPIKey(context.Background(), domain.LocalProxyKeyID)

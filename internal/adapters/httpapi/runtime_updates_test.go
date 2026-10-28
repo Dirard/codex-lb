@@ -57,7 +57,7 @@ func TestRuntimeUpdateRoutesRequireAdminAndCSRF(t *testing.T) {
 	updater := &runtimeUpdaterStub{status: domain.RuntimeUpdateStatus{CurrentVersion: "go-v1.0.0", Supported: true, Phase: "idle", ReleaseURL: runtimeReleasesURL}}
 	server.ConfigureRuntimeUpdater(updater)
 	handler := server.Handler(nil, nil)
-	adminToken, err := server.auth.SetupPassword(context.Background(), "synthetic-password", time.Hour)
+	adminToken, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestRuntimeUpdateRoutesStatusAndActions(t *testing.T) {
 	}}
 	server.ConfigureRuntimeUpdater(updater)
 	handler := server.Handler(nil, nil)
-	token, err := server.auth.SetupPassword(context.Background(), "synthetic-password", time.Hour)
+	token, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +121,17 @@ func TestRuntimeUpdateRoutesStatusAndActions(t *testing.T) {
 			t.Fatalf("missing update capability: %v", body)
 		}
 	}
+	// Applying or rolling back requires re-entering the dashboard password.
+	for _, body := range []string{`{"version":"go-v1.1.0"}`, `{"version":"go-v1.1.0","currentPassword":"wrong-password"}`} {
+		if response := runtimeUpdateRequest(handler, "POST", "/api/runtime/updates/apply", body, cookie); response.Code != http.StatusForbidden ||
+			!strings.Contains(response.Body.String(), "reauthentication_required") {
+			t.Fatalf("apply without password = %d %s", response.Code, response.Body.String())
+		}
+	}
 	for _, action := range []struct{ path, body string }{
 		{"/api/runtime/updates/check", ""},
-		{"/api/runtime/updates/apply", `{"version":"go-v1.1.0"}`},
-		{"/api/runtime/updates/rollback", `{"version":"go-v0.9.0"}`},
+		{"/api/runtime/updates/apply", `{"version":"go-v1.1.0","currentPassword":"synthetic-password"}`},
+		{"/api/runtime/updates/rollback", `{"version":"go-v0.9.0","currentPassword":"synthetic-password"}`},
 	} {
 		response := runtimeUpdateRequest(handler, "POST", action.path, action.body, cookie)
 		if response.Code != http.StatusAccepted || response.Header().Get("Cache-Control") != "no-store" {
@@ -141,7 +148,7 @@ func TestRuntimeUpdateRoutesRejectMalformedAndMapControllerErrors(t *testing.T) 
 	updater := &runtimeUpdaterStub{status: domain.RuntimeUpdateStatus{CurrentVersion: "go-v1.0.0", Supported: true, Phase: "idle", ReleaseURL: runtimeReleasesURL}}
 	server.ConfigureRuntimeUpdater(updater)
 	handler := server.Handler(nil, nil)
-	token, err := server.auth.SetupPassword(context.Background(), "synthetic-password", time.Hour)
+	token, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,9 +176,9 @@ func TestRuntimeUpdateRoutesRejectMalformedAndMapControllerErrors(t *testing.T) 
 		wantCode   string
 	}{
 		{"/api/runtime/updates/check", "", domain.ErrUpdateBusy, http.StatusConflict, "update_busy"},
-		{"/api/runtime/updates/apply", `{"version":"go-v1.1.0"}`, domain.ErrUpdateUnavailable, http.StatusServiceUnavailable, "update_unavailable"},
-		{"/api/runtime/updates/rollback", `{"version":"go-v0.9.0"}`, domain.ErrUpdateTarget, http.StatusConflict, "update_target_unavailable"},
-		{"/api/runtime/updates/apply", `{"version":"go-v1.1.0"}`, errors.New("private executable path"), http.StatusInternalServerError, "internal_error"},
+		{"/api/runtime/updates/apply", `{"version":"go-v1.1.0","currentPassword":"synthetic-password"}`, domain.ErrUpdateUnavailable, http.StatusServiceUnavailable, "update_unavailable"},
+		{"/api/runtime/updates/rollback", `{"version":"go-v0.9.0","currentPassword":"synthetic-password"}`, domain.ErrUpdateTarget, http.StatusConflict, "update_target_unavailable"},
+		{"/api/runtime/updates/apply", `{"version":"go-v1.1.0","currentPassword":"synthetic-password"}`, errors.New("private executable path"), http.StatusInternalServerError, "internal_error"},
 	} {
 		updater.checkErr, updater.applyErr, updater.rollbackErr = nil, nil, nil
 		switch tc.path {
@@ -195,7 +202,7 @@ func TestRuntimeUpdateRoutesRejectMalformedAndMapControllerErrors(t *testing.T) 
 func TestRuntimeUpdateRoutesWithoutControllerAreExplicitlyUnavailable(t *testing.T) {
 	server, _, _ := reportSessionServer(t)
 	handler := server.Handler(nil, nil)
-	token, err := server.auth.SetupPassword(context.Background(), "synthetic-password", time.Hour)
+	token, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

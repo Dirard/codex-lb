@@ -29,7 +29,7 @@ func TestRuntimeCapacityRouteReportsPlanAndUsageToAdministrators(t *testing.T) {
 	if got := runtimeUpdateRequest(handler, "GET", "/api/runtime/capacity", "", reportLogin.Result().Cookies()[0]).Code; got != http.StatusUnauthorized {
 		t.Fatalf("key-report capacity read = %d", got)
 	}
-	adminToken, err := server.auth.SetupPassword(context.Background(), "synthetic-password", time.Hour)
+	adminToken, err := server.auth.SetupPassword(context.Background(), "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

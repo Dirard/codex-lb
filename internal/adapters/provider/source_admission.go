@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"codex-lb/internal/adapters/egress"
 	"codex-lb/internal/domain"
 )
 
@@ -28,7 +29,9 @@ func (a *Adapter) beginSource(ctx context.Context, source domain.ModelSource) (c
 	if source.TimeoutSeconds > 0 {
 		timeout = time.Duration(source.TimeoutSeconds) * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	// Model-source connections may reach only public addresses unless the
+	// operator allowed private sources (enforced by the egress dial guard).
+	ctx, cancel := context.WithTimeout(egress.Restrict(ctx), timeout)
 	release := sync.OnceFunc(func() {
 		cancel()
 		a.sourceMu.Lock()

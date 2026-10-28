@@ -4,11 +4,12 @@ import { CodexLogo } from "@/components/brand/codex-logo";
 import { AlertMessage } from "@/components/alert-message";
 import { PasswordSettings } from "@/features/settings/components/password-settings";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
+import { bootstrapTokenMessageKey } from "@/features/auth/bootstrap-token-message";
 
 export function BootstrapSetupScreen() {
   const { t } = useTranslation();
   const bootstrapTokenRequired = useAuthStore((state) => state.bootstrapTokenRequired);
-  const bootstrapTokenConfigured = useAuthStore((state) => state.bootstrapTokenConfigured);
+  const bootstrapTokenSource = useAuthStore((state) => state.bootstrapTokenSource);
 
   return (
     <div className="relative flex min-h-screen items-center justify-center p-4">
@@ -38,11 +39,11 @@ export function BootstrapSetupScreen() {
             <p className="text-sm text-muted-foreground">
               {t("auth.bootstrap.body")}
             </p>
-            {bootstrapTokenRequired ? <AlertMessage variant="error">
-              {bootstrapTokenConfigured
-                ? t("auth.bootstrap.tokenConfigured")
-                : t("auth.bootstrap.tokenMissing")}
-            </AlertMessage> : null}
+            {bootstrapTokenRequired ? (
+              <AlertMessage variant={bootstrapTokenSource ? "warning" : "error"}>
+                {t(bootstrapTokenMessageKey(bootstrapTokenSource))}
+              </AlertMessage>
+            ) : null}
           </div>
         </div>
 

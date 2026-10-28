@@ -28,7 +28,7 @@ func TestModelPricingAdminRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := New(store, vault, Config{}, nil)
+	server := New(store, vault, Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil)
 	admin := http.NewServeMux()
 	NewModelPricingHandler(store).RegisterAdminRoutes(admin)
 	handler := server.requireAdmin(admin)
@@ -47,7 +47,7 @@ func TestModelPricingAdminRoutes(t *testing.T) {
 	if got := request("GET", "/api/model-prices", "", nil).Code; got != 401 {
 		t.Fatalf("unauthenticated catalog: %d", got)
 	}
-	token, err := server.auth.SetupPassword(ctx, "synthetic-password", time.Hour)
+	token, err := server.auth.SetupPassword(ctx, "test", "", "synthetic-password", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

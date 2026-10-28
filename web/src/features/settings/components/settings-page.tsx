@@ -140,7 +140,7 @@ export function SettingsPage() {
             ) : null}
             {canWrite && passwordManagementEnabled && passwordSessionActive ? (
               <Suspense fallback={null}>
-                <TotpSettings settings={settings} disabled={busy} onSave={handleSave} />
+                <TotpSettings settings={settings} disabled={busy} />
               </Suspense>
             ) : null}
 

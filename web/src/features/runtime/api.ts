@@ -18,15 +18,17 @@ export function checkRuntimeUpdates() {
   return post(`${RUNTIME_UPDATES_PATH}/check`, RuntimeUpdateStatusSchema);
 }
 
-export function applyRuntimeUpdate(version: string) {
+// currentPassword re-confirms the dashboard password; installations that
+// authenticate administrators outside dashboard passwords omit it.
+export function applyRuntimeUpdate(version: string, currentPassword?: string) {
   return post(`${RUNTIME_UPDATES_PATH}/apply`, RuntimeUpdateStatusSchema, {
-    body: { version },
+    body: { version, currentPassword },
   });
 }
 
-export function rollbackRuntimeUpdate(version: string) {
+export function rollbackRuntimeUpdate(version: string, currentPassword?: string) {
   return post(`${RUNTIME_UPDATES_PATH}/rollback`, RuntimeUpdateStatusSchema, {
-    body: { version },
+    body: { version, currentPassword },
   });
 }
 

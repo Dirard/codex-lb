@@ -29,7 +29,7 @@ func TestDashboardSecurityAndGroupKeyFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(store, vault, httpapi.Config{}, nil).Handler(nil, nil)
+	handler := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(nil, nil)
 	var cookie *http.Cookie
 	request := func(method, path string, body any, mutate func(*http.Request)) *httptest.ResponseRecorder {
 		t.Helper()
@@ -68,6 +68,10 @@ func TestDashboardSecurityAndGroupKeyFlow(t *testing.T) {
 	}).Code; got != 403 {
 		t.Fatalf("cross-origin setup accepted (%d)", got)
 	}
+	if got := request("POST", "/api/dashboard-auth/password/setup", setup, nil).Code; got != 403 {
+		t.Fatalf("loopback setup without bootstrap token accepted (%d)", got)
+	}
+	setup["bootstrapToken"] = "synthetic-bootstrap-token-0123456789abcdef"
 	result := request("POST", "/api/dashboard-auth/password/setup", setup, nil)
 	if result.Code != 200 {
 		t.Fatalf("setup status %d", result.Code)
@@ -186,7 +190,7 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(store, vault, httpapi.Config{}, nil).Handler(nil, nil)
+	handler := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(nil, nil)
 	var cookie *http.Cookie
 	request := func(method, endpoint string, body any) *httptest.ResponseRecorder {
 		t.Helper()
@@ -204,7 +208,7 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		return rec
 	}
-	setup := request(http.MethodPost, "/api/dashboard-auth/password/setup", map[string]string{"password": "synthetic-test-password"})
+	setup := request(http.MethodPost, "/api/dashboard-auth/password/setup", map[string]string{"password": "synthetic-test-password", "bootstrapToken": "synthetic-bootstrap-token-0123456789abcdef"})
 	if setup.Code != http.StatusOK || len(setup.Result().Cookies()) != 1 {
 		t.Fatalf("admin setup = %d", setup.Code)
 	}
@@ -306,7 +310,7 @@ func TestAccountAdmissionSettingsHTTPPatchSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(store, vault, httpapi.Config{}, nil).Handler(nil, nil)
+	handler := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil).Handler(nil, nil)
 	var cookie *http.Cookie
 	request := func(method string, body any) *httptest.ResponseRecorder {
 		t.Helper()
@@ -324,7 +328,7 @@ func TestAccountAdmissionSettingsHTTPPatchSemantics(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	setup := request(http.MethodPost, map[string]string{"password": "synthetic-test-password"})
+	setup := request(http.MethodPost, map[string]string{"password": "synthetic-test-password", "bootstrapToken": "synthetic-bootstrap-token-0123456789abcdef"})
 	if setup.Code != 200 {
 		t.Fatalf("admin setup: %d %s", setup.Code, setup.Body.String())
 	}

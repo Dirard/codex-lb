@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -38,14 +38,17 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     directory = await mkdtemp(path.join(tmpdir(), "codex-lb-contract-"));
     await startRuntime();
     const initial = AuthSessionSchema.parse(await request("/api/dashboard-auth/session"));
-    expect(initial).toMatchObject({ authenticated: false, bootstrapRequired: true, bootstrapTokenRequired: false });
-    const session = AuthSessionSchema.parse(await request("/api/dashboard-auth/password/setup", "POST", { password: "synthetic-test-password" }));
+    // First-run setup always needs the one-time token the server writes to its data directory.
+    expect(initial).toMatchObject({ authenticated: false, bootstrapRequired: true, bootstrapTokenRequired: true, bootstrapTokenSource: "file" });
+    const bootstrapToken = (await readFile(path.join(directory, "dashboard-bootstrap-token"), "utf8")).trim();
+    const session = AuthSessionSchema.parse(await request("/api/dashboard-auth/password/setup", "POST", { password: "synthetic-test-password", bootstrapToken }));
     expect(session.authenticated).toBe(true);
     expect(session.bootstrapTokenRequired).toBe(false);
   });
 
   async function startRuntime() {
-    child = spawn(binary!, ["serve", "--listen", "127.0.0.1:0", "--data-dir", directory, "--shutdown-grace", "0s"], {
+    // Offline model sources are loopback stubs, which need the private-source opt-in.
+    child = spawn(binary!, ["serve", "--listen", "127.0.0.1:0", "--data-dir", directory, "--shutdown-grace", "0s", "--allow-private-model-sources"], {
       env: { PATH: process.env.PATH },
       stdio: ["ignore", "ignore", "pipe"],
     });

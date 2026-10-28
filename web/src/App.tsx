@@ -14,6 +14,7 @@ import {
 } from "@/components/layout/status-bar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ApiKeyAuthWarning } from "@/features/api-keys/components/api-key-auth-warning";
 import { AuthGate } from "@/features/auth/components/auth-gate";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
 import { useTimeFormatStore } from "@/hooks/use-time-format";
@@ -57,6 +58,7 @@ function AppLayout() {
         showLogout={passwordRequired}
       />
       <main className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col px-4 py-8 sm:px-6">
+        <ApiKeyAuthWarning />
         <RouteErrorBoundary
           key={pathname}
           resetKey={`${locationKey}:${pathname}${search}${hash}`}

@@ -249,3 +249,16 @@ CREATE TABLE model_reprice_pending (
  model TEXT PRIMARY KEY, requested_at INTEGER NOT NULL
 );
 `
+
+// schemaV35 makes dashboard sessions revocable (per session and by epoch) and
+// records consumed operator bootstrap tokens so they cannot be replayed.
+const schemaV35 = `
+ALTER TABLE admin_secret ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0 CHECK(session_epoch >= 0);
+CREATE TABLE dashboard_session_revocations (
+ session_hash TEXT PRIMARY KEY CHECK(length(session_hash) = 64), expires_at INTEGER NOT NULL
+);
+CREATE INDEX idx_dashboard_session_revocations_expiry ON dashboard_session_revocations(expires_at);
+CREATE TABLE dashboard_bootstrap_consumed (
+ token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64), consumed_at INTEGER NOT NULL
+);
+`

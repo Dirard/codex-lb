@@ -111,7 +111,7 @@ func TestListAccountsIncludesQuotaCapacityAndTelemetryFields(t *testing.T) {
 	// listAccounts lives in registerAdmin; exercise the full production mux.
 	handler := server.Handler(nil, nil)
 
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.Header.Set("Content-Type", "application/json")
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setupRec := httptest.NewRecorder()
@@ -206,7 +206,7 @@ func TestConfirmedUsagePlanDowngradeChangesAccountView(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := server.Handler(nil, nil)
-	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password"}`))
+	setup := httptest.NewRequest(http.MethodPost, "http://localhost:2455/api/dashboard-auth/password/setup", strings.NewReader(`{"password":"synthetic-test-password","bootstrapToken":"synthetic-bootstrap-token-0123456789abcdef"}`))
 	setup.Header.Set("Content-Type", "application/json")
 	setup.RemoteAddr = "127.0.0.1:5678"
 	setupRec := httptest.NewRecorder()

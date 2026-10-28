@@ -22,6 +22,7 @@ type AuthState = {
   bootstrapRequired: boolean;
   bootstrapTokenRequired: boolean;
   bootstrapTokenConfigured: boolean;
+  bootstrapTokenSource: "environment" | "file" | null;
   authMode: DashboardAuthMode;
   passwordManagementEnabled: boolean;
   passwordSessionActive: boolean;
@@ -47,6 +48,7 @@ function applySession(set: (next: Partial<AuthState>) => void, session: AuthSess
     bootstrapRequired: session.bootstrapRequired ?? false,
     bootstrapTokenRequired: session.bootstrapTokenRequired ?? true,
     bootstrapTokenConfigured: session.bootstrapTokenConfigured ?? false,
+    bootstrapTokenSource: session.bootstrapTokenSource ?? null,
     authMode: session.authMode,
     passwordManagementEnabled: session.passwordManagementEnabled,
     passwordSessionActive: session.passwordSessionActive,
@@ -67,6 +69,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   bootstrapRequired: false,
   bootstrapTokenRequired: true,
   bootstrapTokenConfigured: false,
+  bootstrapTokenSource: null,
   authMode: "standard",
   passwordManagementEnabled: true,
   passwordSessionActive: false,
@@ -114,6 +117,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         bootstrapRequired: false,
         bootstrapTokenRequired: true,
         bootstrapTokenConfigured: false,
+        bootstrapTokenSource: null,
         authMode: "standard",
         passwordManagementEnabled: true,
         role: "admin",

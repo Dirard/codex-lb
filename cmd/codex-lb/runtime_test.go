@@ -267,3 +267,37 @@ func TestCLIConfigurationAndVersion(t *testing.T) {
 		t.Fatal("unsafe connect address accepted or echoed")
 	}
 }
+
+func TestCLISecurityConfiguration(t *testing.T) {
+	t.Setenv("CODEX_LB_DATA_DIR", filepath.Join(t.TempDir(), "secure"))
+	t.Setenv("CODEX_LB_CONNECT_ADDRESS", "")
+	cfg, err := parseConfig("serve", []string{"--public-origin", "https://lb.example", "--allow-private-model-sources",
+		"--trusted-proxy", "127.0.0.1/32", "--unauthenticated-client", "10.0.0.0/8"}, io.Discard)
+	if err != nil || cfg.publicOrigin != "https://lb.example" || !cfg.allowPrivateModelSources {
+		t.Fatalf("secure configuration rejected: %v", err)
+	}
+	if api := cfg.apiConfig("go-test"); api.BootstrapTokenFile == nil || api.BootstrapTokenFile.Location() != filepath.Join(cfg.dataDir, "dashboard-bootstrap-token") {
+		t.Fatal("bootstrap token file is not inside the data directory")
+	}
+	for _, args := range [][]string{
+		{"--public-origin", "http://lb.example"},
+		{"--public-origin", "https://lb.example/dashboard"},
+		{"--trusted-proxy", "127.0.0.1/32", "--unauthenticated-client", "127.0.0.0/8"},
+		{"--dashboard-auth-mode", "disabled", "--listen", "0.0.0.0:2455"},
+	} {
+		if _, err := parseConfig("serve", args, io.Discard); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if _, err := parseConfig("serve", []string{"--dashboard-auth-mode", "disabled", "--listen", "127.0.0.1:2455"}, io.Discard); err != nil {
+		t.Fatalf("loopback disabled mode rejected: %v", err)
+	}
+	t.Setenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", strings.Repeat("a", 31))
+	if _, err := parseConfig("serve", nil, io.Discard); err == nil || strings.Contains(err.Error(), strings.Repeat("a", 31)) {
+		t.Fatal("short bootstrap token accepted or echoed")
+	}
+	t.Setenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", strings.Repeat("a", 32))
+	if _, err := parseConfig("serve", nil, io.Discard); err != nil {
+		t.Fatalf("32-character bootstrap token rejected: %v", err)
+	}
+}

@@ -13,9 +13,13 @@ Group=codex-lb
 StateDirectory=codex-lb
 StateDirectoryMode=0700
 UMask=0077
-# Optional, e.g. CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN for first remote setup.
+# Optional, e.g. CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN (32+ characters). Without it
+# first-run setup uses the one-time token written to
+# /var/lib/codex-lb/dashboard-bootstrap-token (path is logged at start).
 EnvironmentFile=-/etc/codex-lb.env
-ExecStart=/usr/local/bin/codex-lb serve --data-dir /var/lib/codex-lb --listen 127.0.0.1:2455
+# The reverse proxy on this host must send X-Forwarded-For; add
+# --public-origin https://<dashboard host> when browsers use HTTPS.
+ExecStart=/usr/local/bin/codex-lb serve --data-dir /var/lib/codex-lb --listen 127.0.0.1:2455 --trusted-proxy 127.0.0.1/32 --trusted-proxy ::1/128
 Restart=on-failure
 RestartSec=2s
 RestartSteps=5

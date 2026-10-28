@@ -22,7 +22,7 @@ type TOTPSetup struct {
 }
 
 func (a *AdminAuth) StartTOTP(ctx context.Context, token string) (TOTPSetup, error) {
-	secret, err := a.authorizedSecret(ctx, token, true)
+	secret, _, err := a.authorizedSecret(ctx, token, true)
 	if err != nil {
 		return TOTPSetup{}, err
 	}
@@ -38,21 +38,24 @@ func (a *AdminAuth) StartTOTP(ctx context.Context, token string) (TOTPSetup, err
 	return TOTPSetup{Secret: value, OTPAuthURI: "otpauth://totp/codex-lb:dashboard?" + query.Encode()}, nil
 }
 
+// ConfirmTOTP stores a verified secret. From then on every sign-in requires a
+// code because full authentication is derived from the configured secret.
 func (a *AdminAuth) ConfirmTOTP(ctx context.Context, token, client, value, code string, ttl time.Duration) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	secret, err := a.authorizedSecret(ctx, token, true)
+	secret, _, err := a.authorizedSecret(ctx, token, true)
 	if err != nil {
 		return "", err
 	}
 	if len(secret.TOTPSecretEncrypted) != 0 {
 		return "", &AuthError{Code: "invalid_totp_setup", Message: "TOTP is already configured"}
 	}
-	if err := a.attempt("totp:" + client); err != nil {
+	if err := a.limiter.begin(authScopeTOTP, client, a.now()); err != nil {
 		return "", err
 	}
 	step, ok := verifyTOTP(value, code, a.now(), nil)
 	if !ok {
+		a.limiter.fail(authScopeTOTP, a.now())
 		return "", errTOTPCode
 	}
 	secret.TOTPSecretEncrypted, err = a.cipher.Encrypt([]byte(value))
@@ -63,24 +66,24 @@ func (a *AdminAuth) ConfirmTOTP(ctx context.Context, token, client, value, code 
 	if err := a.settings.SaveAdminSecret(ctx, secret); err != nil {
 		return "", err
 	}
-	delete(a.attempts, "totp:"+client)
+	a.limiter.succeed(authScopeTOTP, client)
 	return a.issue(secret, true, ttl)
 }
 
 func (a *AdminAuth) VerifyTOTP(ctx context.Context, token, client, code string, ttl time.Duration, disable bool) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	secret, err := a.authorizedSecret(ctx, token, disable)
+	secret, session, err := a.authorizedSecret(ctx, token, disable)
 	if err != nil {
 		return "", err
 	}
 	if len(secret.TOTPSecretEncrypted) == 0 {
 		return "", errTOTPCode
 	}
-	if session, valid := a.session(token, secret); disable && (!valid || !session.TOTP) {
+	if disable && !session.TOTP {
 		return "", ErrAuthentication
 	}
-	if err := a.attempt("totp:" + client); err != nil {
+	if err := a.limiter.begin(authScopeTOTP, client, a.now()); err != nil {
 		return "", err
 	}
 	value, err := a.cipher.Decrypt(secret.TOTPSecretEncrypted)
@@ -89,6 +92,7 @@ func (a *AdminAuth) VerifyTOTP(ctx context.Context, token, client, code string, 
 	}
 	step, ok := verifyTOTP(string(value), code, a.now(), secret.TOTPLastVerifiedStep)
 	if !ok {
+		a.limiter.fail(authScopeTOTP, a.now())
 		return "", errTOTPCode
 	}
 	advanced, err := a.settings.AdvanceTOTPStep(ctx, step)
@@ -96,6 +100,7 @@ func (a *AdminAuth) VerifyTOTP(ctx context.Context, token, client, code string, 
 		return "", err
 	}
 	if !advanced {
+		a.limiter.fail(authScopeTOTP, a.now())
 		return "", errTOTPCode
 	}
 	if disable {
@@ -105,7 +110,7 @@ func (a *AdminAuth) VerifyTOTP(ctx context.Context, token, client, code string, 
 			return "", err
 		}
 	}
-	delete(a.attempts, "totp:"+client)
+	a.limiter.succeed(authScopeTOTP, client)
 	return a.issue(secret, true, ttl)
 }
 

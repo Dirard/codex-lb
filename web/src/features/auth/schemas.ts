@@ -33,6 +33,7 @@ export const AuthSessionSchema = z.object({
   bootstrapRequired: z.boolean().optional().default(false),
   bootstrapTokenRequired: z.boolean().optional(),
   bootstrapTokenConfigured: z.boolean().optional().default(false),
+  bootstrapTokenSource: z.enum(["environment", "file"]).optional(),
   authMode: DashboardAuthModeSchema.default("standard"),
   passwordManagementEnabled: z.boolean().default(true),
   passwordSessionActive: z.boolean().default(false),

@@ -1,6 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
+
+import { server } from "@/test/mocks/server";
 
 import { SessionSettings } from "@/features/settings/components/session-settings";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
@@ -89,7 +92,7 @@ describe("SessionSettings", () => {
     await user.type(input, "8760");
 
     expect(
-      screen.getByText(/Lifetimes over 30 days keep admin sessions valid for a long time/i),
+      screen.getByText(/Lifetimes over 30 days are capped at 30 days/i),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Save lifetime" }));
@@ -98,5 +101,22 @@ describe("SessionSettings", () => {
       ...baseUpdatePayload,
       dashboardSessionTtlSeconds: 31536000,
     });
+  });
+
+  it("signs out every dashboard session after confirmation", async () => {
+    const user = userEvent.setup();
+    let revoked = 0;
+    server.use(
+      http.post("/api/dashboard-auth/logout-all", () => {
+        revoked++;
+        return HttpResponse.json({ status: "ok" });
+      }),
+    );
+    render(<SessionSettings settings={baseSettings} busy={false} onSave={vi.fn().mockResolvedValue(undefined)} />);
+    await user.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    expect(revoked).toBe(0);
+    const dialog = screen.getByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Sign out everywhere" }));
+    await waitFor(() => expect(revoked).toBe(1));
   });
 });
