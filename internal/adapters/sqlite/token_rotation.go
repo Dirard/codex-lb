@@ -31,7 +31,14 @@ func (s *Store) RotateAccountCredential(ctx context.Context, expected, next doma
 		if err != nil || rows == 0 {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE accounts SET last_refresh=? WHERE id=?", millis(now), expected.AccountID)
+		// The loser of a refresh race on another worker may already have marked
+		// the account refresh_token_reused. This rotation of the same refresh
+		// token proves the rejection was that race, so the account is active
+		// again; every other reason stays.
+		_, err = tx.ExecContext(ctx, `UPDATE accounts SET last_refresh=?,
+ status=CASE WHEN status='reauth_required' AND deactivation_reason='refresh_token_reused' THEN 'active' ELSE status END,
+ deactivation_reason=CASE WHEN status='reauth_required' AND deactivation_reason='refresh_token_reused' THEN '' ELSE deactivation_reason END
+ WHERE id=?`, millis(now), expected.AccountID)
 		changed = err == nil
 		return err
 	})
