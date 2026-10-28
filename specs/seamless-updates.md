@@ -26,7 +26,7 @@ Out of scope: replacing the launcher image while it runs (recorded as use case 8
   - The launcher's update logic is no longer frozen at the bootstrap version: a bootstrap that knows delegation re-executes the installed newer release as the launcher.
 - Non-local: domain descriptor, application update use case and admission, SQLite adapter, HTTP WebSocket adapter, launcher/worker runtime, dashboard settings card, OpenSpec `runtime-updates` and `go-runtime`.
 - Impacted specs in `specs/`: `adaptive-capacity.md` sizes one process per host (`GOMEMLIMIT` 75 %); use case 3.2 lowers a worker's limit by its peers' resident memory during an overlap. Action: none (the capacity plan itself is unchanged; this spec owns the overlap rule).
-- Impacted OpenSpec capabilities: `runtime-updates` — action `amend` (single-owner, idle-gate, schema and UI requirements; new seamless handoff, shared database and delegation requirements) through change `openspec/changes/seamless-updates/`. `go-runtime` — action `amend` (interrupted-reservation marking at startup, multi-process write transactions) in the same change.
+- Impacted OpenSpec capabilities: `runtime-updates` — action `amend` (single-owner, idle-gate, schema and UI requirements; new seamless handoff, shared database and delegation requirements) through change `openspec/changes/archive/2026-10-28-seamless-updates/`. `go-runtime` — action `amend` (interrupted-reservation marking at startup, multi-process write transactions) in the same change.
 
 ## Connected groups or observed existing logic
 
@@ -213,18 +213,18 @@ Not part of this slice. Recorded so the handoff protocol keeps workers independe
 
 ## Implementation checklist
 
-1. [ ] OpenSpec change `seamless-updates` (proposal, tasks, context, `runtime-updates` and `go-runtime` deltas); strict validation.
-2. [ ] Descriptor `handoff` / `schemaFloor`, identity comparison, `SeamlessSwitch` and widened rollback/boot compatibility with tests (R1–R4).
-3. [ ] SQLite: `IMMEDIATE` writer transactions, migration 41 (`owner_instance`, `schema_compatibility`), instance-scoped interrupted marking, floor recording and newer-compatible open, explicit reprice resumption; two-store contention tests (R21–R23).
-4. [ ] Token refresh re-read after a permanent error (R24).
-5. [ ] Proxy peer load (global ghost slots, account and key pressure), load snapshot, retirement signal for WebSockets with tests (R14, R17).
-6. [ ] Launcher-owned listener and lock, inherited descriptors, lifeline, instance ids, legacy-worker release/re-acquire (R5–R8).
-7. [ ] Worker handoff endpoints (`/background`, `/retire`, `/load`, `/peer-load`, `/peer-exited`), deferred background, retirement drain, memory limit (R13, R15, R18–R20).
-8. [ ] Application seamless flow with failure paths; host multi-worker bookkeeping and relay (R9–R12, R16, R25).
-9. [ ] Boot delegation with crash guard; backup before an adopted bootstrap migrates (R26, R27, R30).
-10. [ ] Status flag, phases, confirmation text, locales and tests (R28).
-11. [ ] Integration test with real binaries: switch under continuous load and a long stream, no refused connection, stream completes on the old worker, background on one worker; classic fallback and delegation tests.
-12. [ ] go vet, golangci-lint, go test, go test -race, web checks; record results.
+1. [x] OpenSpec change `seamless-updates` (proposal, tasks, context, `runtime-updates` and `go-runtime` deltas); strict validation.
+2. [x] Descriptor `handoff` / `schemaFloor`, identity comparison, `SeamlessSwitch` and widened rollback/boot compatibility with tests (R1–R4).
+3. [x] SQLite: `IMMEDIATE` writer transactions, migration 41 (`owner_instance`, `schema_compatibility`), instance-scoped interrupted marking, floor recording and newer-compatible open, explicit reprice resumption; two-store contention tests (R21–R23).
+4. [x] Token refresh re-read after a permanent error (R24).
+5. [x] Proxy peer load (global ghost slots, account and key pressure), load snapshot, retirement signal for WebSockets with tests (R14, R17).
+6. [x] Launcher-owned listener and lock, inherited descriptors, lifeline, instance ids, legacy-worker release/re-acquire (R5–R8).
+7. [x] Worker handoff endpoints (`/background`, `/retire`, `/load`, `/peer-load`, `/peer-exited`), deferred background, retirement drain, memory limit (R13, R15, R18–R20).
+8. [x] Application seamless flow with failure paths; host multi-worker bookkeeping and relay (R9–R12, R16, R25).
+9. [x] Boot delegation with crash guard; backup before an adopted bootstrap migrates (R26, R27, R30).
+10. [x] Status flag, phases, confirmation text, locales and tests (R28).
+11. [x] Integration test with real binaries: switch under continuous load and a long stream, no refused connection, stream completes on the old worker, background on one worker; classic fallback and delegation tests.
+12. [x] go vet, golangci-lint, go test, go test -race, web checks; record results.
 
 ## Open questions
 

@@ -65,7 +65,7 @@ handoff-capable, running schema at least the candidate's floor) takes the
 backup online, starts the candidate beside the running worker on the shared
 socket, activates it, retires the previous worker and moves background work;
 the previous worker finishes accepted requests (up to 30 minutes) and exits.
-The seamless-updates change context in `openspec/changes/archive/` describes
+[The seamless-updates change context](../../changes/archive/2026-10-28-seamless-updates/context.md) describes
 the sequence and failure modes. A classic switch waits up to ten minutes for
 no active HTTP/SSE/Responses turn/realtime call, then briefly closes admission;
 idle Responses sockets reconnect.
