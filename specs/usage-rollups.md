@@ -58,7 +58,7 @@ When the tail or journal exceeds 20 000 rows, or the layout or status does not m
 
 ### 3. Verify and measure
 
-hourly verifier --compare rollup and raw paths--> match | mismatch --log, count, rebuild--> consistent rollups
+hourly verifier --compare rollup and raw paths--> [match, mismatch] --log, count and rebuild on a mismatch--> consistent rollups
 
 Requirements:
 
