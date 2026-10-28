@@ -148,6 +148,8 @@ func (s *ReportsService) requestLogFilter(p RequestLogParams) (domain.RequestLog
 			duration = 24 * time.Hour
 		case "7d":
 			duration = 7 * 24 * time.Hour
+		case "30d":
+			duration = 30 * 24 * time.Hour
 		default:
 			return domain.RequestLogFilter{}, domain.ErrInvalid
 		}

@@ -28,7 +28,9 @@ func (s *ReportsService) Conversations(ctx context.Context, p ConversationParams
 	}
 	if p.Timeframe != "" {
 		switch p.Timeframe {
-		case "1d":
+		case "1h":
+			since = now.Add(-time.Hour)
+		case "1d", "24h":
 			since = now.Add(-24 * time.Hour)
 		case "7d":
 			since = now.Add(-7 * 24 * time.Hour)

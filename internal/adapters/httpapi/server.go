@@ -28,6 +28,9 @@ type Repository interface {
 	application.ReportsRepository
 	application.AffinityRepository
 	application.DashboardSessions
+	application.OverviewRepository
+	application.ShellStatusRepository
+	application.DirectoryRepository
 }
 
 type Config struct {
@@ -161,6 +164,7 @@ func (s *Server) adminRoutes() *http.ServeMux {
 	admin := http.NewServeMux()
 	s.registerAdmin(admin)
 	s.registerReportsRoutes(admin, s.store)
+	s.registerOverviewRoutes(admin)
 	s.registerAffinityRoutes(admin)
 	if s.modelPricing != nil {
 		s.modelPricing.RegisterAdminRoutes(admin)
