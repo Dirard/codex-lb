@@ -59,4 +59,11 @@ jobs:
           if [[ -f "dist/${GITHUB_REF_NAME}/SHA256SUMS.sig" ]]; then
             assets+=("dist/${GITHUB_REF_NAME}/SHA256SUMS.sig")
           fi
-          gh release create "${GITHUB_REF_NAME}" --verify-tag --title "$title" --notes-file "$notes" "${assets[@]}"
+          # A release that older installations cannot apply (for example a new
+          # schema before they have the migrating updater) ships as a
+          # prerelease, which their updater ignores, until it is promoted.
+          channel=()
+          if grep -qx '<!-- prerelease -->' "$notes"; then
+            channel=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" --verify-tag "${channel[@]}" --title "$title" --notes-file "$notes" "${assets[@]}"
