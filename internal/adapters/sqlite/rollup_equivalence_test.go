@@ -167,6 +167,33 @@ func rollupEquivalenceCases(t *testing.T, random *rand.Rand) []rollupReadCase {
 	t.Helper()
 	cases := rollupReportCases(t)
 	cases = append(cases, rollupDashboardCases(random)...)
+	cases = append(cases, rollupKeyCases(random)...)
+	return cases
+}
+
+// rollupKeyCases are key usage and trends of named, prefixed and unknown keys
+// over seven days at random instants.
+func rollupKeyCases(random *rand.Rand) []rollupReadCase {
+	var cases []rollupReadCase
+	for _, key := range []string{"key-0", "key-1", "\x1fk", "missing"} {
+		for range 3 {
+			until := rollupRandomInstant(random)
+			since := until.Add(-7 * 24 * time.Hour)
+			cases = append(cases, rollupReadCase{
+				name:   fmt.Sprintf("key usage %q %s", key, until),
+				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.keyUsage7Day(ctx, key, since, until) },
+				raw:    func(ctx context.Context, tx *sql.Tx) (any, error) { return keyUsage7DayRaw(ctx, tx, key, since, until) },
+			}, rollupReadCase{
+				name: fmt.Sprintf("key trends %q %s", key, until),
+				rollup: func(ctx context.Context, r *rollupRead) (any, error) {
+					return r.keyTrendBuckets(ctx, key, since, until)
+				},
+				raw: func(ctx context.Context, tx *sql.Tx) (any, error) {
+					return keyTrendBucketsRaw(ctx, tx, key, since, until)
+				},
+			})
+		}
+	}
 	return cases
 }
 
