@@ -36,71 +36,81 @@ func reportCostUSD(legacy float64, micro int64) float64 {
 	return reportCost{legacy: kbnSum{sum: legacy}, micro: micro}.value()
 }
 
-// QueryReports evaluates the admin report in a bounded number of statements:
-// folded hourly measures, folded hourly conversations and one ordered pass over
-// raw events feed every per-day row, median, breakdown and the summary. Per-day
-// rows previously cost five statements per day of the window.
+// QueryReports evaluates the admin report in a bounded number of statements
+// from rollups (reports_rollup.go) or, as fallback and oracle, from raw
+// events: folded hourly measures, folded hourly conversations and one ordered
+// pass over raw events feed every per-day row, median, breakdown and the
+// summary. Per-day rows previously cost five statements per day of the window.
 func (s *Store) QueryReports(ctx context.Context, filter domain.ReportFilter) (domain.ReportsResponse, error) {
-	var response domain.ReportsResponse
-	response.Daily = []domain.DailyReportRow{}
-	response.ByModel = []domain.ModelCostEntry{}
-	response.ByUserAgent = []domain.UserAgentCostEntry{}
-	response.ByAccount = []domain.AccountCostEntry{}
 	if err := checkedReportWindow(filter.Start, filter.End); err != nil {
-		return response, err
+		return emptyReportsResponse(), err
 	}
 	if filter.Location == nil {
 		filter.Location = time.UTC
 	}
-	tx, err := s.analyticsDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return response, err
-	}
-	defer tx.Rollback()
+	return analyticsRead(ctx, s, func(r *rollupRead) (domain.ReportsResponse, error) { return r.queryReports(ctx, filter) },
+		func(tx *sql.Tx) (domain.ReportsResponse, error) { return queryReportsRaw(ctx, tx, filter) })
+}
+
+func emptyReportsResponse() domain.ReportsResponse {
+	return domain.ReportsResponse{Daily: []domain.DailyReportRow{}, ByModel: []domain.ModelCostEntry{},
+		ByUserAgent: []domain.UserAgentCostEntry{}, ByAccount: []domain.AccountCostEntry{}}
+}
+
+func queryReportsRaw(ctx context.Context, tx *sql.Tx, filter domain.ReportFilter) (domain.ReportsResponse, error) {
 	pass := newReportPass(filter)
 	if err := pass.readHourly(ctx, tx); err != nil {
-		return response, err
+		return emptyReportsResponse(), err
 	}
 	if err := pass.readHourlyConversations(ctx, tx); err != nil {
-		return response, err
+		return emptyReportsResponse(), err
 	}
 	if err := pass.readRawEvents(ctx, tx); err != nil {
-		return response, err
+		return emptyReportsResponse(), err
 	}
 	previous, err := reportWindowTotals(ctx, tx, filter, filter.PreviousStart, filter.Start)
 	if err != nil {
-		return response, err
+		return emptyReportsResponse(), err
 	}
+	var canCompare bool
 	facts, args := reportFacts(filter, time.Unix(0, 0), filter.PreviousStart)
-	if err := tx.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&response.Comparison.CanCompare); err != nil {
-		return response, err
+	if err := tx.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&canCompare); err != nil {
+		return emptyReportsResponse(), err
 	}
+	return pass.response(ctx, tx, previous, canCompare)
+}
+
+// response assembles the report of a finished pass with the comparison
+// window, the account aliases and the folded user-agent total.
+func (p *reportPass) response(ctx context.Context, tx *sql.Tx, previous reportAggregate, canCompare bool) (domain.ReportsResponse, error) {
+	response := emptyReportsResponse()
+	response.Comparison.CanCompare = canCompare
 	aliases, err := reportAccountAliases(ctx, tx)
 	if err != nil {
 		return response, err
 	}
 	var foldedCost float64
 	var foldedRequests int64
-	hourlyWhere, hourlyArgs := hourlyReportWhere(filter, filter.Start, filter.End)
+	hourlyWhere, hourlyArgs := hourlyReportWhere(p.filter, p.filter.Start, p.filter.End)
 	if err := tx.QueryRowContext(ctx, `SELECT coalesce(sum(h.cost_usd),0),coalesce(sum(h.request_count),0)
  FROM legacy_hourly_usage h WHERE `+hourlyWhere, hourlyArgs...).Scan(&foldedCost, &foldedRequests); err != nil {
 		return response, err
 	}
-	current := pass.window.result()
+	current := p.window.result()
 	response.Summary = domain.ReportSummary{TotalCostUSD: roundReport(current.costUSD, 4),
 		TotalInputTokens: current.input, TotalOutputTokens: current.output,
 		TotalReasoningTokens: current.reasoning, ReasoningUsageKnownRequests: current.known,
 		TotalCachedTokens: current.cached, TotalRequests: current.requests,
 		TotalCancelled: current.cancelled, TotalErrors: current.errors,
-		TotalConversations: int64(len(pass.conversations)), ActiveAccounts: current.accounts}
+		TotalConversations: int64(len(p.conversations)), ActiveAccounts: current.accounts}
 	response.Comparison.Previous.TotalCostUSD = roundReport(previous.costUSD, 4)
 	response.Comparison.Previous.TotalTokens = previous.input + previous.output
 	response.Comparison.Previous.TotalRequests = previous.requests
-	response.Daily = pass.dailyRows()
-	response.ByModel = pass.byModel()
-	response.ByAccount = pass.byAccount(aliases)
-	response.ByUserAgent = pass.byUserAgent(foldedCost, foldedRequests)
-	return response, tx.Commit()
+	response.Daily = p.dailyRows()
+	response.ByModel = p.byModel()
+	response.ByAccount = p.byAccount(aliases)
+	response.ByUserAgent = p.byUserAgent(foldedCost, foldedRequests)
+	return response, nil
 }
 
 // kbnSum reproduces SQLite's sum() of REAL values (Kahan-Babuska-Neumaier).
@@ -497,7 +507,7 @@ func reportWindowTotals(ctx context.Context, tx *sql.Tx, filter domain.ReportFil
 	return result, err
 }
 
-func (s *Store) aggregateReportWindow(ctx context.Context, filter domain.ReportFilter, start, end time.Time) (reportAggregate, error) {
+func aggregateReportWindow(ctx context.Context, q analyticsQuerier, filter domain.ReportFilter, start, end time.Time) (reportAggregate, error) {
 	var result reportAggregate
 	facts, args := reportFacts(filter, start, end)
 	query := facts + `SELECT coalesce(sum(request_count),0),coalesce(sum(input_tokens),0),
@@ -508,17 +518,17 @@ func (s *Store) aggregateReportWindow(ctx context.Context, filter domain.ReportF
  count(DISTINCT CASE WHEN account_id!=char(31) THEN account_id END) FROM facts`
 	var legacyCost float64
 	var costMicro int64
-	err := s.analyticsDB.QueryRowContext(ctx, query, args...).Scan(&result.requests, &result.input, &result.output,
+	err := q.QueryRowContext(ctx, query, args...).Scan(&result.requests, &result.input, &result.output,
 		&result.reasoning, &result.known, &result.cached, &legacyCost, &costMicro, &result.errors,
 		&result.cancelled, &result.accounts)
 	result.costUSD = reportCostUSD(legacyCost, costMicro)
 	return result, err
 }
 
-func (s *Store) reportHasActivityBefore(ctx context.Context, filter domain.ReportFilter, before time.Time) (bool, error) {
+func reportHasActivityBefore(ctx context.Context, q analyticsQuerier, filter domain.ReportFilter, before time.Time) (bool, error) {
 	facts, args := reportFacts(filter, time.Unix(0, 0), before)
 	var exists bool
-	err := s.analyticsDB.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&exists)
+	err := q.QueryRowContext(ctx, facts+"SELECT EXISTS(SELECT 1 FROM facts)", args...).Scan(&exists)
 	return exists, err
 }
 

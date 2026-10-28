@@ -42,7 +42,7 @@ func (s *Store) KeyUsage7Day(ctx context.Context, keyID string, since, until tim
 		return result, ErrInvalid
 	}
 	filter := domain.ReportFilter{APIKeyIDs: []string{keyID}}
-	usage, err := s.aggregateReportWindow(ctx, filter, since, until)
+	usage, err := aggregateReportWindow(ctx, s.analyticsDB, filter, since, until)
 	if err != nil {
 		return result, err
 	}

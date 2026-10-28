@@ -39,7 +39,7 @@ func (s *Store) referenceQueryReports(ctx context.Context, filter domain.ReportF
 	if err != nil {
 		return response, err
 	}
-	conversations, err := s.countReportConversations(ctx, filter, filter.Start, filter.End)
+	conversations, err := countReportConversations(ctx, s.analyticsDB, filter, filter.Start, filter.End)
 	if err != nil {
 		return response, err
 	}
@@ -52,7 +52,7 @@ func (s *Store) referenceQueryReports(ctx context.Context, filter domain.ReportF
 	response.Comparison.Previous.TotalCostUSD = roundReport(previous.costUSD, 4)
 	response.Comparison.Previous.TotalTokens = previous.input + previous.output
 	response.Comparison.Previous.TotalRequests = previous.requests
-	response.Comparison.CanCompare, err = s.reportHasActivityBefore(ctx, filter, filter.PreviousStart)
+	response.Comparison.CanCompare, err = reportHasActivityBefore(ctx, s.analyticsDB, filter, filter.PreviousStart)
 	if err != nil {
 		return response, err
 	}
@@ -96,7 +96,7 @@ func (s *Store) referenceDailyReport(ctx context.Context, filter domain.ReportFi
 		reasoning := values.reasoning
 		row.ReasoningTokens = &reasoning
 	}
-	row.Conversations, err = s.countReportConversations(ctx, filter, start, end)
+	row.Conversations, err = countReportConversations(ctx, s.analyticsDB, filter, start, end)
 	if err != nil {
 		return row, err
 	}

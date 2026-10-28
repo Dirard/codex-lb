@@ -27,6 +27,12 @@ var rollupFixtureBase = time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
 // TTFT and negative queue latency.
 func insertRollupFixture(t testing.TB, s *Store, random *rand.Rand, first, n int, span time.Duration) {
 	t.Helper()
+	insertRollupFixtureAt(t, s, random, first, n, rollupFixtureBase, span)
+}
+
+// insertRollupFixtureAt is insertRollupFixture over [base, base+span).
+func insertRollupFixtureAt(t testing.TB, s *Store, random *rand.Rand, first, n int, base time.Time, span time.Duration) {
+	t.Helper()
 	accounts := []any{"acct-0", "acct-1", nil, "", "\x1fodd"}
 	keys := []any{"key-0", "key-1", nil, "\x1fk"}
 	statuses := []string{"success", "completed", "cancelled", "error", "quota"}
@@ -49,7 +55,7 @@ func insertRollupFixture(t testing.TB, s *Store, random *rand.Rand, first, n int
  latency_first_token_ms,legacy_request_id,legacy_deleted) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			fmt.Sprintf("req-%06d", i), keys[random.IntN(len(keys))], accounts[random.IntN(len(accounts))],
 			fmt.Sprintf("model-%d", random.IntN(3)), statuses[random.IntN(len(statuses))], codes[random.IntN(len(codes))],
-			kinds[random.IntN(len(kinds))], millis(rollupFixtureBase)+random.Int64N(span.Milliseconds()),
+			kinds[random.IntN(len(kinds))], millis(base)+random.Int64N(span.Milliseconds()),
 			conversations[random.IntN(len(conversations))], agents[random.IntN(len(agents))], efforts[random.IntN(len(efforts))],
 			random.Int64N(5000), random.Int64N(800), random.Int64N(6000), random.Int64N(300), random.IntN(2),
 			random.Int64N(90000), random.Int64N(60)-5, random.Int64N(40000), ttft, legacy, random.IntN(7)/6); err != nil {
