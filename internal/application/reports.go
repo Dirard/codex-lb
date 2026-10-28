@@ -39,6 +39,7 @@ type ReportParams struct {
 
 type RequestLogParams struct {
 	Limit, Offset                                                           int
+	Cursor                                                                  string
 	Search, ConversationID, Timeframe                                       string
 	Since, Until                                                            *time.Time
 	AccountIDs, APIKeyIDs, Statuses, Models, ReasoningEfforts, ModelOptions []string
@@ -156,7 +157,18 @@ func (s *ReportsService) requestLogFilter(p RequestLogParams) (domain.RequestLog
 	if since != nil && p.Until != nil && !since.Before(*p.Until) {
 		return domain.RequestLogFilter{}, domain.ErrInvalid
 	}
-	filter := domain.RequestLogFilter{Limit: p.Limit, Offset: p.Offset, Search: strings.TrimSpace(p.Search),
+	var before *domain.RequestLogCursor
+	if p.Cursor != "" {
+		if p.Offset != 0 {
+			return domain.RequestLogFilter{}, domain.ErrInvalid
+		}
+		cursor, err := domain.ParseRequestLogCursor(p.Cursor)
+		if err != nil {
+			return domain.RequestLogFilter{}, err
+		}
+		before = &cursor
+	}
+	filter := domain.RequestLogFilter{Limit: p.Limit, Offset: p.Offset, Before: before, Search: strings.TrimSpace(p.Search),
 		ConversationID: strings.TrimSpace(p.ConversationID), Since: since, Until: p.Until,
 		AccountIDs: uniqueNonblank(p.AccountIDs), APIKeyIDs: uniqueNonblank(p.APIKeyIDs),
 		Statuses: uniqueNonblank(p.Statuses), Models: uniqueNonblank(p.Models),
@@ -174,24 +186,24 @@ func (s *ReportsService) requestLogFilter(p RequestLogParams) (domain.RequestLog
 	return filter, nil
 }
 
+// PruneRequestLogs folds and deletes one bounded batch of request events older
+// than the validated retention window; 0 disables it.
 func (s *ReportsService) PruneRequestLogs(ctx context.Context, retentionDays int) (int, error) {
-	if retentionDays == 0 {
-		return 0, nil
+	cutoff, ok, err := retentionCutoff(s.now().UTC(), retentionDays, domain.MinRequestLogRetentionDays)
+	if err != nil || !ok {
+		return 0, err
 	}
-	if retentionDays < 30 || retentionDays > 3650 {
-		return 0, domain.ErrInvalid
-	}
-	return s.repo.FoldAndPruneRequestLogs(ctx, s.now().UTC().AddDate(0, 0, -retentionDays), 1000)
+	return s.repo.FoldAndPruneRequestLogs(ctx, cutoff, RetentionBatch)
 }
 
+// PruneAccountQuotaHistory deletes one bounded batch of quota history older
+// than the validated retention window; 0 disables it.
 func (s *ReportsService) PruneAccountQuotaHistory(ctx context.Context, retentionDays int) (int, error) {
-	if retentionDays == 0 {
-		return 0, nil
+	cutoff, ok, err := retentionCutoff(s.now().UTC(), retentionDays, domain.MinUsageHistoryRetentionDays)
+	if err != nil || !ok {
+		return 0, err
 	}
-	if retentionDays < 45 || retentionDays > 3650 {
-		return 0, domain.ErrInvalid
-	}
-	return s.repo.PruneAccountQuotaHistory(ctx, s.now().UTC().AddDate(0, 0, -retentionDays), 1000)
+	return s.repo.PruneAccountQuotaHistory(ctx, cutoff, RetentionBatch)
 }
 
 func uniqueNonblank(values []string) []string {

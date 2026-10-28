@@ -11,18 +11,27 @@ import (
 type retainedEvent struct {
 	id, model, tier, kind, status                     string
 	account, key, errorCode, conversation, legacyID   sql.NullString
+	reservation                                       sql.NullString
 	requested, input, output, reasoning, cached, cost int64
 	known, deleted                                    bool
 }
 
+// settledReservationRetention keeps settled reservations for a week after their
+// last update so late outcome, continuation and reconciliation lookups resolve.
+const settledReservationRetention = 7 * 24 * time.Hour
+
 // FoldAndPruneRequestLogs removes only event detail after atomically folding
 // its content-free measures. Lifetime usage_totals are intentionally untouched.
+// The reservation of a pruned event is removed in the same job when nothing can
+// reference it any more (see deletableReservationSQL).
 func (s *Store) FoldAndPruneRequestLogs(ctx context.Context, cutoff time.Time, limit int) (int, error) {
-	if cutoff.IsZero() || limit < 1 || limit > 1000 {
+	if cutoff.IsZero() || !validRetentionBatch(limit) {
 		return 0, ErrInvalid
 	}
 	count := 0
-	err := transact(ctx, s.db, func(tx *sql.Tx) error {
+	reservationCutoff := millis(time.Now().Add(-settledReservationRetention))
+	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		count = 0
 		var importWatermark sql.NullInt64
 		err := tx.QueryRowContext(ctx, `SELECT hourly_folded_through FROM legacy_import_state WHERE id=1`).Scan(&importWatermark)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -31,7 +40,7 @@ func (s *Store) FoldAndPruneRequestLogs(ctx context.Context, cutoff time.Time, l
 		rows, err := tx.QueryContext(ctx, `SELECT request_id,account_id,api_key_id,model,service_tier,
  request_kind,status,error_code,conversation_id,legacy_request_id,requested_at,input_tokens,
  output_tokens,reasoning_tokens,cached_input_tokens,cost_microdollars,reasoning_tokens_known,
- legacy_deleted FROM usage_events WHERE requested_at<? ORDER BY requested_at,request_id LIMIT ?`,
+ legacy_deleted,reservation_id FROM usage_events WHERE requested_at<? ORDER BY requested_at,request_id LIMIT ?`,
 			millis(cutoff), limit)
 		if err != nil {
 			return err
@@ -41,7 +50,7 @@ func (s *Store) FoldAndPruneRequestLogs(ctx context.Context, cutoff time.Time, l
 			var e retainedEvent
 			if err := rows.Scan(&e.id, &e.account, &e.key, &e.model, &e.tier, &e.kind, &e.status,
 				&e.errorCode, &e.conversation, &e.legacyID, &e.requested, &e.input, &e.output,
-				&e.reasoning, &e.cached, &e.cost, &e.known, &e.deleted); err != nil {
+				&e.reasoning, &e.cached, &e.cost, &e.known, &e.deleted, &e.reservation); err != nil {
 				rows.Close()
 				return err
 			}
@@ -61,6 +70,12 @@ func (s *Store) FoldAndPruneRequestLogs(ctx context.Context, cutoff time.Time, l
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM usage_events WHERE request_id=?", e.id); err != nil {
 				return err
+			}
+			if e.reservation.Valid {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM usage_reservations AS r WHERE r.id=? AND `+deletableReservationSQL,
+					e.reservation.String, reservationCutoff); err != nil {
+					return err
+				}
 			}
 			count++
 		}

@@ -27,7 +27,9 @@ func TestCompleteQuotaSnapshotReplacesWindowsAndRepairsWeeklyHistory(t *testing.
 			t.Fatal(err)
 		}
 	}
-	at := base.Add(time.Minute)
+	// The corrected observation is followed by one in the next history bucket;
+	// an observation inside the same bucket would intentionally coalesce.
+	at := base.Add(5 * time.Minute)
 	snapshot := domain.AccountUsageSnapshot{AccountID: "weekly", ObservedAt: at, ReplaceQuotaWindows: true,
 		Quotas: []domain.AccountQuota{{AccountID: "weekly", Window: "secondary", UsedPercent: 41, WindowMinutes: &week, ObservedAt: at}}}
 	if err := store.SaveAccountUsageSnapshot(ctx, snapshot); err != nil {

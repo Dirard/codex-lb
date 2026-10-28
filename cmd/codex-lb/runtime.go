@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"codex-lb/internal/adapters/backups"
 	"codex-lb/internal/adapters/chatgpt"
 	"codex-lb/internal/adapters/egress"
 	"codex-lb/internal/adapters/hostinfo"
@@ -41,6 +43,7 @@ type runtime struct {
 	usage          *application.AccountUsageService
 	catalog        *application.ModelCatalogService
 	automations    *application.AutomationsService
+	backups        *application.BackupService
 	backgroundCtx  context.Context
 	stopBackground context.CancelFunc
 	background     sync.WaitGroup
@@ -53,6 +56,8 @@ type runtime struct {
 	capacity       domain.CapacityPlan
 	started        time.Time
 	nextRetention  time.Time // owned by the maintenance loop
+	nextOptimize   time.Time
+	retention      *application.RetentionService
 }
 
 func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime, error) {
@@ -171,11 +176,23 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	automations.ConfigureBackground(application.BackgroundSchedule{InitialDelay: startupJitter(5*time.Second, 10*time.Second), Report: reporter.report})
 	catalog.ConfigureBackground(application.BackgroundSchedule{InitialDelay: startupJitter(30*time.Second, 30*time.Second), Report: reporter.report})
 	api.ConfigureAutomations(automations)
+	backupFiles, err := backups.OpenDirectory(filepath.Join(cfg.dataDir, "backups"))
+	if err != nil {
+		_ = accounts.Close()
+		_ = tokens.Close()
+		_ = adapter.Close()
+		data.close()
+		return nil, err
+	}
+	backupFiles.RemoveStaleTemps()
+	backupService := application.NewBackupService(sqlite.NewSnapshotter(data.store, data.vault), data.store, backupFiles, time.Now)
+	api.ConfigureBackups(backupService)
 	baseCtx, cancel := context.WithCancel(context.Background())
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	r := &runtime{data: data, accounts: accounts, tokens: tokens, provider: adapter,
 		proxy: proxy, transport: transport, cancel: cancel, config: cfg, logger: logger,
-		usage: usage, catalog: catalog, automations: automations, backgroundCtx: backgroundCtx, stopBackground: stopBackground,
+		usage: usage, catalog: catalog, automations: automations, backups: backupService,
+		backgroundCtx: backgroundCtx, stopBackground: stopBackground,
 		metrics: registry, capacity: capacity, started: openedAt}
 	r.reporter = reporter
 	proxyMux := http.NewServeMux()
@@ -236,11 +253,12 @@ func (r *runtime) serve(ctx context.Context) error {
 }
 
 func (r *runtime) serveListener(ctx context.Context, listener net.Listener) error {
-	r.background.Add(4)
+	r.background.Add(5)
 	go func() {
 		defer r.background.Done()
 		application.RunPeriodic(r.backgroundCtx, "maintenance", application.BackgroundSchedule{Report: r.reporter.report}, time.Minute, nil, r.maintainReports)
 	}()
+	go func() { defer r.background.Done(); r.maintainBackups(r.backgroundCtx) }()
 	go func() { defer r.background.Done(); r.usage.RunUsagePoller(r.backgroundCtx, time.Minute) }()
 	go func() { defer r.background.Done(); _ = r.catalog.Run(r.backgroundCtx) }()
 	go func() { defer r.background.Done(); r.automations.RunAutomationsPoller(r.backgroundCtx) }()

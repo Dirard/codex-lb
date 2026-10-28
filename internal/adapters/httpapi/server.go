@@ -66,6 +66,7 @@ type Server struct {
 	archiveRepo    application.ErrorArchiveRepository
 	runtimeUpdates application.RuntimeUpdater
 	capacity       *RuntimeCapacitySource
+	backups        *application.BackupService
 	accountsOnce   sync.Once
 	// forwardingWarned limits the untrusted-forwarding warning to one record.
 	forwardingWarned atomic.Bool
@@ -176,6 +177,9 @@ func (s *Server) adminRoutes() *http.ServeMux {
 	s.registerRuntimeUpdateRoutes(admin)
 	if s.capacity != nil {
 		s.registerRuntimeCapacityRoutes(admin)
+	}
+	if s.backups != nil {
+		s.registerBackupRoutes(admin)
 	}
 	if s.accounts != nil {
 		s.registerAccountRoutes(admin)

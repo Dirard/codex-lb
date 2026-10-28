@@ -422,8 +422,8 @@ func settleUsageTx(ctx context.Context, tx *sql.Tx, id string, settlement domain
 		delta := actual - i.reserved
 		if delta != 0 {
 			if _, err := tx.ExecContext(ctx, `UPDATE api_key_limits
- SET current_value=current_value+? WHERE id=? AND reset_at=? AND current_value+?>=0`,
-				delta, i.id, i.reset, delta); err != nil {
+ SET current_value=max(0,current_value+?) WHERE id=? AND reset_at=?`,
+				delta, i.id, i.reset); err != nil {
 				return false, err
 			}
 		}

@@ -125,6 +125,8 @@ func (s *Store) ListAutomationJobs(ctx context.Context) ([]domain.AutomationJob,
 	return jobs, nil
 }
 
+// DeleteAutomationJob removes a job and its runs in one transaction; a failed
+// run deletion keeps the job instead of leaving orphaned runs.
 func (s *Store) DeleteAutomationJob(ctx context.Context, id string) error {
 	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, "DELETE FROM automation_jobs WHERE id=?", id)

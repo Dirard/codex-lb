@@ -127,7 +127,7 @@ func parseRequestLogParams(w http.ResponseWriter, r *http.Request) (application.
 	p := application.RequestLogParams{Search: q.Get("search"), ConversationID: q.Get("conversation_id"),
 		Timeframe: q.Get("timeframe"), AccountIDs: q["accountId"], APIKeyIDs: q["apiKeyId"],
 		Statuses: q["status"], Models: q["model"], ReasoningEfforts: q["reasoningEffort"],
-		ModelOptions: q["modelOption"]}
+		ModelOptions: q["modelOption"], Cursor: q.Get("cursor")}
 	if q.Has("limit") {
 		value, err := strconv.Atoi(q.Get("limit"))
 		if err != nil || value < 1 || value > 1000 {

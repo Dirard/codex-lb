@@ -21,6 +21,7 @@ import (
 
 type config struct {
 	dataDir, listen, source, sourceKey        string
+	output                                    string
 	trusted                                   []netip.Prefix
 	unauthenticatedClients                    []netip.Prefix
 	bootstrapToken                            string
@@ -84,6 +85,8 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 			cfg.trusted = append(cfg.trusted, prefix.Masked())
 			return nil
 		})
+	} else if command == "backup" {
+		flags.StringVar(&cfg.output, "output", "", "absolute new snapshot file, or an existing directory for a timestamped name")
 	} else if command == "reconcile-usage" {
 		flags.StringVar(&cfg.reservation, "reservation", "", "interrupted reservation to reconcile; omit to list")
 		flags.StringVar(&cfg.settlement, "settlement", "", "absolute JSON file with confirmed status, usage, optional accountId and serviceTier")
@@ -130,6 +133,11 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		if cfg.authMode == "disabled" && !loopbackListenHost(host) {
 			return cfg, errors.New("dashboard-auth-mode=disabled requires a loopback --listen address")
 		}
+	} else if command == "backup" {
+		if !filepath.IsAbs(cfg.output) {
+			return cfg, errors.New("backup requires an absolute --output file or directory")
+		}
+		cfg.output = filepath.Clean(cfg.output)
 	} else if command == "reconcile-usage" {
 		if cfg.reservation == "" && (cfg.settlement != "" || cfg.releaseReservation) || cfg.reservation != "" && (cfg.afterReservation != "" || cfg.releaseReservation == (cfg.settlement != "")) {
 			return cfg, errors.New("supply --reservation with exactly one of --release or --settlement; omit both to list")

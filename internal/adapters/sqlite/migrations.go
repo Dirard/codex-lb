@@ -262,3 +262,69 @@ CREATE TABLE dashboard_bootstrap_consumed (
  token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64), consumed_at INTEGER NOT NULL
 );
 `
+
+// schemaV36 makes the quota-history series index covering, so projection and
+// demand reads walk one series in index order without table lookups (DB-3).
+// The name is kept because reads pin it with INDEXED BY.
+const schemaV36 = `
+DROP INDEX idx_account_quota_history_identity_time;
+CREATE INDEX idx_account_quota_history_identity_time ON account_quota_history
+ (account_id,window,observed_at DESC,id DESC,used_percent,reset_at,window_minutes);
+`
+
+// schemaV37 persists the online backup schedule (OPS-6). Interval 0 disables
+// scheduled backups; the defaults keep three daily snapshots.
+const schemaV37 = `
+CREATE TABLE backup_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ interval_hours INTEGER NOT NULL DEFAULT 24 CHECK(interval_hours BETWEEN 0 AND 168),
+ keep_count INTEGER NOT NULL DEFAULT 3 CHECK(keep_count BETWEEN 1 AND 30)
+);
+INSERT INTO backup_settings(id) VALUES(1);
+`
+
+// schemaV38 replaces the status/age index, rewritten on every settlement, with
+// partial indexes for the only two access paths: open reservations (pending
+// reconciliation and interrupted-request marking, DB-17) and released
+// reservations awaiting retention (DB-5).
+const schemaV38 = `
+DROP INDEX idx_usage_reservations_status_age;
+CREATE INDEX idx_usage_reservations_open ON usage_reservations(needs_reconciliation,id) WHERE status='reserved';
+CREATE INDEX idx_usage_reservations_released ON usage_reservations(updated_at) WHERE status='released';
+`
+
+// schemaV39 orders request-log pages and keyset cursors by (requested_at,
+// request_id) without a temporary B-tree (DB-16). The new index also serves
+// every time-range scan of the replaced single-column index.
+const schemaV39 = `
+CREATE INDEX idx_usage_events_time_id ON usage_events(requested_at,request_id);
+DROP INDEX idx_usage_events_time;
+`
+
+// schemaV40 keeps error-archive and resource-owner bounds in counters that
+// triggers maintain in the same transaction as every insert or delete, so
+// enforcing them no longer scans every row on each insert (DB-19).
+const schemaV40 = `
+CREATE TABLE error_archive_stats (
+ id INTEGER PRIMARY KEY CHECK(id=1), archive_count INTEGER NOT NULL, archive_bytes INTEGER NOT NULL
+);
+INSERT INTO error_archive_stats(id,archive_count,archive_bytes)
+ SELECT 1,count(*),coalesce(sum(length(content_encrypted)),0) FROM error_archives;
+CREATE TRIGGER error_archives_count_insert AFTER INSERT ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_count=archive_count+1,archive_bytes=archive_bytes+length(NEW.content_encrypted) WHERE id=1;
+END;
+CREATE TRIGGER error_archives_count_delete AFTER DELETE ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_count=archive_count-1,archive_bytes=archive_bytes-length(OLD.content_encrypted) WHERE id=1;
+END;
+CREATE TRIGGER error_archives_count_update AFTER UPDATE OF content_encrypted ON error_archives BEGIN
+ UPDATE error_archive_stats SET archive_bytes=archive_bytes-length(OLD.content_encrypted)+length(NEW.content_encrypted) WHERE id=1;
+END;
+CREATE TABLE codex_resource_owner_stats (id INTEGER PRIMARY KEY CHECK(id=1), owner_count INTEGER NOT NULL);
+INSERT INTO codex_resource_owner_stats(id,owner_count) SELECT 1,count(*) FROM codex_resource_owners;
+CREATE TRIGGER codex_resource_owners_count_insert AFTER INSERT ON codex_resource_owners BEGIN
+ UPDATE codex_resource_owner_stats SET owner_count=owner_count+1 WHERE id=1;
+END;
+CREATE TRIGGER codex_resource_owners_count_delete AFTER DELETE ON codex_resource_owners BEGIN
+ UPDATE codex_resource_owner_stats SET owner_count=owner_count-1 WHERE id=1;
+END;
+`

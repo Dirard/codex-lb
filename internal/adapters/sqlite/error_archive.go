@@ -39,10 +39,58 @@ func (s *Store) SaveErrorArchive(ctx context.Context, e domain.ErrorArchive, max
 		}
 		// The quota covers encrypted payload bytes; record size is independently
 		// bounded above. Old diagnostics may expire without touching usage totals.
-		_, err := tx.ExecContext(ctx, `DELETE FROM error_archives WHERE request_id IN (
- SELECT request_id FROM (SELECT request_id,row_number() OVER (ORDER BY occurred_at DESC,request_id DESC) AS position,sum(length(content_encrypted)) OVER (ORDER BY occurred_at DESC,request_id DESC) AS retained FROM error_archives) WHERE retained>? OR position>10000)`, maxBytes)
-		return err
+		return evictErrorArchivesTx(ctx, tx, maxBytes)
 	})
+}
+
+const maxErrorArchives = 10000
+
+// evictErrorArchivesTx removes the oldest archives until the trigger-maintained
+// counters are within maxBytes and maxErrorArchives: the same newest prefix the
+// former window function kept, in O(evicted rows).
+func evictErrorArchivesTx(ctx context.Context, tx *sql.Tx, maxBytes int64) error {
+	var count, bytes int64
+	if err := tx.QueryRowContext(ctx, "SELECT archive_count,archive_bytes FROM error_archive_stats WHERE id=1").Scan(&count, &bytes); err != nil {
+		return err
+	}
+	for count > maxErrorArchives || bytes > maxBytes {
+		rows, err := tx.QueryContext(ctx, `SELECT request_id,length(content_encrypted) FROM error_archives
+ ORDER BY occurred_at,request_id LIMIT 64`)
+		if err != nil {
+			return err
+		}
+		type victim struct {
+			id   string
+			size int64
+		}
+		var victims []victim
+		for rows.Next() {
+			var item victim
+			if err := rows.Scan(&item.id, &item.size); err != nil {
+				rows.Close()
+				return err
+			}
+			victims = append(victims, item)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(victims) == 0 {
+			return nil
+		}
+		for _, item := range victims {
+			if count <= maxErrorArchives && bytes <= maxBytes {
+				break
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM error_archives WHERE request_id=?", item.id); err != nil {
+				return err
+			}
+			count, bytes = count-1, bytes-item.size
+		}
+	}
+	return nil
 }
 
 func (s *Store) QueryErrorArchives(ctx context.Context, f domain.ErrorArchiveFilter, now time.Time) (domain.ErrorArchivePage, error) {
