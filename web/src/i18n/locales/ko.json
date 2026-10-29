@@ -1162,6 +1162,7 @@
   "reports.summary.activeKeys": "활성 키",
   "reports.summary.activeKeysValue": "{{total}}개 중 {{active}}개",
   "reports.summary.previousPeriod": "이전 기간: {{value}}",
+  "reports.summary.scopeNote": "현재 API 키만 집계합니다. 삭제된 키, 내부 키, 키 없이 보낸 요청은 포함되지 않습니다.",
   "reports.columns.key": "키",
   "reports.columns.group": "그룹",
   "reports.columns.activeKeys": "활성/선택 키",

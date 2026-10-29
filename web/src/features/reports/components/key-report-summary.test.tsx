@@ -34,6 +34,8 @@ describe("KeyReportSummary", () => {
     expect(metric("errors")).toHaveTextContent("Errors10");
     expect(metric("errors")).toHaveTextContent("Error rate 5.0%");
     expect(metric("active-keys")).toHaveTextContent("Active keys1 of 2");
+    // The totals can differ from the overview's pool spend, so the scope is stated.
+    expect(screen.getByTestId("key-report-scope-note")).toHaveTextContent("deleted and internal keys");
   });
 
   it("hides every indicator without a previous period", () => {

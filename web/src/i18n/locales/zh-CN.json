@@ -1162,6 +1162,7 @@
   "reports.summary.activeKeys": "活跃密钥",
   "reports.summary.activeKeysValue": "{{active}} / {{total}}",
   "reports.summary.previousPeriod": "上一时间段：{{value}}",
+  "reports.summary.scopeNote": "仅统计当前的 API 密钥：不包括已删除的密钥、内部密钥和未携带密钥的请求。",
   "reports.columns.key": "密钥",
   "reports.columns.group": "分组",
   "reports.columns.activeKeys": "活跃/已选密钥",

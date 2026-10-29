@@ -1162,6 +1162,7 @@
   "reports.summary.activeKeys": "Active keys",
   "reports.summary.activeKeysValue": "{{active}} of {{total}}",
   "reports.summary.previousPeriod": "Previous period: {{value}}",
+  "reports.summary.scopeNote": "Counts current API keys only: deleted and internal keys and requests without a key are not included.",
   "reports.columns.key": "Key",
   "reports.columns.group": "Group",
   "reports.columns.activeKeys": "Keys active/selected",
