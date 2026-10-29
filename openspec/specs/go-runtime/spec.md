@@ -2574,7 +2574,7 @@ When the request finally fails with an upstream 429, the response SHALL carry th
 - `Retry-After`;
 - `X-Codex-Active-Limit`;
 - every `X-Image-Gen-*` header;
-- the `X-Codex-Primary-*` and `X-Codex-Secondary-*` used-percent, window and reset headers, when `X-Codex-Active-Limit` names an image limit.
+- when `X-Codex-Active-Limit` names an image limit, that limit's own window headers (`X-<limit id with dashes>-*`, for example `X-Imagegen-Premium-*` for `imagegen_premium`) and the `X-Codex-Primary-*` and `X-Codex-Secondary-*` used-percent, window and reset headers.
 
 Usage events SHALL record request kind `image_generation` or `image_edit` with the effective public image model. Error diagnostics of image requests SHALL NOT store `images` or `mask` payloads.
 
@@ -2612,8 +2612,9 @@ Usage events SHALL record request kind `image_generation` or `image_edit` with t
 - **AND** the first attempt is settled uncharged, both accounts keep their health and quota state, and the first account receives no image request for 10 minutes
 
 #### Scenario: A final image-limit refusal carries the reset headers
-- **WHEN** every tried account answers 429 `usage_limit_reached` with `Retry-After`, `X-Codex-Active-Limit: image_gen` and `X-Image-Gen-Primary-Reset-At`
+- **WHEN** every tried account answers 429 `usage_limit_reached` with `Retry-After`, `X-Codex-Active-Limit: imagegen_premium`, `X-Image-Gen-Primary-Reset-At` and `X-Imagegen-Premium-Primary-Reset-At`
 - **THEN** the client receives the last 429 body together with those headers unchanged
+- **AND** the account's plan and credit headers are not passed
 
 #### Scenario: A file-pinned edit stays on its owner
 - **WHEN** an edit references a `file_id` created through codex-lb on one account and that account refuses with 429

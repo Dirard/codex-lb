@@ -5,4 +5,4 @@
 
 ## 2. Verification
 
-- [ ] 2.1 Gates and strict OpenSpec validation.
+- [x] 2.1 Gates and strict OpenSpec validation.

@@ -262,7 +262,7 @@ Tests:
 13. [x] Streamed image responses: validation, provider read, SSE relay, settlement (R14, R15).
 14. [x] Responses image-limit classification, settlement and client envelope (R16).
 15. [x] Tests, gates, release notes (`go-v1.7.0`), archive the change.
-16. [ ] Pass the active image limit's own window headers (`X-<limit>-*`, OpenSpec `pass-image-limit-windows`, `go-v1.7.1`) (R13).
+16. [x] Pass the active image limit's own window headers (`X-<limit>-*`, OpenSpec `pass-image-limit-windows`, `go-v1.7.1`) (R13).
 
 Deferred:
 - GPT Image 2.5 Sunburst and Flare with real `model`, `quality` (up to `max`), `size` (up to 3840 px) and transparent backgrounds need an OpenAI API key source with an images capability. This includes a per-key or per-group image model, because Codex always sends `gpt-image-2`. The subscription endpoint ignores these fields.
