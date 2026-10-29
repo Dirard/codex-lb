@@ -23,4 +23,4 @@
 
 - [x] 5.1 Gates: Go build, vet, lint, tests, race; web lint, typecheck, tests, build; OpenSpec strict validation.
 - [ ] 5.2 Contract tests for the new endpoints (done); production-copy latency run (needs operator approval).
-- [ ] 5.3 Release notes listing the deprecation of `GET /api/dashboard/overview` and `GET /api/dashboard/projections`.
+- [x] 5.3 Release notes listing the deprecation of `GET /api/dashboard/overview` and `GET /api/dashboard/projections`.

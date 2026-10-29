@@ -16,5 +16,5 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Backfill and read benchmarks; latency run on a copy of production data.
-- [ ] 4.2 Gates and strict OpenSpec validation.
+- [x] 4.1 Backfill and read benchmarks; latency run on a copy of production data.
+- [x] 4.2 Gates and strict OpenSpec validation.
