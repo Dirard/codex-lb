@@ -342,3 +342,58 @@ func TestStalledUploadReleasesItsChargeAtTheIdleDeadline(t *testing.T) {
 		t.Fatalf("usage = %+v", usage)
 	}
 }
+
+// gatedReader blocks its first read until resume closes, after reporting it
+// is waiting.
+type gatedReader struct {
+	source  io.Reader
+	waiting chan<- struct{}
+	resume  <-chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	g.once.Do(func() {
+		close(g.waiting)
+		<-g.resume
+	})
+	return g.source.Read(p)
+}
+
+// A read is granted no more than its declared body can still return. The
+// grant used to be a whole chunk even past the declared length, so a body
+// waiting for bytes could hold up to bodyChargeChunk more than it would ever
+// read, and a body that fit the budget beside it was refused with 503.
+func TestChargedReadersOfDeclaredBodiesThatFitTogetherAreAdmitted(t *testing.T) {
+	const size = 48 << 10
+	bodies := NewBodyBudget(2*size, 0)
+	waiting, resume := make(chan struct{}), make(chan struct{})
+	first := &chargedReader{source: &gatedReader{source: strings.NewReader(strings.Repeat("a", size)), waiting: waiting, resume: resume}, lease: bodies.lease("a"), declared: size}
+	type result struct {
+		body []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		buffer := make([]byte, bodyChargeChunk)
+		n, err := first.Read(buffer)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		rest, err := io.ReadAll(first)
+		done <- result{body: append(buffer[:n], rest...), err: err}
+	}()
+	<-waiting
+	second := &chargedReader{source: strings.NewReader(strings.Repeat("b", size)), lease: bodies.lease("b"), declared: size}
+	if body, err := io.ReadAll(second); err != nil || len(body) != size {
+		t.Fatalf("body that fits beside a waiting one: %d bytes, %v, %+v", len(body), err, bodies.Usage())
+	}
+	close(resume)
+	if got := <-done; got.err != nil || len(got.body) != size {
+		t.Fatalf("waiting body: %d bytes, %v", len(got.body), got.err)
+	}
+	if usage := bodies.Usage(); usage.UsedBytes != 2*size || usage.Rejected != 0 {
+		t.Fatalf("usage %+v, want both bodies charged and none refused", usage)
+	}
+}

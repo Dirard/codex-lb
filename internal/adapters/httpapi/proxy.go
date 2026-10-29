@@ -235,7 +235,7 @@ func readProxyBody(w http.ResponseWriter, r *http.Request, lease *bodyLease) (js
 		defer gz.Close()
 		source = gz
 	}
-	return readChargedBody(&chargedReader{source: source, lease: lease, limit: maximum})
+	return readChargedBody(newChargedReader(r, source, lease, maximum, compressed))
 }
 
 func proxyError(err error) (int, string, string) {
