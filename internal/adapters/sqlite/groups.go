@@ -11,24 +11,7 @@ import (
 	"codex-lb/internal/domain"
 )
 
-func validateRules(rules []domain.LimitRule) error {
-	seen := make(map[string]bool, len(rules))
-	for _, rule := range rules {
-		if err := rule.Validate(); err != nil {
-			return err
-		}
-		model := ""
-		if rule.ModelFilter != nil {
-			model = *rule.ModelFilter
-		}
-		id := string(rule.Type) + "\x00" + string(rule.Window) + "\x00" + model
-		if seen[id] {
-			return fmt.Errorf("duplicate limit: %w", ErrInvalid)
-		}
-		seen[id] = true
-	}
-	return nil
-}
+func validateRules(rules []domain.LimitRule) error { return domain.ValidateLimitRules(rules) }
 
 func (s *Store) SaveGroup(ctx context.Context, g domain.AccountGroup, now time.Time) error {
 	g.Name = strings.TrimSpace(g.Name)
