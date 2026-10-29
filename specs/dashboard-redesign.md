@@ -535,7 +535,7 @@ Sections in screen order; "admin" marks parts that only the administrator sees.
 2. Period picker, the page's only period control: Today, 7 d (default), 30 d, 90 d, custom up to 730 days; `?from=YYYY-MM-DD&to=YYYY-MM-DD` in the URL. Sections 4–9 follow it; sections 3 and 10 are labelled "current".
 3. Limits (current windows): per limit its type, window, model filter, used/max, %, reset time (absolute and relative) and projected exhaustion ("runs out at 14:20 at the last 3 h pace" or "lasts until reset"); expired windows show 0 and the advanced reset. Below them the pool remaining: for an ungrouped key the whole pool's 5 h and weekly remaining with next reset; for a grouped key the group aggregate and purchased credits as today. Owner mode of a grouped key keeps the same-group mini-list.
 4. Period KPIs with the previous-period comparison: requests, input/output/cached tokens and cache share, cost, errors and error rate, cancelled, TTFT p50 and p95.
-5. Usage by day and model: cost per local day stacked by the top 5 models plus other (toggle requests or tokens); by-model table with model, effort, requests, tokens, cost, share, TTFT p50.
+5. Usage by day and model: cost per local day stacked by the top 5 models plus other (toggle requests or tokens); by-model table with model, requests, tokens, cost, share, TTFT p50 (reasoning effort is not a cube dimension; recent requests show it per request).
 6. Errors by code: code, count, share, last seen; error rate per day; link "show these requests".
 7. Latency per day: TTFT p50 and p95, total latency p50 and p95, queue p95, tokens per second p50.
 8. User agents: group, requests, cost, share.
@@ -552,9 +552,9 @@ Events And Endpoints:
   - day × model × user agent × account measures and the TTFT, queue and TPS histograms: `usage_rollup_cube_hour INDEXED BY idx_usage_rollup_cube_key` for the period and the previous period, plus the PR 1 edges, tail and journal, plus `legacy_hourly_usage` through `idx_legacy_hourly_key_account` for pruned days (pruned days have no latency, user agent or error codes);
   - errors by code: `usage_rollup_error_hour` filtered by `api_key_dim` through `idx_usage_rollup_error_key` (Q7);
   - limit pace: `usage_rollup_slice` kind `key`, grain 3600, for the last 3 hours; cube rows by key and model when the limit has a model filter;
-  - recent requests: `usage_events INDEXED BY idx_usage_events_key_time` newest first, plus open reservations as in the request log; errors-only walks the same index only through hours that `usage_rollup_error_hour` reports with errors for the key, reading at most 5 000 rows per call;
+  - recent requests: `usage_events INDEXED BY idx_usage_events_key_time` newest first, plus open reservations as in the request log; errors-only walks the same index newest first and examines at most 5 000 rows per call, continuing after the last examined row (pending entries are not failures and are left out);
   - pool or group remaining: the batch account reads of use case 2.1.
-- Percentiles use the PR 1 histogram rank rule at rank $\lceil q\,n \rceil$; the codec gains `histQuantile(q)` with the same relative bound as the median.
+- Percentiles use the PR 1 codec's `histQuantile(q)`: linear interpolation between the order statistics around rank $q\,(n-1)$, within $1/64$ relative of the same interpolation over the exact values; the raw path builds the same histograms, so both paths agree exactly.
 - Expected cost for the busiest production key (57.7 k events in 7 days, ≈ 3.8 k cube rows per 7 days): 7 d 20–40 ms; 30 d ≈ 16 k cube rows for each of two periods, 40–90 ms; error codes and recent requests under 10 ms; total 60–120 ms. Response 15–40 KB raw.
 - Mutations use existing endpoints: `PATCH /api/api-keys/{id}` (edit, disable, enable, expiry, move with `groupId`), `POST /api/api-keys/{id}/regenerate`, `DELETE /api/api-keys/{id}`, `POST /api/account-groups/{id}/reset-usage` (the confirmation names the whole group).
 
@@ -674,34 +674,40 @@ Recent requests SHALL be read newest first through `idx_usage_events_key_time` w
 The period picker SHALL be the only period control on the page and SHALL be reflected in the URL; the page SHALL poll only while the period includes today.
 
 Files And Functions:
- - planned: web/src/features/key-page/components/key-page.tsx#KeyPage - `mode: "admin" | "owner"`
- - planned: web/src/features/key-page/components/key-limits-section.tsx#KeyLimitsSection - reuses `api-key-limit-usage.tsx` bars
- - planned: web/src/features/key-page/components/key-usage-section.tsx#KeyUsageSection - day by model chart and table
- - planned: web/src/features/key-page/components/key-errors-section.tsx#KeyErrorsSection
- - planned: web/src/features/key-page/components/key-latency-section.tsx#KeyLatencySection
- - planned: web/src/features/key-page/components/key-requests-section.tsx#KeyRequestsSection
- - planned: web/src/features/key-page/components/key-properties-section.tsx#KeyPropertiesSection
- - planned: web/src/features/key-page/api.ts - admin and owner fetchers
- - planned: web/src/features/key-page/schemas.ts
- - existing: web/src/features/key-reports/key-reports-page.tsx - becomes a thin owner wrapper around `KeyPage`
- - existing: web/src/features/key-reports/key-report-limits.tsx - group mini-list reused
- - existing: web/src/features/apis/components/api-detail.tsx - replaced by the route `/keys/:id`
- - planned: internal/application/key_page.go#KeyPageService.Page - owns its port; admin and owner scopes
- - planned: internal/adapters/sqlite/key_page_rollup.go#Store.KeyPeriodUsage - cube rows by key, histograms
- - planned: internal/adapters/sqlite/key_page_rollup.go#Store.KeyErrorCodes
- - planned: internal/adapters/sqlite/key_page_rollup.go#Store.KeyLimitPace
- - planned: internal/adapters/httpapi/key_page.go#keyPage - admin route
- - existing: internal/adapters/httpapi/key_report_session.go - owner `page` and `requests` routes
+ - existing: web/src/features/key-page/components/key-page.tsx#KeyPage - `mode: "admin" | "owner"`
+ - existing: web/src/features/key-page/components/key-limits-section.tsx#KeyLimitsSection - reuses `api-key-limit-usage.tsx` bars and the key report's group mini-list
+ - existing: web/src/features/key-page/components/key-usage-section.tsx#KeyUsageSection - day by model chart and table
+ - existing: web/src/features/key-page/components/key-errors-section.tsx#KeyErrorsSection
+ - existing: web/src/features/key-page/components/key-latency-section.tsx#KeyLatencySection
+ - existing: web/src/features/key-page/components/key-requests-section.tsx#KeyRequestsSection
+ - existing: web/src/features/key-page/components/key-properties-section.tsx#KeyPropertiesSection
+ - existing: web/src/features/key-page/components/key-admin-actions.tsx#KeyAdminActions - edit, limits, move, enable or disable, regenerate, group reset, delete, owner link
+ - existing: web/src/features/key-page/hooks/use-key-page.ts#useKeyPage - 60 s poll only while the period includes today
+ - existing: web/src/features/key-page/period.ts - `from`/`to` in the URL, presets, `includesToday`
+ - existing: web/src/features/key-page/api.ts - admin and owner fetchers
+ - existing: web/src/features/key-page/schemas.ts
+ - existing: web/src/features/key-reports/key-reports-page.tsx - a thin owner wrapper around `KeyPage` with its own query cache
+ - existing: web/src/features/key-reports/key-report-limits.tsx - group mini-list reused (`KeyReportGroupKeys`)
+ - existing: web/src/features/apis/components/apis-page.tsx - the list only; its detail pane (`api-detail.tsx`, the account-cost donut and the trend chart) is removed and a key opens `/keys/:id`
+ - existing: internal/domain/key_page.go - key page contracts and the owner projection of request rows
+ - existing: internal/application/key_page.go#KeyPageService - `AdminPage`, `OwnerPage`, `Requests`; owns `KeyPageRepository`
+ - existing: internal/adapters/sqlite/key_page_rollup.go#Store.KeyPageUsage - one analytics snapshot: `keyPeriodUsage` (cube rows by key with histograms, previous period from key slices), `keyErrorCodes`, `keyLimitPace`, first page of recent requests
+ - existing: internal/adapters/sqlite/key_page_rollup.go#Store.KeyRecentRequests - key index, keyset cursor, pending entries, errors only
+ - existing: internal/adapters/sqlite/reports_logs.go#readRequestLogPage - request-log page reader shared with the key page
+ - existing: internal/adapters/httpapi/key_page.go#registerKeyPageRoutes - admin routes; `registerKeyPageOwnerRoutes` - owner routes
+ - existing: internal/adapters/httpapi/key_report_session.go - mounts the owner `page` and `requests` routes and their firewall paths
 
 Tests:
 internal/adapters/sqlite/key_page_rollup_test.go
- - description: rollup results equal the raw evaluation for day, model, user agent, account and error codes across zones and fold states; quantiles within the bound
+ - description: rollup results equal the raw evaluation for day, model, user agent, account and error codes, pace and recent requests across zones (UTC, Europe/Prague, Asia/Kolkata) and fold states; quantiles within the bound; equal statement count for 7 and 90 days
    requirements: R20, R22
+ - description: recent requests use the key index and cursor pages equal the request log's offset pages; errors only examines at most 5 000 rows per call
+   requirements: R23
 internal/application/key_page_test.go
- - description: pace projection before and after reset, expired window shows zero, no write job is issued
+ - description: pace projection before and after reset, expired window shows zero, only read ports exist and are called
    requirements: R20, R21
 internal/adapters/httpapi/key_page_test.go
- - description: recent requests use the key index, cursor paging matches offset paging, errors-only stops at 5 000 rows
+ - description: admin routes need a session, unknown and internal keys are 404, cursor paging over the route matches the request log's offset paging, errors only
    requirements: R23
 web/src/features/key-page/components/key-page.test.tsx
  - description: one period picker in the URL, polling only for periods including today, admin sections hidden in owner mode
@@ -729,11 +735,11 @@ The sign-in entry SHALL keep the `from` and `to` query parameters through key si
 
 Tests:
 internal/adapters/httpapi/key_page_owner_test.go
- - description: key A cannot read key B through any parameter; unknown parameters are rejected; omitted fields are absent from the JSON
+ - description: key A cannot read key B through any parameter; unknown parameters are rejected; omitted fields are absent from the JSON; owner reads leave limits, reservations, events and keys unchanged
    requirements: R25, R26
  - description: hidden upstream quotas remove the pool section for grouped and ungrouped keys
    requirements: R27
- - description: firewall denial, revoked or rotated key mid-session, no-store and gzip headers, no write job issued
+ - description: firewall denial; disabled, expired, regenerated or deleted key mid-session; no-store, `Vary: Cookie`, `Server-Timing` and gzip
    requirements: R28
 web/src/features/auth/components/auth-gate.test.tsx
  - description: `from` and `to` survive key sign-in and select the owner page period
@@ -1170,11 +1176,11 @@ PR 2 — overview, alerts and attention keys:
 
 PR 3a — key page (use cases 4 and 4.1):
 
-9. [ ] OpenSpec change `key-page`: `go-runtime` delta (R19–R29) extending the key-report requirements, and the `frontend-architecture` deltas of use case 4; strict validation.
+9. [x] OpenSpec change `key-page`: `go-runtime` delta (R19–R29) extending the key-report requirements, and the `frontend-architecture` deltas of use case 4; strict validation.
 10. [x] Rollup additions: `histQuantile`, the total-latency histogram and `idx_usage_rollup_error_key` landed in PR 1 (Q6, Q7) (R22).
-11. [ ] SQLite: `KeyPeriodUsage`, `KeyErrorCodes`, `KeyLimitPace`; raw-equivalence tests across zones and fold states (R20–R23).
-12. [ ] Application and HTTP: `KeyPageService` with admin and owner scopes; `GET /api/api-keys/{id}/page`, `GET /api/api-keys/{id}/requests`, `GET /api/key-reports/page`, `GET /api/key-reports/requests` with parameter validation, owner projection, compression and `Server-Timing`; security tests (R20, R23, R25–R28, R50).
-13. [ ] Web: `features/key-page` shared by `/keys/:id` and owner mode, `AuthGate` keeping `from`/`to`, key links switched from `/keys?selected=<id>` to `/keys/:id`, locales and MSW mocks (R19, R24, R29).
+11. [x] SQLite: `KeyPeriodUsage`, `KeyErrorCodes`, `KeyLimitPace`; raw-equivalence tests across zones and fold states (R20–R23).
+12. [x] Application and HTTP: `KeyPageService` with admin and owner scopes; `GET /api/api-keys/{id}/page`, `GET /api/api-keys/{id}/requests`, `GET /api/key-reports/page`, `GET /api/key-reports/requests` with parameter validation, owner projection, compression and `Server-Timing`; security tests (R20, R23, R25–R28, R50).
+13. [x] Web: `features/key-page` shared by `/keys/:id` and owner mode, `AuthGate` keeping `from`/`to`, key links switched from `/keys?selected=<id>` to `/keys/:id`, locales and MSW mocks (R19, R24, R29).
 14. [ ] Contract tests, `BenchmarkDashboardPages` for the key page; gates, PR, CI (R46, R49).
 
 PR 3b — reports for API-key users (use case 5):
@@ -1229,6 +1235,19 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - Until PR 4, Groups opens `/settings#account-groups` and Keys renders the APIs page at `/keys`; key links use `/keys?selected=<id>` until the key page of PR 3.
 - The appearance settings for the dashboard refresh rate and the burn-projection card no longer affect any page; they are removed with the Settings rework of PR 4.
 
+## Implementation notes (PR 3a)
+
+- Branch `feat/key-page` from `feat/overview-groups` (PR #11); OpenSpec change `openspec/changes/key-page/`.
+- Reads: one `Store.KeyPageUsage` runs the period, error-code, pace and first-page readers (`keyPeriodUsage`, `keyErrorCodes`, `keyLimitPace`, `keyRecentRequestsTx`) in one analytics snapshot: 14 statements, 15 with model-filtered limits, for 7 and for 90 days (`TestKeyPageUsageStatementCountIsIndependentOfThePeriod`). The period and the previous period share one plan split at every local midnight; raw split hours and edges read the key's events through `idx_usage_events_key_time` (`keyImages`) instead of every key's events of the hour; the previous period reads the key's slice rows (UTC days inside, hours at the edges); folded legacy hours are read once for both periods. The raw path, fallback and oracle, reads the key's events through the key index and builds the same histograms, so both paths return identical results (`TestKeyPageUsageMatchesRawEventsInEveryFoldState`, UTC, Europe/Prague and Asia/Kolkata in all four fold states).
+- The use case reads, besides that snapshot, `GetAPIKey`, `OverviewEntities` (projected limits, group, same-group mini-list, accounts for the pool and the labels), `RecentAccountQuotaHistory` (burn rates), the settings (owner visibility), and for the administrator `UsageTotals` and the shell status. The owner's key is checked again in the entity snapshot: disabled, expired or deleted by then is 401.
+- Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages` with 1.51 M events of 300 keys over 30 days plus the busiest key at 57.7 k events per 7 days, 247 k in 30 days, 24 cube rows per hour): administrator key page of the busiest key 41 ms (7 d) and 90 ms (30 d) in UTC, 43 and 92 ms in Europe/Prague, 57 and 131 ms in Asia/Kolkata; a typical key's 30 days 31 ms (mostly the fixed entity, quota-history and shell reads); recent requests 0.9 ms, errors only 2.1 ms. `TestKeyPageMeetsItsLatencyBudgetAtTargetScale` asserts the busiest key's 30 days under 300 ms next to 300 keys (60 ms for 60 k events).
+- Errors follow the reports: every status but success, completed and cancelled, `client_disconnected` included; errors by code come from `usage_rollup_error_hour` through `idx_usage_rollup_error_key`, last seen is the start of the newest UTC hour holding the code, and errors stored without a code (and folded legacy hours) form one row with an empty code.
+- Pace counts the rollups' report events (every request kind but warm-ups) of the last 3 hours, while limit counters charge `normal` requests; it is an estimate for the projection only. The ungrouped key's pool is the whole ChatGPT pool; purchased credits are summed for the pool and for groups alike.
+- Recent requests: the key's newest events after the cursor are bounded inside the page query (`ORDER BY requested_at DESC, request_id DESC LIMIT n` through the key index) and merged with its pending entries by the request log's page reader (`readRequestLogPage`, extracted from `ListRequestLogs`); there is no total. Errors only examines at most 5 000 rows per call without skipping hours by `usage_rollup_error_hour`, and leaves pending entries out.
+- HTTP: the administrator routes also reject unknown parameters with 400 `invalid_report_filters`. A mutation method on an owner route reaches the administrator API behind `/api/` and answers 401, not 405. Owner routes are wrapped in `compressJSON` and `serverTiming` on the outer mux; `/api/key-reports/reports` stays uncompressed and deprecated.
+- Dashboard: the by-model table has no effort column; Regenerate and Disable ask for confirmation, Enable does not; the administrator's request details dialog is the key page's own (the Requests page dialog loads the conversation archive); a 401 from the owner's requests also ends the session; an invalid day in the URL counts as absent and the custom picker ends at today at the latest; "show these requests" opens the Requests page with the smallest timeframe (24 h, 7 d or 30 d) covering the period start. The APIs page keeps the list, key creation and the lifetime cards beside the list; editing and deleting moved to the key page. `/keys/:id` carries the shell status only while its period includes today.
+- The production-copy latency run of the key page is open with checklist item 20 (operator approval).
+
 ## Decision log
 
 - 2026-10-28: The overview is organized by account groups, never lists all keys and has no period picker; every figure carries a fixed period label. This removes the three independent period pickers and the four duplicated quota views.
@@ -1245,3 +1264,4 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - 2026-10-28: Spec actions: `usage-rollups.md` reused (two additions requested, Q7); `dashboard-delivery.md` use case 4 marked outdated by PR 2; `go-runtime` amended by three OpenSpec changes; `frontend-architecture` receives only REMOVED and location-only MODIFIED deltas.
 - 2026-10-28 (owner): Q1–Q5 and Q8–Q10 take the defaults above. Q6: the total-latency histogram is added to rollup layout 1 in PR 1 (no rebuild later). Q7: `idx_usage_rollup_error_key` and `histQuantile` are part of PR 1.
 - 2026-10-29: PR 3 is split into PR 3a (key page, OpenSpec change `key-page`) and PR 3b (reports for key users, OpenSpec change `key-usage-reports`): they share no files apart from routing and locales, so they are built and reviewed in parallel. Following Q6, R22 now includes total-latency p50 and p95.
+- 2026-10-29: PR 3a reads the key page in one analytics snapshot through one store method (`KeyPageUsage`) instead of three, so the period, its error codes, the limit pace and the first page of recent requests are consistent; percentiles use the PR 1 interpolated `histQuantile` on both read paths.
