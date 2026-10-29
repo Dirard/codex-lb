@@ -1212,11 +1212,11 @@ PR 3b — reports for API-key users (use case 5):
 16. [x] SQLite: `KeyUsageReport` (the export reuses it instead of a separate `StreamKeyDailyRows`); raw-equivalence tests with legacy rows, moved keys, the ungrouped selection and Europe/Prague days (R30, R31).
 17. [x] Application and HTTP: `KeyUsageReportService`, `GET /api/reports/keys` (gzip) and `GET /api/reports/keys/export.csv`, both with `Server-Timing`; CSV-sum and statement-count tests (R30, R31, R50).
 18. [x] Web: Reports rebuilt (`ScopePicker`, `PeriodPicker`, `PerKeyTable`, `GroupReportTable`, `KeyDailyChart`, CSV, `TrafficDetails`), owner links per R29, locales and MSW mocks (R32).
-19. [ ] Contract tests and `BenchmarkDashboardPages` for the report and the local gates are done; PR and CI are open (R46, R49).
+19. [x] Contract tests, `BenchmarkDashboardPages` for the report; gates, PR (#16), CI (R46, R49).
 
 After PR 3a and 3b:
 
-20. [ ] Production-copy latency run of the new pages (operator approval), release notes listing the deprecated key endpoints (R47, R49).
+20. [ ] Production-copy latency run of the new pages (operator approval) is open; the release notes of go-v1.4.0 list the deprecated key endpoints (R47, R49).
 
 PR 4 — keys, groups and accounts management:
 
