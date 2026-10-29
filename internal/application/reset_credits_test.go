@@ -165,3 +165,33 @@ func TestResetCreditReadInvalidatesIneligibleAndMissingAccount(t *testing.T) {
 		}
 	}
 }
+
+// The accounts list reads the in-memory snapshot of accounts it already
+// holds: the snapshot time of the last fetch, nothing for an ineligible
+// account or another generation, and no account read.
+func TestCachedResetCreditsReadsOnlyTheSnapshot(t *testing.T) {
+	ctx := context.Background()
+	observed := time.Date(2026, 10, 29, 9, 30, 0, 0, time.UTC)
+	stub := &stubUsageClient{credits: ResetCredits{AvailableCount: 2, Credits: []ResetCredit{{ID: "a", Status: "available"}, {ID: "b", Status: "available"}}}}
+	service, store, _, vault := newUsageTestService(t, stub)
+	service.now = func() time.Time { return observed }
+	account := saveUsageAccountCredentialed(t, vault, store, "acct", domain.AccountActive)
+	if got := service.CachedResetCredits(account); got != nil {
+		t.Fatalf("snapshot before any fetch: %+v", got)
+	}
+	if err := service.RefreshResetCredits(ctx, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	delete(store.accounts, account.ID)
+	store.mu.Unlock()
+	got := service.CachedResetCredits(account)
+	if got == nil || got.AvailableCount != 2 || !got.ObservedAt.Equal(observed) {
+		t.Fatalf("cached snapshot = %+v", got)
+	}
+	paused, rotated := account, account
+	paused.Status, rotated.Generation = domain.AccountPaused, account.Generation+1
+	if service.CachedResetCredits(paused) != nil || service.CachedResetCredits(rotated) != nil {
+		t.Fatal("snapshot served for a paused account or another generation")
+	}
+}
