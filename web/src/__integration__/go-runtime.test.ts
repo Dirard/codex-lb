@@ -27,6 +27,7 @@ import { ShellStatusSchema } from "@/components/layout/shell-status";
 import { OverviewResponseSchema } from "@/features/overview/schemas";
 import { DirectorySchema } from "@/features/search/api";
 import { GroupsSummarySchema } from "@/features/groups/schemas";
+import { KeyBulkResponseSchema, KeyIdsSchema, KeysPageSchema } from "@/features/keys/schemas";
 
 // Exercise the dashboard's real parsers against a freshly built binary rather
 // than teaching mocks the same contract mistake as the server. No ChatGPT
@@ -205,6 +206,47 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     expect((await owner(`/api/key-reports/page?api_key_id=${created.id}`)).status).toBe(400);
     await request(`/api/api-keys/${created.id}`, "DELETE");
     expect((await owner("/api/key-reports/page")).status).toBe(401);
+  });
+
+  it("serves the keys list, its matching ids and bulk key actions to an administrator", async () => {
+    for (const route of ["/api/keys", "/api/keys/ids"]) {
+      const anonymous = await fetch(base + route, { signal: AbortSignal.timeout(4_000) });
+      expect(anonymous.status, route).toBe(401);
+      const signedIn = await fetch(base + route, { headers: { Cookie: cookie, "Accept-Encoding": "gzip" }, signal: AbortSignal.timeout(4_000) });
+      expect(signedIn.status, route).toBe(200);
+      expect(signedIn.headers.get("server-timing"), route).toMatch(/^app;dur=\d+(\.\d)?$/);
+    }
+    const anonymousBulk = await fetch(base + "/api/keys/bulk", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: ["x"], action: "disable" }),
+      signal: AbortSignal.timeout(4_000),
+    });
+    expect(anonymousBulk.status).toBe(401);
+    const limits = [{ limitType: "cost_usd", limitWindow: "daily", maxValue: 3_000_000 }];
+    const group = AccountGroupSchema.parse(await request("/api/account-groups/", "POST", { name: "Contract bulk group", accountIds: [], limits }));
+    const keys = [];
+    for (const name of ["contract bulk a", "contract bulk b"]) {
+      keys.push(ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name })));
+    }
+    const ids = keys.map((key) => key.id);
+    const moved = KeyBulkResponseSchema.parse(await request("/api/keys/bulk", "POST", { ids: [...ids, "key_missing"], action: "move_group", groupId: group.id }));
+    expect(moved.results).toEqual([{ id: ids[0], ok: true }, { id: ids[1], ok: true }, { id: "key_missing", ok: false, code: "not_found" }]);
+    const page = KeysPageSchema.parse(await request(`/api/keys?group=${group.id}&sort=spend_30d&timezone=Europe/Prague`));
+    expect(page).toMatchObject({ total: 2, offset: 0, limit: 50, timezone: "Europe/Prague" });
+    expect(page.rows.map((row) => row.id).sort()).toEqual([...ids].sort());
+    expect(page.rows[0]).toMatchObject({ groupId: group.id, groupName: "Contract bulk group", status: "active",
+      limitsSummary: [{ type: "cost_usd", window: "daily", modelFilter: null, maxValue: 3_000_000 }] });
+    const refused = KeyBulkResponseSchema.parse(await request("/api/keys/bulk", "POST", { ids: [ids[0]], action: "set_limits", limits: [] }));
+    expect(refused.results).toEqual([{ id: ids[0], ok: false, code: "key_in_group" }]);
+    KeyBulkResponseSchema.parse(await request("/api/keys/bulk", "POST", { ids, action: "disable" }));
+    const matching = KeyIdsSchema.parse(await request(`/api/keys/ids?status=disabled&q=contract%20bulk`));
+    expect(matching.total).toBe(2);
+    expect(matching.ids.sort()).toEqual([...ids].sort());
+    const invalid = await fetch(`${base}/api/keys?limit=500`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+    expect(invalid.status).toBe(400);
+    expect(((await invalid.json()) as { error: { code: string } }).error.code).toBe("invalid_key_filters");
+    KeyBulkResponseSchema.parse(await request("/api/keys/bulk", "POST", { ids, action: "move_group", groupId: null }));
+    for (const id of ids) await request(`/api/api-keys/${id}`, "DELETE");
+    await request(`/api/account-groups/${group.id}`, "DELETE");
   });
 
   it("saves real UI setting patches without materializing unrelated defaults", async () => {

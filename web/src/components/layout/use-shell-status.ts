@@ -11,7 +11,7 @@ import {
 
 /**
  * Reads the shell status. On a page whose own poll carries it (the overview,
- * and a key page whose period includes today) the query never fetches and
+ * the keys page, and a key page whose period includes today) the query never fetches and
  * only shows what that poll wrote; elsewhere it is the page's one periodic
  * request, every 60 s while the tab is visible.
  */

@@ -898,6 +898,8 @@ Events And Endpoints:
 Types:
 KeysPage
  - shell: ShellStatus
+ - generatedAt: time
+ - timezone: string
  - total: int
  - offset: int
  - limit: int
@@ -913,8 +915,8 @@ KeyRow
  - lastUsedAt: time|null
  - createdAt: time
  - spendTodayUsd: number
- - spend7dUsd: number
- - spend30dUsd: number
+ - spend7dUsd: number|null # null while the rollups are unusable
+ - spend30dUsd: number|null # null while the rollups are unusable
  - maxLimit: LimitState|null
  - limitsSummary: list of type, window, modelFilter and max
 
@@ -939,25 +941,30 @@ Requirements:
 The keys table SHALL poll only its current page, every 60 s while visible, and SHALL keep the selection across polls and pages.
 
 Files And Functions:
- - planned: web/src/features/keys/components/keys-page.tsx#KeysPage
- - planned: web/src/features/keys/components/keys-table.tsx#KeysTable
- - planned: web/src/features/keys/components/keys-filters.tsx#KeysFilters
- - planned: web/src/features/keys/components/bulk-actions-bar.tsx#BulkActionsBar
- - planned: web/src/features/keys/hooks/use-keys-list.ts#useKeysList - URL-backed query state
+ - existing: web/src/features/keys/components/keys-page.tsx#KeysPage
+ - existing: web/src/features/keys/components/keys-table.tsx#KeysTable
+ - existing: web/src/features/keys/components/keys-filters.tsx#KeysFilters
+ - existing: web/src/features/keys/components/bulk-actions-bar.tsx#BulkActionsBar
+ - existing: web/src/features/keys/hooks/use-keys-list.ts#useKeysList - URL-backed query state
  - existing: web/src/features/api-keys/components/limit-rules-editor.tsx, api-key-create-dialog.tsx, api-key-edit-dialog.tsx - reused
- - existing: web/src/features/apis/components/apis-page.tsx - removed
- - planned: internal/application/keys_list.go#KeysListService.List
- - planned: internal/adapters/httpapi/keys_list.go#listKeysPage, #listKeyIDs
+ - existing: web/src/features/api-keys/components/api-key-edit-loader.tsx#ApiKeyEditLoader - edit dialog of one key, shared with the key page
+ - removed: web/src/features/apis/components/apis-page.tsx
+ - existing: internal/application/keys_list.go#KeysListService.List
+ - existing: internal/adapters/sqlite/keys_list.go#Store.KeyList - keys, limits, groups and per-key day costs in one analytics snapshot
+ - existing: internal/adapters/httpapi/keys_list.go#registerKeysRoutes - GET /api/keys, GET /api/keys/ids, POST /api/keys/bulk
 
 Tests:
 internal/application/keys_list_test.go
- - description: every filter and sort with ties, inactive and expiry boundaries, internal and deleted keys excluded
+ - description: every filter and sort with ties, inactive and expiry boundaries, missing values last, paging totals, ids capped at 1 000
+   requirements: R33, R34
+internal/adapters/sqlite/keys_list_test.go
+ - description: statement count equal for 30 and 300 keys; costs equal the raw evaluation; deleted and internal keys excluded; raw fallback reads today only
    requirements: R33, R34
 internal/adapters/httpapi/keys_list_test.go
- - description: statement count equal for 30 and 300 keys; paging totals
+ - description: route parameters, paging totals, gzip, Server-Timing and administrator authentication
    requirements: R33
 web/src/__integration__/keys-flow.test.tsx
- - description: filters in the URL, selection kept across a poll and a page change
+ - description: filters in the URL, overview links, selection kept across a poll and a page change
    requirements: R35
 
 ### 6.1 Bulk key actions
@@ -978,14 +985,18 @@ Requirements:
 Bulk actions SHALL require a confirmation naming the action and the number of keys, and SHALL refresh the keys list, the directory and the overview afterwards.
 
 Files And Functions:
- - planned: internal/application/keys_bulk.go#KeysBulkService.Apply
- - planned: internal/adapters/httpapi/keys_bulk.go#bulkKeys
- - existing: internal/adapters/sqlite/keys.go#SaveAPIKey - reused per key
+ - existing: internal/application/keys_bulk.go#KeysBulkService.Apply
+ - existing: internal/adapters/httpapi/keys_list.go#keysBulkRequest - POST /api/keys/bulk body
+ - existing: internal/adapters/sqlite/keys_bulk.go#Store.SetAPIKeysActive, #Store.MoveAPIKeyToGroup, #Store.SetAPIKeyLimits - per-job writes with the limit synchronisation of `SaveAPIKey`
+ - existing: internal/adapters/sqlite/keys.go#SaveAPIKey - its `groupRulesTx` and `syncKeyLimitsTx` are reused
 
 Tests:
 internal/application/keys_bulk_test.go
- - description: partial failure in the middle of a move keeps earlier keys moved and reports the failed and later keys correctly; `set_limits` on a grouped key fails with `key_in_group`
+ - description: partial failure in the middle of a move keeps earlier keys moved and reports the failed and later keys correctly; `set_limits` on a grouped key fails with `key_in_group`; jobs of 25; cancellation
    requirements: R36, R37, R38
+internal/adapters/sqlite/keys_bulk_test.go
+ - description: a bulk move and bulk limits leave the same limits and scope as saving the key; unknown, deleted and internal keys are not found
+   requirements: R36, R38
 web/src/features/keys/components/bulk-actions-bar.test.tsx
  - description: confirmation text, per-key failures shown, list, directory and overview invalidated
    requirements: R39
@@ -1260,10 +1271,10 @@ After PR 3a and 3b:
 
 PR 4a — keys page (use cases 6 and 6.1):
 
-21. [ ] OpenSpec change `keys-page`: `go-runtime` delta (R33–R39) and the `frontend-architecture` deltas of use case 6; strict validation.
-22. [ ] Application and HTTP: `KeysListService` (batch reads reusing the overview key rows and key day slices, filter, sort and page in memory), `KeysBulkService`, `GET /api/keys`, `GET /api/keys/ids`, `POST /api/keys/bulk`; statement-count, boundary and partial-failure tests (R33, R34, R36–R38).
-23. [ ] Web: `features/keys` (`KeysPage`, `KeysTable`, `KeysFilters`, `BulkActionsBar`, URL-backed `useKeysList`) at `/keys`, the APIs page and `ApiKeysOverview` removed, locales and MSW mocks (R35, R39).
-24. [ ] Contract tests, `BenchmarkDashboardPages` for the keys list; gates, PR, CI (R46, R49).
+21. [x] OpenSpec change `keys-page`: `go-runtime` delta (R33–R39) and the `frontend-architecture` deltas of use case 6; strict validation.
+22. [x] Application and HTTP: `KeysListService` (batch reads reusing the overview key rows and key day slices, filter, sort and page in memory), `KeysBulkService`, `GET /api/keys`, `GET /api/keys/ids`, `POST /api/keys/bulk`; statement-count, boundary and partial-failure tests (R33, R34, R36–R38).
+23. [x] Web: `features/keys` (`KeysPage`, `KeysTable`, `KeysFilters`, `BulkActionsBar`, URL-backed `useKeysList`) at `/keys`, the APIs page and `ApiKeysOverview` removed, locales and MSW mocks (R35, R39).
+24. [x] Contract tests, `BenchmarkDashboardPages` for the keys list; gates, PR (#20), CI (R46, R49).
 
 PR 4b — groups page and Settings (use case 7):
 
@@ -1339,6 +1350,16 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - Web: the scope picker renders at most 100 matches (type to narrow); the keys table hides idle keys behind a toggle, filters by text, collapses groups and shows 20 rows per group before "Show all"; quick periods stay relative in the URL (`period=30d`), custom ones are `from`/`to`. Traffic details wait for the report and filter `/api/reports` by its resolved key ids (at most 50), or read it unfiltered for every key.
 - `reports-summary-cards`, `daily-detail-table`, `cost-per-day-chart` and `tokens-per-day-chart` are no longer used by Reports but stay while `features/key-reports` imports them; PR 3a removes them with the old key report.
 
+## Implementation notes (PR 4a)
+
+- Branch `feat/keys-page` from `main`; OpenSpec change `keys-page`, archived with the other PR 4 changes (checklist item 33).
+- Reads: `GET /api/keys` runs one analytics snapshot through `Store.KeyList`: the groups and the keys with their active limits (`listGroupRefs`, `listKeyRows`) and the per-key day costs through the key usage report's reader (`newKeyUsageSums`, `keyUsage`), plus the shell status; 15 statements for 30 and for 300 keys (`TestKeysListUsesAStatementCountIndependentOfScale`). `GET /api/keys/ids` reads only the keys and groups unless it is sorted by spend (3 or 9 statements). While the rollups are unusable only today is read from raw events and the 7- and 30-day spend are null.
+- Filters: the status follows the directory's (disabled before expired); near limit counts only active keys, like the overview's group fill and attention keys, so the overview's links agree with the list; `expiring_days` and `inactive_days` accept 1 to 365 days (the toolbar offers 7, and 7, 30 or 90); `q` matches substrings of the name or prefix; an empty parameter value is absent; unknown or repeated parameters are 400 `invalid_key_filters`. A key without a value for the sort key (no limit, never used, unknown period spend) sorts last in both directions; ties are ordered by id. The matching ids accept the sort and order too, so "Select all matching" beyond 1 000 keys takes the first 1 000 in list order.
+- Bulk: `SetAPIKeysActive` changes up to 25 keys per job with one `UPDATE … RETURNING id`; `MoveAPIKeyToGroup` and `SetAPIKeyLimits` change one key per job with the limit synchronisation of `SaveAPIKey` (`TestMoveAPIKeyToGroupHasTheEffectOfSavingTheKey`, `TestSetAPIKeyLimitsHasTheEffectOfSavingTheKey`). Jobs after a failed job still run; after cancellation the remaining keys are `not_applied`. Codes: `not_found`, `key_in_group`, `invalid_group`, `conflict`, `not_applied`, `internal_error`. `groupId` belongs only to `move_group` (null is no group) and `limits` only to `set_limits` (an empty list removes the limits); malformed JSON is 400 `invalid_request`, another invalid body 400 `invalid_bulk_request`, invalid limit rules 422 `invalid_limit`.
+- Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages`, 300 keys, 50 groups, 100 accounts, 1.51 M events over 30 days): keys list sorted by 30-day spend 16–18 ms (UTC), 44 ms (Europe/Prague), 222–261 ms (Asia/Kolkata, the fractional-zone cost of the report reader: the all-keys 30-day report took 226 ms in the same run); the near-limit filter sorted by fill 17, 45 and 244 ms; matching ids by name 1.3 ms. `TestKeysListMeetsItsLatencyBudgetAtTargetScale` asserts the list under 300 ms (median 8.9 ms on 8 days of data).
+- Web: `/keys` carries the shell status, so its only periodic request is `GET /api/keys`; the directory loads once for the group picker and for naming failed keys of other pages. `invalidateEntityViews` also marks the keys list stale, so key, group and account mutations on any page refresh it. Failed bulk keys stay selected and are listed with their reason; Set limits is offered for any selection and grouped keys fail with `key_in_group`; "Select all n matching" adds up to 1 000 ids to the selection. The row menu has Edit (`ApiKeyEditLoader`, now shared with the key page), Disable (confirmed), Enable, Regenerate (confirmed) and Delete (confirmed). `features/apis` is removed: `api-key-limit-usage.tsx` moved to `features/api-keys`, the schemas of the deprecated trends and 7-day usage endpoints moved to the test mocks (the endpoints stay for one release), and the unused `apis.*` and `apiKeys.overview.*` strings were dropped. Settings keeps `ApiKeysSection` until PR 4b.
+- The production-copy latency run of the keys page is open with checklist item 33.
+
 ## Implementation notes (PR 4b)
 
 - Branch `feat/groups-page` from `main`; OpenSpec change `groups-page` (not archived until checklist item 33).
@@ -1387,3 +1408,5 @@ Measured 2026-10-29 with the release binary on a `VACUUM INTO` copy of the produ
 - 2026-10-29 (PR 3b): Reports sum only the resolved current keys, so the summary, the tables and the CSV always agree; the export reuses the report's snapshot read instead of a separate streaming reader and writes after the snapshot closes, bounded by keys × days; the daily series carry a top-level series list with compact points.
 - 2026-10-29: The production-copy run with go-v1.4.0 confirmed R49 for the overview, requests, key and owner pages and reports; the cold read during the startup verifier is recorded as an observation, not a requirement change. The OpenSpec changes `overview-groups`, `request-log-pending-index`, `key-page` and `key-usage-reports` are archived and synced into `go-runtime` and `frontend-architecture`.
 - 2026-10-29: PR 4 is split into PR 4a (keys page, OpenSpec change `keys-page`), PR 4b (groups page and the Settings rework, `groups-page`) and PR 4c (accounts management, `accounts-management`), built in parallel; they share only routing, locales and mocks. The Settings rework (R41) belongs to PR 4b so that only one slice edits the Settings page. Q2 keeps its default: the weekly credits pace becomes the pool runway card of the Groups page, so `GET /api/dashboard/projections` stays.
+- 2026-10-29 (PR 4a): Bulk moves and limits run targeted per-key write jobs that reuse the limit synchronisation of `SaveAPIKey` (`groupRulesTx`, `syncKeyLimitsTx`) instead of reading the key and saving it whole, so a bulk job never overwrites a concurrent edit or the proxy's `last_used_at`; the resulting limits and account scope equal saving the key.
+- 2026-10-29 (PR 4a): The keys list reads its usage through the key usage report's reader in the same analytics snapshot as the keys, limits and groups, instead of an entity snapshot plus the overview's reader, which is planned for 8 days; the 7- and 30-day spend are null while the rollups are unusable, like the overview's trends.

@@ -4,11 +4,11 @@ import { pageCarriesShellStatus } from "@/components/layout/shell-status";
 import { localDateISO, shiftISODate } from "@/features/key-page/period";
 
 describe("pageCarriesShellStatus", () => {
-  it("is carried by the overview poll", () => {
+  it("is carried by the overview and keys page polls", () => {
     expect(pageCarriesShellStatus("/overview")).toBe(true);
     expect(pageCarriesShellStatus("/overview/")).toBe(true);
     expect(pageCarriesShellStatus("/settings")).toBe(false);
-    expect(pageCarriesShellStatus("/keys")).toBe(false);
+    expect(pageCarriesShellStatus("/keys")).toBe(true);
   });
 
   it("is carried by a key page only while its period includes today", () => {

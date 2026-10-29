@@ -34,6 +34,8 @@ type Repository interface {
 	application.KeyPageRepository
 	application.KeyUsageReportRepository
 	application.GroupsSummaryRepository
+	application.KeysListRepository
+	application.KeysBulkRepository
 }
 
 type Config struct {
@@ -171,6 +173,7 @@ func (s *Server) adminRoutes() *http.ServeMux {
 	s.registerKeyPageRoutes(admin)
 	s.registerKeyUsageReportRoutes(admin)
 	s.registerGroupsSummaryRoutes(admin)
+	s.registerKeysRoutes(admin)
 	s.registerAffinityRoutes(admin)
 	if s.modelPricing != nil {
 		s.modelPricing.RegisterAdminRoutes(admin)
