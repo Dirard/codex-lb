@@ -15,6 +15,12 @@ func redactCredential(body []byte, credential string) []byte {
 	if credential == "" {
 		return body
 	}
+	// Without the raw credential or any \u escape the credential cannot occur
+	// in a decoded string, so the body (for example a multi-megabyte image) is
+	// returned as sent instead of being decoded and re-encoded.
+	if !bytes.Contains(body, []byte(credential)) && !bytes.Contains(body, []byte(`\u`)) {
+		return body
+	}
 	if !json.Valid(body) {
 		return bytes.ReplaceAll(body, []byte(credential), []byte("[redacted]"))
 	}

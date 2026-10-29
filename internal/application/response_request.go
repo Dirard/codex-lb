@@ -41,6 +41,9 @@ type responseRequest struct {
 	DeferredInput     bool
 	FilePinned        bool
 	CompactionTrigger bool
+	// ImageGeneration selects among subscription accounts without model-catalog
+	// filtering: image models are not catalog models.
+	ImageGeneration   bool
 	PreserveReasoning bool
 	ResponsesLite     bool
 	PreferWebsockets  bool

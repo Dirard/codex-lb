@@ -126,6 +126,10 @@ func (p *operationProvider) Transcribe(_ context.Context, target CodexOperationT
 	p.targets = append(p.targets, target)
 	return p.results["transcribe"], nil
 }
+func (p *operationProvider) Images(_ context.Context, target CodexOperationTarget, _ CodexImageRequest) (CodexOperationResult, error) {
+	p.targets = append(p.targets, target)
+	return p.results["images"], nil
+}
 func (p *operationProvider) Realtime(_ context.Context, target CodexOperationTarget, _ CodexRealtimeRequest, _ CodexRealtimeConnection) error {
 	p.targets = append(p.targets, target)
 	return nil

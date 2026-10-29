@@ -51,6 +51,9 @@ func (p *sqliteOperationProvider) FinalizeFile(context.Context, application.Code
 func (p *sqliteOperationProvider) Transcribe(context.Context, application.CodexOperationTarget, application.CodexTranscriptionRequest) (application.CodexOperationResult, error) {
 	return application.CodexOperationResult{}, nil
 }
+func (p *sqliteOperationProvider) Images(context.Context, application.CodexOperationTarget, application.CodexImageRequest) (application.CodexOperationResult, error) {
+	return application.CodexOperationResult{}, nil
+}
 func (p *sqliteOperationProvider) Realtime(context.Context, application.CodexOperationTarget, application.CodexRealtimeRequest, application.CodexRealtimeConnection) error {
 	return nil
 }

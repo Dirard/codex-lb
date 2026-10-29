@@ -104,7 +104,7 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 	}
 	candidates := make([]domain.Account, 0, len(accounts))
 	for _, account := range accounts {
-		if request.CompactionTrigger && account.Kind != domain.AccountChatGPT {
+		if (request.CompactionTrigger || request.ImageGeneration) && account.Kind != domain.AccountChatGPT {
 			continue
 		}
 		if excluded[account.ID] || owner != nil && owner.AccountID == account.ID {
@@ -126,9 +126,11 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 		return nil, err
 	}
 	var quotaOmissions map[string]bool
-	accounts, quotaOmissions, err = p.catalogAccountsWithOmissions(request, accounts, "")
-	if err != nil {
-		return nil, err
+	if !request.ImageGeneration {
+		accounts, quotaOmissions, err = p.catalogAccountsWithOmissions(request, accounts, "")
+		if err != nil {
+			return nil, err
+		}
 	}
 	choices := make([]accountCandidate, 0, len(accounts))
 	now := time.Now()

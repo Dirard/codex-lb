@@ -61,6 +61,7 @@ func (h *CodexOperationsHandler) RegisterRoutes(mux *http.ServeMux) {
 			mux.HandleFunc(method+" /backend-api/codex/"+path+"/{$}", h.control)
 		}
 	}
+	h.registerImageRoutes(mux)
 	mux.HandleFunc("POST /backend-api/files", h.createFile)
 	mux.HandleFunc("POST /backend-api/files/{file_id}/uploaded", h.finalizeFile)
 	mux.HandleFunc("POST /backend-api/transcribe", h.transcribeBackend)
@@ -291,7 +292,7 @@ func (h *CodexOperationsHandler) writeResult(w http.ResponseWriter, result appli
 	if compact {
 		w.Header().Set("Cache-Control", "no-store")
 	}
-	for _, name := range []string{"Cache-Control", "ETag", "Last-Modified", "Location", "Openai-Processing-Ms", "Request-Id", "X-Request-Id"} {
+	for _, name := range []string{"Cache-Control", "ETag", "Last-Modified", "Location", "Openai-Processing-Ms", "Request-Id", "X-Request-Id", "X-Codex-Imagegen-Request-Id"} {
 		if value := resultHeaderValue(result.Headers, name); value != "" {
 			w.Header().Set(name, value)
 		}
