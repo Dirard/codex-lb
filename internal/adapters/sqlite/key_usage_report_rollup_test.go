@@ -402,9 +402,10 @@ func TestKeyUsageReportMeetsItsLatencyBudgetAtTargetScale(t *testing.T) {
 
 // benchmarkKeyUsageReports adds the reports for API-key users to
 // BenchmarkDashboardPages: every key and three groups for 30 and 90 days, and
-// the 90-day per-day export encoded as CSV.
+// the 90-day per-day export encoded as CSV, in a whole-hour, a
+// daylight-saving and a fractional-offset zone.
 func benchmarkKeyUsageReports(b *testing.B, s *Store) {
-	for _, zone := range []string{"UTC", "Europe/Prague"} {
+	for _, zone := range []string{"UTC", "Europe/Prague", "Asia/Kolkata"} {
 		loc, err := time.LoadLocation(zone)
 		if err != nil {
 			b.Fatal(err)

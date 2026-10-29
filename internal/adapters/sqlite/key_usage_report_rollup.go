@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"codex-lb/internal/domain"
 )
@@ -282,10 +283,63 @@ func (r *rollupRead) keyUsage(ctx context.Context, sums *keyUsageSums) error {
 	}
 	plan := planRollupWindow(sums.from, sums.bounds[len(sums.bounds)-1], splits)
 	where, args := sums.eventWhere()
-	if err := r.images(ctx, plan, where, args, sums.addImage); err != nil {
+	if err := r.keyUsageRawSpans(ctx, plan, sums, where, args); err != nil {
+		return err
+	}
+	if err := r.unfoldedImages(ctx, plan, where, args, sums.addImage); err != nil {
 		return err
 	}
 	return r.keyUsageSlices(ctx, planKeyUsageSlices(plan, sums), sums)
+}
+
+// keyUsageRawSpans reads the raw spans of plan (partial hours and the split
+// hours of fractional-offset zones) as per-key sums in SQL: the spans are cut
+// at the day bounds so that each part belongs to one day or the previous
+// period, which keeps a split hour from being decoded event by event.
+func (r *rollupRead) keyUsageRawSpans(ctx context.Context, plan rollupPlan, sums *keyUsageSums, where string, args []any) error {
+	cuts := append([]int64{sums.prevFrom, sums.prevTo}, sums.bounds...)
+	var parts [][2]int64
+	for _, span := range plan.raws() {
+		from := span.from
+		for _, cut := range cuts {
+			if cut > from && cut < span.to {
+				parts = append(parts, [2]int64{from, cut})
+				from = cut
+			}
+		}
+		parts = append(parts, [2]int64{from, span.to})
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	values := strings.TrimSuffix(strings.Repeat("(?,?),", len(parts)), ",")
+	spanArgs := make([]any, 0, 2*len(parts)+len(args))
+	for _, part := range parts {
+		spanArgs = append(spanArgs, part[0], part[1])
+	}
+	rows, err := r.tx.QueryContext(ctx, `WITH spans(lo,hi) AS (VALUES `+values+`)
+ SELECT s.lo,e.api_key_id,count(*),coalesce(sum(CASE WHEN e.status NOT IN ('success','completed','cancelled') THEN 1 ELSE 0 END),0),
+ coalesce(sum(CASE WHEN e.status='cancelled' THEN 1 ELSE 0 END),0),coalesce(sum(e.input_tokens),0),coalesce(sum(e.output_tokens),0),
+ coalesce(sum(e.reasoning_tokens),0),coalesce(sum(e.reasoning_tokens_known),0),
+ coalesce(sum(max(0,min(e.cached_input_tokens,e.input_tokens))),0),coalesce(sum(e.cost_microdollars),0)
+ FROM spans s CROSS JOIN usage_events e INDEXED BY idx_usage_events_time_id
+ WHERE e.requested_at>=s.lo AND e.requested_at<s.hi AND `+where+` GROUP BY s.lo,e.api_key_id`, append(spanArgs, args...)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var at int64
+		var key sql.NullString
+		var m rollupMeasures
+		if err := rows.Scan(append([]any{&at, &key}, m.fields()...)...); err != nil {
+			return err
+		}
+		if cell := sums.cellAt(rawReportDimension(key), at); cell != nil {
+			cell.m = cell.m.plus(m)
+		}
+	}
+	return rows.Err()
 }
 
 // keyUsageBuckets maps slice buckets (seconds) of each grain to the days they
