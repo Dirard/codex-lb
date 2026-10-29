@@ -30,6 +30,8 @@ type CodexOperationTarget struct {
 	OnFirstUpstreamEvent func()
 	admissionLease       *accountLease
 	affinity             *requestAffinity
+	// accountNeutral keeps the attempt's outcome out of account health.
+	accountNeutral bool
 }
 
 type CodexControlRequest struct {
@@ -72,6 +74,7 @@ type CodexOperationProvider interface {
 	CreateFile(context.Context, CodexOperationTarget, json.RawMessage) (CodexOperationResult, error)
 	FinalizeFile(context.Context, CodexOperationTarget, string) (CodexOperationResult, error)
 	Transcribe(context.Context, CodexOperationTarget, CodexTranscriptionRequest) (CodexOperationResult, error)
+	Images(context.Context, CodexOperationTarget, CodexImageRequest) (CodexOperationResult, error)
 	Realtime(context.Context, CodexOperationTarget, CodexRealtimeRequest, CodexRealtimeConnection) error
 }
 
@@ -175,6 +178,7 @@ type CodexOperations struct {
 	selectCompact         func(context.Context, string, *responseRequest, domain.RuntimeSettings, domain.Account, map[string]bool, ...string) (domain.Account, *accountLease, error)
 	cipher                SecretCipher
 	accountAdmissionProxy *Proxy
+	imageCooldowns        imageCooldowns
 }
 
 func NewCodexOperations(store CodexOperationStore, owners CodexResourceOwners, provider CodexOperationProvider, ttl time.Duration) *CodexOperations {

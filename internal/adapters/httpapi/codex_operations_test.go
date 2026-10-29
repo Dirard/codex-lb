@@ -112,6 +112,10 @@ func (p *operationsProvider) Transcribe(_ context.Context, target application.Co
 	p.targets = append(p.targets, target)
 	return application.CodexOperationResult{Status: 200, UsageKnown: true, Body: []byte(`{"text":"ok"}`), ContentType: "application/json"}, nil
 }
+func (p *operationsProvider) Images(_ context.Context, target application.CodexOperationTarget, _ application.CodexImageRequest) (application.CodexOperationResult, error) {
+	p.targets = append(p.targets, target)
+	return application.CodexOperationResult{}, nil
+}
 func (p *operationsProvider) Realtime(_ context.Context, target application.CodexOperationTarget, _ application.CodexRealtimeRequest, _ application.CodexRealtimeConnection) error {
 	p.targets = append(p.targets, target)
 	return nil

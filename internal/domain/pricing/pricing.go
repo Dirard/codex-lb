@@ -160,11 +160,14 @@ var codexPrices = map[string]Price{
 	"gpt-5":               {Standard: Rates{1_250_000, 125_000, 10_000_000}, PriorityMultiplierMilli: 2000, Flex: &Rates{625_000, 62_500, 5_000_000}},
 	"gpt-5-chat-latest":   {Standard: Rates{1_250_000, 125_000, 10_000_000}},
 	"gpt-5-codex":         {Standard: Rates{1_250_000, 125_000, 10_000_000}, Priority: &Rates{2_500_000, 250_000, 20_000_000}},
-	// Retained for historical reports, not a public Images API.
-	"gpt-image-2":      {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
-	"gpt-image-1.5":    {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
-	"gpt-image-1":      {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
-	"gpt-image-1-mini": {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
+	// Image generation routes bill by these token rates (text input, cached
+	// image input, image output per 1M tokens).
+	"gpt-image-2.5-sunburst": {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
+	"gpt-image-2.5-flare":    {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
+	"gpt-image-2":            {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
+	"gpt-image-1.5":          {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
+	"gpt-image-1":            {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
+	"gpt-image-1-mini":       {Standard: Rates{5_000_000, 2_000_000, 30_000_000}},
 }
 
 var aliases = func() map[string]string {

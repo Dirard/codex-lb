@@ -87,7 +87,7 @@ func (s *CodexOperations) billedAdmitted(
 	requestBody []byte, continuationFilePinned bool, started time.Time,
 ) (CodexOperationResult, error) {
 	if s.accountAdmissionProxy != nil && account.Kind == domain.AccountChatGPT &&
-		(requestKind == "compaction" || requestKind == "warmup") {
+		(requestKind == "compaction" || requestKind == "warmup" || imageRequestKind(requestKind)) {
 		lease := target.admissionLease
 		if lease == nil {
 			settings, err := s.store.LoadSettings(ctx)
@@ -113,6 +113,9 @@ func (s *CodexOperations) billedAdmitted(
 		return CodexOperationResult{}, err
 	}
 	budget := requestBudget(requestBody, price)
+	if imageRequestKind(requestKind) {
+		budget = imageBudget(requestBody, price)
+	}
 	if requestKind == "transcription" && budget.CostMicrodollars == 0 {
 		// Subscription transcription does not expose a token-usage response; use
 		// the legacy conservative unknown-model reservation cost, then settle it
@@ -189,12 +192,12 @@ func (s *CodexOperations) billedAdmitted(
 		if err := retainUncertainUsage(ctx, s.store, id); err != nil {
 			return CodexOperationResult{}, err
 		}
-		if quotaRefused {
+		if quotaRefused && !target.accountNeutral {
 			if err := s.recordOutcome(account.ID, id, true, false); err != nil {
 				return CodexOperationResult{}, err
 			}
 		}
-		s.recordDiagnostic(ctx, options, account, model, status, event, requestBody, result.Body)
+		s.recordDiagnostic(ctx, options, account, model, status, event, diagnosticRequest(requestKind, requestBody), result.Body)
 		return result, callErr
 	}
 	settlementStatus := "finalized"
@@ -204,7 +207,9 @@ func (s *CodexOperations) billedAdmitted(
 	if err := s.settle(ctx, id, domain.UsageSettlement{Status: settlementStatus, Event: event}); err != nil {
 		return CodexOperationResult{}, err
 	}
-	if status == "success" || quotaRefused {
+	// Image requests have their own upstream limit: neither their success nor
+	// their refusal says anything about the account's own quota or health.
+	if (status == "success" || quotaRefused) && !target.accountNeutral {
 		if err := s.recordOutcome(account.ID, id, quotaRefused, status == "success"); err != nil {
 			return CodexOperationResult{}, err
 		}
@@ -214,7 +219,7 @@ func (s *CodexOperations) billedAdmitted(
 			return CodexOperationResult{}, err
 		}
 	}
-	s.recordDiagnostic(ctx, options, account, model, status, event, requestBody, result.Body)
+	s.recordDiagnostic(ctx, options, account, model, status, event, diagnosticRequest(requestKind, requestBody), result.Body)
 	return result, callErr
 }
 

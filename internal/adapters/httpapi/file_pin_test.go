@@ -36,6 +36,9 @@ func (p *filePinOperationsProvider) FinalizeFile(context.Context, application.Co
 func (p *filePinOperationsProvider) Transcribe(context.Context, application.CodexOperationTarget, application.CodexTranscriptionRequest) (application.CodexOperationResult, error) {
 	return application.CodexOperationResult{}, nil
 }
+func (p *filePinOperationsProvider) Images(context.Context, application.CodexOperationTarget, application.CodexImageRequest) (application.CodexOperationResult, error) {
+	return application.CodexOperationResult{}, nil
+}
 func (p *filePinOperationsProvider) Realtime(context.Context, application.CodexOperationTarget,
 	application.CodexRealtimeRequest, application.CodexRealtimeConnection) error {
 	return nil
