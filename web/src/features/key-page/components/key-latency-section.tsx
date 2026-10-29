@@ -30,15 +30,15 @@ export function KeyLatencySection({ daily, summary }: { daily: KeyDay[]; summary
             </TableHeadRow>
           </thead>
           <tbody>
-            <tr className="border-b bg-muted/30 font-medium">
+            <tr className="border-b bg-muted/30 font-medium" data-testid="key-latency-period">
               <td className="px-3 py-1.5 text-xs">{t("keyPage.latency.period")}</td>
               <td className="px-3 py-1.5 text-right tabular-nums">{formatNumber(summary.requests)}</td>
               <td className="px-3 py-1.5 text-right tabular-nums">{msLabel(summary.ttftP50Ms)}</td>
               <td className="px-3 py-1.5 text-right tabular-nums">{msLabel(summary.ttftP95Ms)}</td>
               <td className="px-3 py-1.5 text-right tabular-nums">{msLabel(summary.totalP50Ms)}</td>
               <td className="px-3 py-1.5 text-right tabular-nums">{msLabel(summary.totalP95Ms)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">—</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">—</td>
+              <td className="px-3 py-1.5 text-right tabular-nums">{msLabel(summary.queueP95Ms)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums">{tpsLabel(summary.tpsP50)}</td>
             </tr>
             {days.map((day) => (
               <tr key={day.date} className="border-b last:border-0" data-testid="key-latency-row">

@@ -124,6 +124,8 @@ export const KeyPeriodSummarySchema = z.object({
   ttftP95Ms: Ms,
   totalP50Ms: Ms,
   totalP95Ms: Ms,
+  queueP95Ms: Ms,
+  tpsP50: z.number().nullable(),
   previous: z.object({ requests: z.number(), tokens: z.number(), costUsd: z.number() }).nullable(),
 });
 

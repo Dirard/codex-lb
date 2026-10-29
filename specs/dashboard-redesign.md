@@ -630,6 +630,8 @@ KeyPeriodSummary
  - ttftP95Ms: number|null
  - totalP50Ms: number|null
  - totalP95Ms: number|null
+ - queueP95Ms: number|null
+ - tpsP50: number|null
  - previous: requests, tokens and costUsd of the previous period|null
 KeyDay
  - date: date

@@ -232,6 +232,8 @@ export function createKeyPage(apiKey: ApiKey, options: KeyPageOptions = {}): Key
       ttftP95Ms: requests > 0 ? 1_900 : null,
       totalP50Ms: requests > 0 ? 2_400 : null,
       totalP95Ms: requests > 0 ? 7_800 : null,
+      queueP95Ms: requests > 0 ? 15 : null,
+      tpsP50: requests > 0 ? 42.5 : null,
       previous: requests > 0 ? { requests: 100, tokens: 150_000, costUsd: 1.25 } : null,
     },
     daily,

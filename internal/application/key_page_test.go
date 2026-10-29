@@ -295,3 +295,23 @@ func TestKeyPageRequests(t *testing.T) {
 		t.Fatalf("unknown key %v", err)
 	}
 }
+
+// The period summary carries every latency percentile of the whole period
+// from the rollup histograms, queue p95 and tokens per second p50 included,
+// so the period row of the latency section is complete (R22).
+func TestKeyPageSummaryCarriesEveryPeriodPercentile(t *testing.T) {
+	repo := newKeyPageFixture()
+	value := func(v float64) *float64 { return &v }
+	repo.usage.TotalLatency = domain.KeyLatency{TTFTP50: value(600), TTFTP95: value(1900), TotalP50: value(2400),
+		TotalP95: value(7800), QueueP95: value(15), TPSP50: value(42.5)}
+	service := NewKeyPageService(repo, nil, func() time.Time { return keyPageNow })
+	page, err := service.AdminPage(context.Background(), "key-a", KeyPageParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := page.Summary
+	if s.TTFTP50MS == nil || *s.TTFTP50MS != 600 || s.TotalP95MS == nil || *s.TotalP95MS != 7800 ||
+		s.QueueP95MS == nil || *s.QueueP95MS != 15 || s.TPSP50 == nil || *s.TPSP50 != 42.5 {
+		t.Fatalf("summary percentiles %+v", s)
+	}
+}

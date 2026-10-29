@@ -276,6 +276,8 @@ type KeyPeriodSummary struct {
 	TTFTP95MS         *float64           `json:"ttftP95Ms"`
 	TotalP50MS        *float64           `json:"totalP50Ms"`
 	TotalP95MS        *float64           `json:"totalP95Ms"`
+	QueueP95MS        *float64           `json:"queueP95Ms"`
+	TPSP50            *float64           `json:"tpsP50"`
 	Previous          *KeyPeriodPrevious `json:"previous"`
 }
 

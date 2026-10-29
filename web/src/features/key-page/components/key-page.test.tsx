@@ -73,6 +73,14 @@ describe("KeyPage", () => {
     expect(screen.getByRole("button", { name: "30 d" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("shows every latency percentile of the whole period, queue and tokens per second included", async () => {
+    openAdmin();
+    const period = await screen.findByTestId("key-latency-period");
+    expect(period).toHaveTextContent(/15\s?ms/);
+    expect(period).toHaveTextContent(/42\.5/);
+    expect(period).not.toHaveTextContent("—");
+  });
+
   it("applies a custom period from the URL and from the custom range", async () => {
     const user = userEvent.setup();
     const today = localDateISO();

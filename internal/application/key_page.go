@@ -478,7 +478,8 @@ func keyPeriodSummary(usage domain.KeyPageUsage) domain.KeyPeriodSummary {
 		CachedInputTokens: total.CachedInputTokens, CacheShare: ratio(total.CachedInputTokens, total.InputTokens),
 		CostUSD: total.CostUSD, Errors: total.Errors, ErrorRate: ratio(total.Errors, total.Requests), Cancelled: total.Cancelled,
 		TTFTP50MS: usage.TotalLatency.TTFTP50, TTFTP95MS: usage.TotalLatency.TTFTP95,
-		TotalP50MS: usage.TotalLatency.TotalP50, TotalP95MS: usage.TotalLatency.TotalP95}
+		TotalP50MS: usage.TotalLatency.TotalP50, TotalP95MS: usage.TotalLatency.TotalP95,
+		QueueP95MS: usage.TotalLatency.QueueP95, TPSP50: usage.TotalLatency.TPSP50}
 	if total.ReasoningKnown > 0 {
 		reasoning := total.ReasoningTokens
 		summary.ReasoningTokens = &reasoning
