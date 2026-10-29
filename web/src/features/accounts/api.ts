@@ -5,6 +5,7 @@ import {
   AccountAliasRequestSchema,
   AccountAliasResponseSchema,
   AccountAuthExportResponseSchema,
+  AccountGroupsUpdateResponseSchema,
   AccountImportResponseSchema,
   AccountLimitWarmupUpdateRequestSchema,
   AccountLimitWarmupUpdateResponseSchema,
@@ -99,6 +100,14 @@ export function updateAccountRoutingPolicy(
     `${ACCOUNTS_BASE_PATH}/${encodeURIComponent(accountId)}/routing-policy`,
     AccountRoutingPolicyUpdateResponseSchema,
     { body: payload },
+  );
+}
+
+export function setAccountGroups(accountId: string, groupIds: string[]) {
+  return put(
+    `${ACCOUNTS_BASE_PATH}/${encodeURIComponent(accountId)}/groups`,
+    AccountGroupsUpdateResponseSchema,
+    { body: { groupIds } },
   );
 }
 

@@ -1,11 +1,9 @@
 package httpapi
 
 import (
-	"context"
 	"strings"
 	"time"
 
-	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
 )
 
@@ -56,23 +54,4 @@ func accountQuotasView(quotas []domain.AccountQuota, planType string) (accountQu
 		}
 	}
 	return primary, secondary, monthly
-}
-
-type resetCreditsView struct {
-	AvailableCount   *int       `json:"availableResetCredits"`
-	NearestExpiresAt *time.Time `json:"resetCreditNearestExpiresAt"`
-}
-
-func accountResetCreditsView(ctx context.Context, usage *application.AccountUsageService, account domain.Account) resetCreditsView {
-	view := resetCreditsView{}
-	if usage == nil {
-		return view
-	}
-	snapshot, err := usage.ResetCreditsSnapshot(ctx, account.ID)
-	if err != nil || snapshot == nil {
-		return view
-	}
-	view.AvailableCount = &snapshot.AvailableCount
-	view.NearestExpiresAt = snapshot.NearestExpiresAt
-	return view
 }

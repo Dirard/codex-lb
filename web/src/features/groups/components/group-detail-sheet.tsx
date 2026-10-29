@@ -146,7 +146,7 @@ export function GroupDetailSheet({ row, accounts, onClose, onCreated }: GroupDet
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-                      <th className="py-1 font-medium">{t("groups.columns.name")}</th>
+                      <th className="py-1 font-medium">{t("groups.sheet.key")}</th>
                       <th className="py-1 text-right font-medium">{t("groups.columns.spendToday")}</th>
                       <th className="py-1 text-right font-medium">{t("groups.columns.spend7d")}</th>
                       <th className="py-1 text-right font-medium">{t("groups.columns.spend30d")}</th>

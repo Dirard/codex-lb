@@ -203,5 +203,6 @@ func (s *AccountUsageService) cacheSnapshot(account domain.Account, snapshot Res
 	defer s.mu.Unlock()
 	key := accountGenerationKey{accountID: account.ID, generation: account.Generation}
 	s.creditEpoch[key]++
+	snapshot.ObservedAt = s.now().UTC()
 	s.snapshots[key] = snapshot
 }

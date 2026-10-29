@@ -1,15 +1,12 @@
 import { lazy, Suspense } from "react";
-import { Clock, Flame, RotateCcw } from "lucide-react";
+import { Clock, Flame, RefreshCw, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AccountTrendChartProps } from "@/features/accounts/components/account-trend-chart";
-import type {
-  AccountSummary,
-  AccountTrendsResponse,
-  AccountUsageResetCredits,
-} from "@/features/accounts/schemas";
+import type { CheckedResetCredits } from "@/features/accounts/hooks/use-accounts";
+import type { AccountSummary, AccountTrendsResponse } from "@/features/accounts/schemas";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
 import { useSmoothPercent } from "@/hooks/use-smooth-percent";
 import { quotaBarColor, quotaBarTrack } from "@/utils/account-status";
@@ -33,12 +30,36 @@ const AccountTrendChart = lazy(() =>
 export type AccountUsagePanelProps = {
   account: AccountSummary;
   trends?: AccountTrendsResponse | null;
-  resetCredits?: AccountUsageResetCredits | null;
-  resetCreditsLoading?: boolean;
-  resetCreditsUnavailable?: boolean;
+  /** The result of Check now for this account, if the operator pressed it. */
+  checkedResetCredits?: CheckedResetCredits | null;
+  checking?: boolean;
+  checkDisabled?: boolean;
+  onCheckNow?: (accountId: string) => void;
   resetDisabled?: boolean;
   onReset?: (accountId: string) => void;
 };
+
+/** Local HH:MM of an instant. */
+function formatClock(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/** The reset-credit count the sheet shows: a fresh check, else the snapshot. */
+function displayedResetCredits(
+  account: AccountSummary,
+  checked: CheckedResetCredits | null | undefined,
+): { count: number; asOf: string | null } | null {
+  if (checked && checked.accountId === account.accountId) {
+    return { count: checked.availableCount, asOf: checked.checkedAt };
+  }
+  if (account.availableResetCredits == null) {
+    return null;
+  }
+  return { count: account.availableResetCredits, asOf: account.resetCreditsObservedAt ?? null };
+}
 
 function QuotaRow({
   label,
@@ -158,53 +179,65 @@ const ADDITIONAL_ROUTING_POLICY_LABELS: Record<string, string> = {
 };
 
 function ResetCreditsRow({
-  accountId,
-  resetCredits,
-  loading,
-  unavailable,
-  nearestExpiresAt,
+  account,
+  checked,
+  checking,
+  checkDisabled,
+  onCheckNow,
   resetDisabled,
   onReset,
 }: {
-  accountId: string;
-  resetCredits?: AccountUsageResetCredits | null;
-  loading?: boolean;
-  unavailable?: boolean;
-  nearestExpiresAt?: string | null;
+  account: AccountSummary;
+  checked?: CheckedResetCredits | null;
+  checking?: boolean;
+  checkDisabled?: boolean;
+  onCheckNow?: (accountId: string) => void;
   resetDisabled?: boolean;
   onReset?: (accountId: string) => void;
 }) {
   const { t } = useTranslation();
   const dateDisplayFormat = useDateDisplayFormatStore((state) => state.dateDisplayFormat);
-  if (resetCredits == null && !loading && !unavailable) {
-    return null;
-  }
-
-  const availableCount = resetCredits?.availableCount ?? 0;
-  const valueLabel =
-    loading && resetCredits == null
-      ? t("accounts.usage.resetCredits.checking")
-      : unavailable && resetCredits == null
-        ? t("common.states.unavailable")
-        : t("accounts.usage.resetCredits.available", { count: availableCount });
+  const shown = displayedResetCredits(account, checked);
+  const asOf = formatClock(shown?.asOf);
+  const valueLabel = checking
+    ? t("accounts.usage.resetCredits.checking")
+    : shown === null
+      ? t("accounts.sheet.resetCreditsNotChecked")
+      : asOf
+        ? t("accounts.sheet.resetCreditsAsOf", { count: shown.count, time: asOf })
+        : t("accounts.usage.resetCredits.available", { count: shown.count });
+  const nearestExpiresAt = account.resetCreditNearestExpiresAt ?? null;
   const expiryCountdown = nearestExpiresAt ? formatSingleUnitRemaining(nearestExpiresAt) : null;
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border bg-background/60 px-3 py-2 text-xs">
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background/60 px-3 py-2 text-xs">
       <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
         <RotateCcw className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="truncate font-medium">{t("accounts.usage.resetCredits.title")}</span>
       </span>
-      <span className="flex min-w-0 flex-1 items-center justify-end gap-2">
+      <span className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
         {nearestExpiresAt && expiryCountdown ? (
-          <span className="min-w-0 max-w-[min(18rem,42vw)] truncate text-[11px] text-muted-foreground">
+          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
             {t("accounts.usage.resetCredits.expires", {
               time: formatDateTimeInline(nearestExpiresAt, dateDisplayFormat),
             })}{" "}
             <span className="tabular-nums">({expiryCountdown.label})</span>
           </span>
         ) : null}
-        <span className="shrink-0 tabular-nums font-semibold">{valueLabel}</span>
+        <span className="shrink-0 tabular-nums font-semibold" data-testid="reset-credits-value">{valueLabel}</span>
+        {onCheckNow ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
+            onClick={() => onCheckNow(account.accountId)}
+            disabled={checking || checkDisabled}
+          >
+            <RefreshCw className={cn("h-3 w-3", checking && "animate-spin")} aria-hidden="true" />
+            {t("accounts.sheet.checkNow")}
+          </Button>
+        ) : null}
         {onReset ? (
           <Button
             type="button"
@@ -212,8 +245,8 @@ function ResetCreditsRow({
             variant="ghost"
             className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
             aria-label={t("accounts.usageResetDialog.title")}
-            onClick={() => onReset(accountId)}
-            disabled={resetDisabled || availableCount <= 0}
+            onClick={() => onReset(account.accountId)}
+            disabled={resetDisabled || (shown?.count ?? 0) <= 0}
           >
             <RotateCcw className="h-3 w-3" aria-hidden="true" />
             {t("common.actions.reset")}
@@ -224,12 +257,53 @@ function ResetCreditsRow({
   );
 }
 
+/** Requests, tokens and cost of one labelled period (R44). */
+function UsagePeriod({
+  label,
+  requests,
+  tokens,
+  cost,
+  testId,
+}: {
+  label: string;
+  requests: number | null | undefined;
+  tokens: number | null | undefined;
+  cost: number | null | undefined;
+  testId: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="min-w-0 rounded-md border bg-background/60 px-3 py-2" data-testid={testId}>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+      {(requests ?? 0) > 0 ? (
+        <dl className="mt-1 grid grid-cols-3 gap-2 text-xs tabular-nums">
+          <div>
+            <dt className="text-muted-foreground">{t("accounts.sheet.requests")}</dt>
+            <dd className="font-medium">{formatCompactNumber(requests)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">{t("accounts.sheet.tokens")}</dt>
+            <dd className="font-medium">{formatCompactNumber(tokens)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">{t("accounts.sheet.cost")}</dt>
+            <dd className="font-medium">{formatCurrency(cost)}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="mt-1 text-xs text-muted-foreground">{t("accounts.usage.noRequestUsage")}</p>
+      )}
+    </div>
+  );
+}
+
 export function AccountUsagePanel({
   account,
   trends,
-  resetCredits,
-  resetCreditsLoading,
-  resetCreditsUnavailable,
+  checkedResetCredits,
+  checking = false,
+  checkDisabled = false,
+  onCheckNow,
   resetDisabled = false,
   onReset,
 }: AccountUsagePanelProps) {
@@ -241,7 +315,7 @@ export function AccountUsagePanel({
   const secondary = secondaryState.percent;
   const monthly = monthlyState.percent;
   const requestUsage = account.requestUsage ?? null;
-  const hasRequestUsage = (requestUsage?.requestCount ?? 0) > 0;
+  const usage7d = account.usage7d ?? null;
   const hasPrimaryWindow = account.windowMinutesPrimary != null || primaryState.everKnown;
   const hasSecondaryWindow = account.windowMinutesSecondary != null || secondaryState.everKnown;
   const hasMonthlyWindow = account.windowMinutesMonthly != null || monthlyState.everKnown;
@@ -267,28 +341,29 @@ export function AccountUsagePanel({
         )}
       </div>
       <ResetCreditsRow
-        accountId={account.accountId}
-        resetCredits={resetCredits}
-        loading={resetCreditsLoading}
-        unavailable={resetCreditsUnavailable}
-        nearestExpiresAt={account.resetCreditNearestExpiresAt ?? null}
+        account={account}
+        checked={checkedResetCredits}
+        checking={checking}
+        checkDisabled={checkDisabled}
+        onCheckNow={onCheckNow}
         resetDisabled={resetDisabled}
         onReset={onReset}
       />
-      <div className="rounded-md border bg-background/60 px-3 py-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("accounts.usage.requestLogsTotal")}</p>
-        {hasRequestUsage ? (
-          <p className="mt-1 break-words text-xs tabular-nums text-muted-foreground">
-            {t("accounts.usage.requestUsageMeta", {
-              tokens: formatCompactNumber(requestUsage?.totalTokens),
-              cached: formatCompactNumber(requestUsage?.cachedInputTokens),
-              requests: formatCompactNumber(requestUsage?.requestCount),
-              cost: formatCurrency(requestUsage?.totalCostUsd),
-            })}
-          </p>
-        ) : (
-          <p className="mt-1 text-xs text-muted-foreground">{t("accounts.usage.noRequestUsage")}</p>
-        )}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <UsagePeriod
+          testId="usage-last-7-days"
+          label={t("accounts.sheet.last7Days")}
+          requests={usage7d?.requests}
+          tokens={usage7d?.totalTokens}
+          cost={usage7d?.costUsd}
+        />
+        <UsagePeriod
+          testId="usage-lifetime"
+          label={t("accounts.sheet.lifetime")}
+          requests={requestUsage?.requestCount}
+          tokens={requestUsage?.totalTokens}
+          cost={requestUsage?.totalCostUsd}
+        />
       </div>
       {account.additionalQuotas.length > 0 ? (
         <div className="space-y-3">

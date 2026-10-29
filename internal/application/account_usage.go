@@ -76,6 +76,9 @@ type ResetCredits struct {
 	AvailableCount   int           `json:"availableCount"`
 	NearestExpiresAt *time.Time    `json:"nearestExpiresAt"`
 	Credits          []ResetCredit `json:"credits"`
+	// ObservedAt is when the in-memory snapshot was taken; the accounts list
+	// shows it as "available N as of".
+	ObservedAt time.Time `json:"-"`
 }
 
 type ResetCreditConsume struct {
@@ -358,6 +361,7 @@ func (s *AccountUsageService) RefreshResetCredits(ctx context.Context, accountID
 		return err
 	}
 	credits = normalizeSnapshot(credits)
+	credits.ObservedAt = s.now().UTC()
 	s.mu.Lock()
 	if s.creditEpoch[key] == epoch {
 		s.snapshots[key] = credits
@@ -427,6 +431,21 @@ func (s *AccountUsageService) ResetCreditsSnapshot(ctx context.Context, accountI
 		return &snapshot, nil
 	}
 	return nil, nil
+}
+
+// CachedResetCredits is ResetCreditsSnapshot for an account the caller has
+// already read: the in-memory snapshot only, without storage or provider
+// reads, so a list of accounts costs no statement per account.
+func (s *AccountUsageService) CachedResetCredits(account domain.Account) *ResetCredits {
+	if !usageEligible(account) {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snapshot, ok := s.snapshots[accountGenerationKey{accountID: account.ID, generation: account.Generation}]; ok {
+		return &snapshot
+	}
+	return nil
 }
 
 // LastUsageSnapshot returns the most recent polled usage telemetry, or nil.

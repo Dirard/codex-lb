@@ -950,7 +950,34 @@ export const handlers = [
   }),
 
   http.get("/api/accounts", () => {
-    return HttpResponse.json({ accounts: state.accounts });
+    return HttpResponse.json({
+      accounts: state.accounts,
+      shell: createShellStatus({
+        reauthRequiredAccounts: state.accounts.filter((account) => account.status === "reauth_required").length,
+        availableResetCredits: state.accounts.reduce((sum, account) => sum + (account.availableResetCredits ?? 0), 0),
+      }),
+    });
+  }),
+
+  http.put("/api/accounts/:accountId/groups", async ({ params, request }) => {
+    const accountId = String(params.accountId);
+    const account = findAccount(accountId);
+    const payload = (await request.json().catch(() => null)) as { groupIds?: unknown } | null;
+    if (!account || !payload || !Array.isArray(payload.groupIds)) {
+      return HttpResponse.json(
+        { error: { code: account ? "invalid_request" : "account_not_found", message: "Invalid groups" } },
+        { status: account ? 400 : 404 },
+      );
+    }
+    const groupIds = payload.groupIds.map(String);
+    account.groups = [...groupIds].sort();
+    state.accountGroups = state.accountGroups.map((group) => ({
+      ...group,
+      accountIds: groupIds.includes(group.id)
+        ? [...new Set([...group.accountIds, accountId])]
+        : group.accountIds.filter((id) => id !== accountId),
+    }));
+    return HttpResponse.json({ accountId, groupIds });
   }),
 
   http.post("/api/accounts/import", async () => {

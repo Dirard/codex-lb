@@ -33,6 +33,7 @@ type Repository interface {
 	application.DirectoryRepository
 	application.KeyPageRepository
 	application.KeyUsageReportRepository
+	application.AccountViewsRepository
 	application.GroupsSummaryRepository
 	application.KeysListRepository
 	application.KeysBulkRepository

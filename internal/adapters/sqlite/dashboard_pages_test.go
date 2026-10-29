@@ -253,6 +253,7 @@ func BenchmarkDashboardPages(b *testing.B) {
 	})
 	benchmarkKeyPages(b, s)
 	benchmarkKeyUsageReports(b, s)
+	benchmarkAccountViews(b, s)
 	benchmarkGroupsSummary(b, s)
 	benchmarkKeysList(b, s)
 }

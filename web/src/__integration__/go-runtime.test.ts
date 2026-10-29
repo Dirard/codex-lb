@@ -172,6 +172,17 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     expect(DirectorySchema.parse(await request("/api/directory")).keys.some((key) => key.id === created.id)).toBe(false);
   });
 
+  it("serves the accounts list with the shell status and Server-Timing to an administrator only", async () => {
+    const anonymous = await fetch(`${base}/api/accounts`, { signal: AbortSignal.timeout(4_000) });
+    expect(anonymous.status).toBe(401);
+    const signedIn = await fetch(`${base}/api/accounts`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.headers.get("server-timing")).toMatch(/^app;dur=\d+(\.\d)?$/);
+    const list = AccountsResponseSchema.parse(await signedIn.json());
+    expect(list.accounts).toEqual([]);
+    expect(list.shell).toMatchObject({ ready: true, reauthRequiredAccounts: 0, availableResetCredits: 0 });
+  });
+
   it("serves the key page to the administrator and, redacted, to the key owner", async () => {
     const created = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "contract key page" }));
     for (const route of [`/api/api-keys/${created.id}/page`, `/api/api-keys/${created.id}/requests`]) {

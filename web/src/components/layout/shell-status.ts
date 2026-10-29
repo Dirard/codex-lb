@@ -35,6 +35,7 @@ const PAGES_CARRYING_SHELL_STATUS = [
   "/overview",
   "/keys",
   "/groups",
+  "/accounts",
 ];
 
 /** `/keys/<id>`, whose poll runs only while its period includes today. */

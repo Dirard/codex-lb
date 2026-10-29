@@ -25,6 +25,13 @@ type AccountQuotaMetadata interface {
 	LoadAccountQuotaRefusalAt(context.Context, string) (*time.Time, error)
 }
 
+// AccountViewsRepository reads the accounts list, with each account's
+// quotas, credits, memberships, totals, token ciphertexts and last 7 days of
+// usage, in a number of statements independent of the number of accounts.
+type AccountViewsRepository interface {
+	ListAccountViews(context.Context, time.Time) (domain.AccountViews, error)
+}
+
 // AccountSelectionSnapshots loads routing telemetry for many candidates with a
 // constant number of reads.
 type AccountSelectionSnapshots interface {

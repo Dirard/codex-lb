@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ShellStatusSchema } from "@/components/layout/shell-status";
 import { markDuplicateEmails } from "@/features/accounts/email-duplicates";
 
 const UsageTrendPointSchema = z.object({
@@ -27,6 +28,13 @@ export const AccountUsageResetCreditsSchema = z.object({
 export const AccountUsageResetCreditsResponseSchema = z.object({
   accountId: z.string(),
   rateLimitResetCredits: AccountUsageResetCreditsSchema,
+});
+
+/** An account's requests, tokens and cost over the 7 days ending at the read. */
+const AccountUsage7dSchema = z.object({
+  requests: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  costUsd: z.number().nonnegative(),
 });
 
 const AccountTokenStatusSchema = z.object({
@@ -80,6 +88,7 @@ export const AccountSummarySchema = z.object({
   subscriptionActiveUntil: z.iso.datetime({ offset: true }).nullable().optional(),
   routingPolicy: z.enum(["normal", "burn_first", "preserve"]).optional(),
   status: z.string(),
+  deactivationReason: z.string().nullable().optional(),
   securityWorkAuthorized: z.boolean().optional(),
   usage: AccountUsageSchema.nullable().optional(),
   resetAtPrimary: z.iso.datetime({ offset: true }).nullable().optional(),
@@ -104,6 +113,11 @@ export const AccountSummarySchema = z.object({
   limitWarmup: AccountLimitWarmupStatusSchema.nullable().optional(),
   availableResetCredits: z.number().nullable().optional(),
   resetCreditNearestExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  /** When the in-memory reset-credit snapshot was taken. */
+  resetCreditsObservedAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  /** Ids of the account's groups. */
+  groups: z.array(z.string()).default([]),
+  usage7d: AccountUsage7dSchema.nullable().optional(),
 });
 
 const RateLimitResetCreditItemSchema = z.object({
@@ -138,6 +152,8 @@ export const AccountTrendsResponseSchema = z.object({
 
 export const AccountsResponseSchema = z.object({
   accounts: z.array(AccountSummarySchema).transform(markDuplicateEmails),
+  /** The shell status the Accounts page poll carries (dashboard redesign use case 1). */
+  shell: ShellStatusSchema.optional(),
 });
 
 export const AccountImportResponseSchema = z.object({
@@ -264,6 +280,11 @@ export const AccountRoutingPolicyUpdateResponseSchema = z.object({
   routingPolicy: AccountRoutingPolicySchema,
 });
 
+export const AccountGroupsUpdateResponseSchema = z.object({
+  accountId: z.string(),
+  groupIds: z.array(z.string()),
+});
+
 export const AccountUpdateRequestSchema = z.object({
   securityWorkAuthorized: z.boolean().optional(),
 });
@@ -369,6 +390,8 @@ export type AccountUsageResetConsumeResponse = z.infer<
   typeof AccountUsageResetConsumeResponseSchema
 >;
 export type AccountTrendsResponse = z.infer<typeof AccountTrendsResponseSchema>;
+export type AccountsResponse = z.infer<typeof AccountsResponseSchema>;
+export type AccountUsage7d = z.infer<typeof AccountUsage7dSchema>;
 export type OpenCodeAuthJson = z.infer<typeof OpenCodeAuthJsonSchema>;
 export type CodexAuthJson = z.infer<typeof CodexAuthJsonSchema>;
 export type AccountAuthExportTokens = z.infer<typeof AccountAuthExportTokensSchema>;
