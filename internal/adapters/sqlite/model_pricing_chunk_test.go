@@ -102,7 +102,7 @@ func TestReserveAndSettleKeepWorkingDuringLongReprice(t *testing.T) {
 	started := time.Now()
 	go func() {
 		entry, err := service.Save(ctx, "gpt-6-sol", price)
-		if err == nil && (entry.Reprice == nil || entry.Reprice.RecomputedRequests < 6*repriceRawChunk) {
+		if err == nil && (entry.Reprice == nil || entry.Reprice.RecomputedRequests < int64(6*repriceRawChunk)) {
 			err = fmt.Errorf("incomplete reprice summary: %+v", entry.Reprice)
 		}
 		done <- finished{time.Now(), err}

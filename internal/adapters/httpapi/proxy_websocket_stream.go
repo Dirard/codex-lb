@@ -16,10 +16,12 @@ import (
 // websocketTurn, so emit returns only after the client accepted the frame;
 // the handler goroutine only sends native heartbeats after real silence.
 // onTerminal runs once, before the terminal frame is written: a client frame
-// that follows the terminal then always finds the turn finalizing.
-func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage, onTerminal func()) (bool, error) {
+// that follows the terminal then always finds the turn finalizing. ctx is the
+// turn, which response.cancel ends; session is the connection's lifetime and
+// bounds the writes.
+func (p *ProxyHandler) respondWebSocket(session, ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage, onTerminal func()) (bool, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	turn := &websocketTurn{connection: connection, lastWrite: time.Now(), onTerminal: onTerminal}
+	turn := &websocketTurn{connection: connection, session: session, lastWrite: time.Now(), onTerminal: onTerminal}
 	done := make(chan proxyOutcome, 1)
 	workerDone := make(chan struct{})
 	defer func() { cancel(); <-workerDone }()
@@ -45,7 +47,7 @@ func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websock
 			}
 			// A failed client write ends the turn: the error is returned and the
 			// turn context is cancelled.
-			err := turn.write(ctx, event.Data, terminalEvent(event.Type))
+			err := turn.write(event.Data, terminalEvent(event.Type))
 			if err != nil {
 				cancel()
 			}
@@ -59,6 +61,11 @@ func (p *ProxyHandler) respondWebSocket(ctx context.Context, connection *websock
 type websocketTurn struct {
 	mu         sync.Mutex
 	connection *websocket.Conn
+	// session bounds every write. coder/websocket closes the whole connection
+	// when a write's context ends mid-frame, so ending the turn (a client's
+	// response.cancel) must not end a write in progress; only the end of the
+	// session or the write timeout may.
+	session    context.Context
 	terminal   bool
 	failed     error
 	lastWrite  time.Time
@@ -73,11 +80,15 @@ func (t *websocketTurn) setResponseID(id string) {
 	t.mu.Unlock()
 }
 
-func (t *websocketTurn) writeLocked(ctx context.Context, data []byte) error {
+func (t *websocketTurn) writeLocked(data []byte) error {
 	if t.failed != nil {
 		return t.failed
 	}
-	writeCtx, stop := context.WithTimeout(ctx, downstreamWriteTimeout)
+	session := t.session
+	if session == nil {
+		session = context.Background()
+	}
+	writeCtx, stop := context.WithTimeout(session, downstreamWriteTimeout)
 	err := t.connection.Write(writeCtx, websocket.MessageText, data)
 	stop()
 	if err != nil {
@@ -88,13 +99,13 @@ func (t *websocketTurn) writeLocked(ctx context.Context, data []byte) error {
 	return nil
 }
 
-func (t *websocketTurn) write(ctx context.Context, data []byte, terminal bool) error {
+func (t *websocketTurn) write(data []byte, terminal bool) error {
 	if terminal && t.onTerminal != nil {
 		t.terminalAt.Do(t.onTerminal)
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if err := t.writeLocked(ctx, data); err != nil {
+	if err := t.writeLocked(data); err != nil {
 		return err
 	}
 	t.terminal = t.terminal || terminal
@@ -103,7 +114,7 @@ func (t *websocketTurn) write(ctx context.Context, data []byte, terminal bool) e
 
 // heartbeat sends a native application heartbeat after interval without a
 // real write and returns the delay until the next check.
-func (t *websocketTurn) heartbeat(ctx context.Context, interval time.Duration) (time.Duration, error) {
+func (t *websocketTurn) heartbeat(interval time.Duration) (time.Duration, error) {
 	if !t.mu.TryLock() {
 		return interval, nil // an event write is in progress
 	}
@@ -121,7 +132,7 @@ func (t *websocketTurn) heartbeat(ctx context.Context, interval time.Duration) (
 	if t.responseID != "" {
 		data, _ = json.Marshal(nativeInProgress(t.responseID))
 	}
-	return interval, t.writeLocked(ctx, data)
+	return interval, t.writeLocked(data)
 }
 
 func (t *websocketTurn) state() (bool, error) {
@@ -143,7 +154,7 @@ func (t *websocketTurn) wait(ctx context.Context, done <-chan proxyOutcome, code
 			case outcome := <-done:
 				return t.outcome(outcome)
 			case <-timer.C:
-				wait, err := t.heartbeat(ctx, interval)
+				wait, err := t.heartbeat(interval)
 				if err != nil {
 					terminal, _ := t.state()
 					return terminal, err

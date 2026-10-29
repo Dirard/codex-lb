@@ -20,7 +20,7 @@ codex-lb is a single static Go binary (module `codex-lb`) with SQLite storage an
 | `make web-deps build` | dashboard build embedded into `bin/codex-lb` |
 | `make test-web-contract` | dashboard API contract tests against the built binary |
 
-CI (`.github/workflows/ci.yml`) runs the same gates on every pull request and on `main`. A change is ready only when CI is green.
+CI (`.github/workflows/ci.yml`) runs the same gates on every pull request and on `main`. It splits `go test -race` into four parallel shards (`scripts/race-shard.sh <shard> <shards>`, each test in exactly one shard). A change is ready only when CI is green.
 
 Tests sit beside the implementation and use deterministic loopback upstream stubs and temporary data directories. Real provider traffic (ChatGPT, Z.AI, OpenAI) and changes to a running installation need explicit operator approval.
 
