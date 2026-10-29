@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -193,8 +194,15 @@ export function BulkActionsBar({
   const busy = apply.isPending || selectAll.isPending;
   return (
     <div className="space-y-2" data-testid="keys-bulk-bar">
-      {count > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/40 px-3 py-2 text-xs">
+      {count > 0 ? createPortal(
+        // Floats above the status bar instead of pushing the table down, so
+        // selecting rows one after another never moves them under the cursor.
+        <div
+          role="toolbar"
+          aria-label={t("keys.bulk.toolbar")}
+          data-testid="keys-bulk-actions"
+          className="fixed inset-x-0 bottom-20 z-40 mx-auto flex w-[min(60rem,calc(100%-2rem))] flex-wrap items-center gap-2 rounded-xl border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur"
+        >
           <span className="font-medium tabular-nums" data-testid="keys-selected-count">
             {t("keys.bulk.selected", { count })}
           </span>
@@ -230,7 +238,8 @@ export function BulkActionsBar({
               {t("keys.bulk.clear")}
             </Button>
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
       {failures.length > 0 ? (
         <AlertMessage variant="error">

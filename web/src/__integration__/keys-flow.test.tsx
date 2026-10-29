@@ -153,7 +153,7 @@ describe("keys page integration", () => {
 
 		await screen.findAllByTestId("keys-row");
 		await user.click(screen.getByRole("checkbox", { name: "Select every key on this page" }));
-		await user.click(within(screen.getByTestId("keys-bulk-bar")).getByRole("button", { name: "Disable" }));
+		await user.click(within(screen.getByRole("toolbar", { name: "Bulk actions for the selected keys" })).getByRole("button", { name: "Disable" }));
 		const confirm = await screen.findByRole("alertdialog", { name: "Disable 2 keys?" });
 		expect(requests.some((entry) => entry.path === "/api/keys/bulk")).toBe(false);
 		await user.click(within(confirm).getByRole("button", { name: "Disable 2 keys" }));

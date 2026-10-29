@@ -62,7 +62,8 @@ export function KeysPage() {
   };
 
   return (
-    <div className="animate-fade-in-up space-y-4">
+    // Room below the table for the floating bulk bar while keys are selected.
+    <div className={selection.ids.size > 0 ? "animate-fade-in-up space-y-4 pb-20" : "animate-fade-in-up space-y-4"}>
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{t("keys.page.title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t("keys.page.subtitle")}</p>

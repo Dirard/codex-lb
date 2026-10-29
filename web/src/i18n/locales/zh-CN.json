@@ -171,6 +171,7 @@
   "keys.bulk.move": "移动到分组",
   "keys.bulk.limits": "设置限额",
   "keys.bulk.clear": "清除",
+  "keys.bulk.toolbar": "所选密钥的批量操作",
   "keys.bulk.done": "已更改 {{count}} 个密钥",
   "keys.bulk.done_one": "已更改 {{count}} 个密钥",
   "keys.bulk.done_other": "已更改 {{count}} 个密钥",

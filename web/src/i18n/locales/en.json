@@ -171,6 +171,7 @@
   "keys.bulk.move": "Move to group",
   "keys.bulk.limits": "Set limits",
   "keys.bulk.clear": "Clear",
+  "keys.bulk.toolbar": "Bulk actions for the selected keys",
   "keys.bulk.done": "{{count}} keys changed",
   "keys.bulk.done_one": "{{count}} key changed",
   "keys.bulk.done_other": "{{count}} keys changed",

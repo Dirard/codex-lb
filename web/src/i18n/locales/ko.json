@@ -171,6 +171,7 @@
   "keys.bulk.move": "그룹으로 이동",
   "keys.bulk.limits": "한도 설정",
   "keys.bulk.clear": "선택 해제",
+  "keys.bulk.toolbar": "선택한 키에 대한 일괄 작업",
   "keys.bulk.done": "키 {{count}}개 변경됨",
   "keys.bulk.done_one": "키 {{count}}개 변경됨",
   "keys.bulk.done_other": "키 {{count}}개 변경됨",
