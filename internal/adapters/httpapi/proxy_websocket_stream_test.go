@@ -321,3 +321,53 @@ func TestWebSocketHeartbeatDisconnectReleasesWorker(t *testing.T) {
 		})
 	}
 }
+
+// A client's response.cancel can arrive while a frame of the turn is being
+// written. coder/websocket closes the whole connection when a write's context
+// ends mid-frame, so the cancel used to drop the session (the client read EOF
+// instead of the turn's error); the frame now completes and the session serves
+// the next turn.
+func TestWebSocketCancelDuringAFrameWriteKeepsTheSession(t *testing.T) {
+	writing := make(chan struct{})
+	var calls atomic.Int32
+	// Far beyond the loopback socket buffers: the write blocks until the client reads.
+	delta := `{"type":"response.output_text.delta","delta":"` + strings.Repeat("x", 32<<20) + `"}`
+	server, _ := heartbeatFixtureInterval(t, func(ctx context.Context, target application.ResponseTarget, body json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+		if calls.Add(1) == 1 {
+			close(writing)
+			if err := emit(application.ResponseEvent{Type: "response.output_text.delta", Data: []byte(delta)}); err != nil {
+				return application.ResponseResult{}, err
+			}
+			<-ctx.Done()
+			return application.ResponseResult{}, ctx.Err()
+		}
+		return (localReplyProvider{}).Respond(ctx, target, body, emit)
+	}, time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn := heartbeatConnect(t, ctx, server, "/backend-api/codex/responses")
+	conn.SetReadLimit(64 << 20)
+	if err := heartbeatWait(ctx, writing); err != nil {
+		t.Fatal("provider did not start")
+	}
+	// Give the frame time to fill the socket buffers, so the cancel lands
+	// mid-write; a shorter wait only makes the old failure less likely.
+	time.Sleep(100 * time.Millisecond)
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.cancel"}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"response.output_text.delta", "error"} {
+		if kind, _ := heartbeatRead(t, ctx, conn); kind != want {
+			t.Fatalf("read %q, want %q", kind, want)
+		}
+	}
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-6-sol","input":"next"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if kind, _ := heartbeatRead(t, ctx, conn); kind != "response.completed" {
+		t.Fatalf("next turn read %q", kind)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("provider calls = %d, want 2", calls.Load())
+	}
+}
