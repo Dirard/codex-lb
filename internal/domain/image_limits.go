@@ -14,21 +14,24 @@ func ImageLimitID(id string) bool {
 
 // ImageLimitHeaders selects the upstream headers that tell a client when an
 // image limit resets: Retry-After, X-Codex-Active-Limit and every
-// X-Image-Gen-* header, plus the X-Codex primary/secondary window headers when
-// the active limit is an image limit. Plan and credit headers are never
-// selected. Names are returned in canonical form.
+// X-Image-Gen-* header. When the active limit is an image limit it also keeps
+// that limit's own windows (X-<limit id with dashes>-*, for example
+// X-Imagegen-Premium-*) and the X-Codex primary/secondary window headers.
+// Plan and credit headers are never selected. Names are returned in canonical
+// form.
 func ImageLimitHeaders(headers map[string][]string) map[string][]string {
-	imageLimit := false
+	limitPrefix := ""
 	for name, values := range headers {
 		if strings.EqualFold(name, "X-Codex-Active-Limit") && len(values) != 0 && ImageLimitID(values[0]) {
-			imageLimit = true
+			limitPrefix = "x-" + strings.ReplaceAll(strings.ToLower(strings.TrimSpace(values[0])), "_", "-") + "-"
 		}
 	}
+	imageLimit := limitPrefix != ""
 	selected := map[string][]string{}
 	for name, values := range headers {
 		lower := strings.ToLower(name)
 		keep := lower == "retry-after" || lower == "x-codex-active-limit" || strings.HasPrefix(lower, "x-image-gen-") ||
-			imageLimit && (strings.HasPrefix(lower, "x-codex-primary-") || strings.HasPrefix(lower, "x-codex-secondary-"))
+			imageLimit && (strings.HasPrefix(lower, limitPrefix) || strings.HasPrefix(lower, "x-codex-primary-") || strings.HasPrefix(lower, "x-codex-secondary-"))
 		if keep && len(values) != 0 {
 			selected[textproto.CanonicalMIMEHeaderKey(name)] = append([]string(nil), values...)
 		}

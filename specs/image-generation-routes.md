@@ -165,7 +165,7 @@ An upstream 429 usage-limit refusal that arrives before any output or usage SHAL
 Other failures, responses that carried output or usage, and file-pinned edits SHALL NOT be sent to another account.
 
   R13:
-A final upstream 429 SHALL reach the client with the upstream `Retry-After`, `X-Codex-Active-Limit` and every `X-Image-Gen-*` header unchanged, plus the `X-Codex-Primary-*` and `X-Codex-Secondary-*` used-percent, window and reset headers when `X-Codex-Active-Limit` names an image limit; plan and credit headers are not passed.
+A final upstream 429 SHALL reach the client with the upstream `Retry-After`, `X-Codex-Active-Limit` and every `X-Image-Gen-*` header unchanged, plus, when `X-Codex-Active-Limit` names an image limit, that limit's own windows (`X-<limit id with dashes>-*`, such as `X-Imagegen-Premium-*`) and the `X-Codex-Primary-*` and `X-Codex-Secondary-*` used-percent, window and reset headers; plan and credit headers are not passed.
 
 Implementation Logic:
 1. `CodexOperations.imageCooldown` is a mutex-guarded `map[accountID]until`. Expired entries are pruned on read; the map is per process.
@@ -262,6 +262,7 @@ Tests:
 13. [x] Streamed image responses: validation, provider read, SSE relay, settlement (R14, R15).
 14. [x] Responses image-limit classification, settlement and client envelope (R16).
 15. [x] Tests, gates, release notes (`go-v1.7.0`), archive the change.
+16. [x] Pass the active image limit's own window headers (`X-<limit>-*`, OpenSpec `pass-image-limit-windows`, `go-v1.7.1`) (R13).
 
 Deferred:
 - GPT Image 2.5 Sunburst and Flare with real `model`, `quality` (up to `max`), `size` (up to 3840 px) and transparent backgrounds need an OpenAI API key source with an images capability. This includes a per-key or per-group image model, because Codex always sends `gpt-image-2`. The subscription endpoint ignores these fields.
@@ -286,3 +287,4 @@ None blocking.
 - 2026-10-30: CanonKeeper asked, and the owner confirmed in this session, for streaming on the image routes, reset headers on image-limit refusals and account-neutral image-limit refusals on Responses. A direct probe (Pro account) showed `stream: true` on generations answers `text/event-stream` with `keepalive` events about every 15 s and one `image_generation.completed` event (image, `usage`, `quality`, `size`, `generation_id`); `partial_images: 2` produced no draft frames; an edit with `stream: true` answered JSON. Relaying the upstream answer as it is keeps clients on the subscription's own contract.
 - 2026-10-30: Image limits on Responses are recognized only from the `X-Codex-Active-Limit` header of a 429, because that header is the one signal the subscription uses to name the image window (`imagegen_premium` on every image response observed). Production had no quota marks in the preceding 48 h, so the change is preventive.
 - 2026-10-30: Validation for use cases 4–5, run locally (GitHub Actions unavailable): `make check` (vet, golangci-lint 0 issues, test, race, govulncheck, openspec), `make web-deps build`, `make test-web-contract`; the dashboard is unchanged. With the Responses classification disabled, the image-limit route test fails on the old behavior (503 `no_available_accounts`, account marked), so the test guards the fix.
+- 2026-10-30: The Codex fork's Go SDK (sdk/go/v0.165.3) reads an image-limit refusal from the active limit's own windows (`x-<limit>-*`) before `x-image-gen-*` and `x-codex-*`. Pro accounts report `imagegen_premium`, so go-v1.7.0 would have dropped `X-Imagegen-Premium-*`. go-v1.7.1 keeps the active image limit's own prefix; no new provider traffic was needed.

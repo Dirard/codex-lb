@@ -24,8 +24,17 @@ func TestImageLimitRuleAndHeaders(t *testing.T) {
 	if got := ImageLimitHeaders(upstream); !reflect.DeepEqual(got, want) {
 		t.Fatalf("image-limit headers: %v", got)
 	}
+	premium := map[string][]string{
+		"X-Codex-Active-Limit": {"imagegen_premium"}, "X-Imagegen-Premium-Primary-Reset-At": {"1793390082"},
+		"X-Imagegen-Premium-Secondary-Window-Minutes": {"10080"}, "X-Imagegen-Standard-Primary-Reset-At": {"1"}, "X-Codex-Plan-Type": {"pro"},
+	}
+	got := ImageLimitHeaders(premium)
+	if got["X-Imagegen-Premium-Primary-Reset-At"] == nil || got["X-Imagegen-Premium-Secondary-Window-Minutes"] == nil ||
+		got["X-Imagegen-Standard-Primary-Reset-At"] != nil || got["X-Codex-Plan-Type"] != nil {
+		t.Fatalf("active limit windows: %v", got)
+	}
 	upstream["X-Codex-Active-Limit"] = []string{"codex"}
-	got := ImageLimitHeaders(upstream)
+	got = ImageLimitHeaders(upstream)
 	if _, ok := got["X-Codex-Primary-Used-Percent"]; ok || got["X-Image-Gen-Primary-Reset-At"] == nil || got["Retry-After"] == nil {
 		t.Fatalf("account windows passed for a non-image limit: %v", got)
 	}

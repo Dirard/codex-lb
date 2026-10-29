@@ -591,14 +591,15 @@ func TestImageStreamWithoutImageEndsWithErrorAndKeepsReservation(t *testing.T) {
 func TestFinalImageLimitRefusalCarriesResetHeaders(t *testing.T) {
 	f := newImageFixture(t, 2, func(imageCall, int) (int, string) { return 429, imageLimit })
 	f.stub.headers = map[string]string{
-		"Retry-After": "3600", "X-Codex-Active-Limit": "image_gen", "X-Image-Gen-Primary-Reset-At": "1793390082",
-		"X-Codex-Primary-Reset-At": "1793390082", "X-Codex-Plan-Type": "pro", "X-Codex-Credits-Balance": "7",
+		"Retry-After": "3600", "X-Codex-Active-Limit": "imagegen_premium", "X-Image-Gen-Primary-Reset-At": "1793390082",
+		"X-Imagegen-Premium-Primary-Reset-At": "1793390082", "X-Codex-Primary-Reset-At": "1793390082",
+		"X-Codex-Plan-Type": "pro", "X-Codex-Credits-Balance": "7",
 	}
 	w := f.postJSON(t, "/backend-api/codex/images/generations", `{"prompt":"x"}`)
 	if w.Code != 429 || w.Body.String() != imageLimit {
 		t.Fatalf("final refusal: %d %s", w.Code, w.Body.String())
 	}
-	for _, name := range []string{"Retry-After", "X-Codex-Active-Limit", "X-Image-Gen-Primary-Reset-At", "X-Codex-Primary-Reset-At"} {
+	for _, name := range []string{"Retry-After", "X-Codex-Active-Limit", "X-Image-Gen-Primary-Reset-At", "X-Imagegen-Premium-Primary-Reset-At", "X-Codex-Primary-Reset-At"} {
 		if w.Header().Get(name) == "" {
 			t.Fatalf("reset header %s was dropped: %v", name, w.Header())
 		}
