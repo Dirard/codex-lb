@@ -1,125 +1,149 @@
 import type { AccountSummary } from "@/features/accounts/schemas";
-import type { AccountQuotaDisplayPreference } from "@/hooks/use-account-quota-display";
 import { parseDate } from "@/utils/formatters";
 
 export type AccountSortMode =
+  | "status_severity"
   | "reset_soonest"
   | "reset_latest"
+  | "primary_remaining"
+  | "secondary_remaining"
+  | "most_reset_credits"
   | "name_asc"
-  | "name_desc"
-  | "most_reset_credits";
+  | "name_desc";
 
 export const ACCOUNT_SORT_OPTIONS: readonly { value: AccountSortMode; label: string }[] = [
+  { value: "status_severity", label: "Status severity" },
   { value: "reset_soonest", label: "Reset time (soonest)" },
   { value: "reset_latest", label: "Reset time (latest)" },
+  { value: "primary_remaining", label: "5h remaining" },
+  { value: "secondary_remaining", label: "Weekly remaining" },
   { value: "most_reset_credits", label: "Most reset credits" },
   { value: "name_asc", label: "Name (A-Z)" },
   { value: "name_desc", label: "Name (Z-A)" },
 ] as const;
 
-export const DEFAULT_ACCOUNT_SORT_MODE: AccountSortMode = "most_reset_credits";
+export const DEFAULT_ACCOUNT_SORT_MODE: AccountSortMode = "status_severity";
 
-function visibleQuotaResetTimestamps(
-  account: AccountSummary,
-  quotaDisplay: AccountQuotaDisplayPreference,
-): number[] {
-  const now = Date.now();
-  const hasPrimary = account.windowMinutesPrimary != null || account.usage?.primaryRemainingPercent != null || account.resetAtPrimary != null;
-  const hasSecondary = account.windowMinutesSecondary != null || account.usage?.secondaryRemainingPercent != null || account.resetAtSecondary != null;
-  const showPrimary = hasPrimary && (quotaDisplay !== "weekly" || !hasSecondary);
-  const showSecondary = hasSecondary && (quotaDisplay !== "5h" || !hasPrimary);
+/** Problems first: accounts needing the operator, then the blocked ones. */
+const STATUS_SEVERITY: Record<string, number> = {
+  reauth_required: 0,
+  deactivated: 1,
+  quota_exceeded: 2,
+  rate_limited: 3,
+  paused: 4,
+  active: 5,
+};
 
-  return [
-    showPrimary ? parseDate(account.resetAtPrimary)?.getTime() ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY,
-    showSecondary ? parseDate(account.resetAtSecondary)?.getTime() ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY,
-  ].filter((resetAt) => resetAt > now);
+export function statusSeverity(status: string): number {
+  return STATUS_SEVERITY[status] ?? STATUS_SEVERITY.active;
 }
 
-function accountSortLabel(account: AccountSummary): string {
-  return (account.displayName || account.email || account.accountId).trim().toLowerCase();
+/** The label the table shows and name sorting uses: alias, else e-mail. */
+export function accountLabel(account: AccountSummary): string {
+  return (account.alias?.trim() || account.displayName || account.email || account.accountId).trim();
 }
 
-function accountResetTimestamp(account: AccountSummary, quotaDisplay: AccountQuotaDisplayPreference): number {
-  const resets = visibleQuotaResetTimestamps(account, quotaDisplay);
+function upcomingResets(account: AccountSummary, nowMs: number): number[] {
+  return [account.resetAtPrimary, account.resetAtSecondary, account.resetAtMonthly]
+    .map((value) => parseDate(value)?.getTime() ?? Number.POSITIVE_INFINITY)
+    .filter((resetAt) => resetAt > nowMs);
+}
+
+/** The earliest upcoming reset of the account's windows, or Infinity. */
+export function nextReset(account: AccountSummary, nowMs = Date.now()): number {
+  const resets = upcomingResets(account, nowMs);
   return resets.length > 0 ? Math.min(...resets) : Number.POSITIVE_INFINITY;
 }
 
-function compareResetTimestamps(leftReset: number, rightReset: number, direction: "asc" | "desc"): number {
-  const leftFinite = Number.isFinite(leftReset);
-  const rightFinite = Number.isFinite(rightReset);
+/** Finite values first, in the direction; missing values (Infinity) last. */
+function compareFinite(left: number, right: number, direction: "asc" | "desc"): number {
+  const leftFinite = Number.isFinite(left);
+  const rightFinite = Number.isFinite(right);
   if (leftFinite !== rightFinite) {
     return leftFinite ? -1 : 1;
   }
-  if (leftReset === rightReset) {
+  if (left === right) {
     return 0;
   }
-  return direction === "desc" ? rightReset - leftReset : leftReset - rightReset;
+  return direction === "desc" ? right - left : left - right;
+}
+
+function remaining(value: number | null | undefined): number {
+  return value ?? Number.POSITIVE_INFINITY;
 }
 
 function resetCreditNearestExpiry(account: AccountSummary): number {
-  const parsed = parseDate(account.resetCreditNearestExpiresAt);
-  return parsed ? parsed.getTime() : Number.POSITIVE_INFINITY;
+  return parseDate(account.resetCreditNearestExpiresAt)?.getTime() ?? Number.POSITIVE_INFINITY;
 }
 
-function compareByResetCredits(left: AccountSummary, right: AccountSummary): number {
-  const leftCount = left.availableResetCredits ?? 0;
-  const rightCount = right.availableResetCredits ?? 0;
-  if (leftCount !== rightCount) {
-    return rightCount - leftCount;
+function compareByMode(left: AccountSummary, right: AccountSummary, mode: AccountSortMode, nowMs: number): number {
+  switch (mode) {
+    case "status_severity":
+      return statusSeverity(left.status) - statusSeverity(right.status) ||
+        compareFinite(nextReset(left, nowMs), nextReset(right, nowMs), "asc");
+    case "reset_soonest":
+      return compareFinite(nextReset(left, nowMs), nextReset(right, nowMs), "asc");
+    case "reset_latest":
+      return compareFinite(nextReset(left, nowMs), nextReset(right, nowMs), "desc");
+    case "primary_remaining":
+      return compareFinite(remaining(left.usage?.primaryRemainingPercent), remaining(right.usage?.primaryRemainingPercent), "asc");
+    case "secondary_remaining":
+      return compareFinite(remaining(left.usage?.secondaryRemainingPercent), remaining(right.usage?.secondaryRemainingPercent), "asc");
+    case "most_reset_credits":
+      return (right.availableResetCredits ?? 0) - (left.availableResetCredits ?? 0) ||
+        compareFinite(resetCreditNearestExpiry(left), resetCreditNearestExpiry(right), "asc");
+    case "name_asc":
+      return accountLabel(left).toLowerCase().localeCompare(accountLabel(right).toLowerCase());
+    case "name_desc":
+      return accountLabel(right).toLowerCase().localeCompare(accountLabel(left).toLowerCase());
   }
-  // Tiebreak by soonest expiry ascending; null expiry (Infinity) sorts last.
-  return compareResetTimestamps(
-    resetCreditNearestExpiry(left),
-    resetCreditNearestExpiry(right),
-    "asc",
+  return 0;
+}
+
+/**
+ * Orders accounts by the selected mode; ties fall back to the next reset,
+ * then the label and the account id, so the order is stable between polls.
+ */
+export function sortAccountsForDisplay(
+  accounts: AccountSummary[],
+  sortMode: AccountSortMode = DEFAULT_ACCOUNT_SORT_MODE,
+  nowMs = Date.now(),
+): AccountSummary[] {
+  return accounts.slice().sort((left, right) =>
+    compareByMode(left, right, sortMode, nowMs) ||
+    compareFinite(nextReset(left, nowMs), nextReset(right, nowMs), "asc") ||
+    accountLabel(left).toLowerCase().localeCompare(accountLabel(right).toLowerCase()) ||
+    left.accountId.localeCompare(right.accountId),
   );
 }
 
-export function sortAccountsForDisplay(
-  accounts: AccountSummary[],
-  quotaDisplay: AccountQuotaDisplayPreference,
-  sortMode: AccountSortMode = DEFAULT_ACCOUNT_SORT_MODE,
-): AccountSummary[] {
-  return accounts
-    .slice()
-    .sort((left, right) => {
-      if (sortMode === "most_reset_credits") {
-        const creditComparison = compareByResetCredits(left, right);
-        if (creditComparison !== 0) {
-          return creditComparison;
-        }
-      } else if (sortMode === "reset_latest" || sortMode === "reset_soonest") {
-        const leftReset = accountResetTimestamp(left, quotaDisplay);
-        const rightReset = accountResetTimestamp(right, quotaDisplay);
-        const resetComparison = compareResetTimestamps(
-          leftReset,
-          rightReset,
-          sortMode === "reset_latest" ? "desc" : "asc",
-        );
-        if (resetComparison !== 0) {
-          return resetComparison;
-        }
-      } else {
-        const leftLabel = accountSortLabel(left);
-        const rightLabel = accountSortLabel(right);
-        const labelComparison = sortMode === "name_asc"
-          ? leftLabel.localeCompare(rightLabel)
-          : rightLabel.localeCompare(leftLabel);
-        if (labelComparison !== 0) {
-          return labelComparison;
-        }
-      }
+export type AccountFilters = {
+  search: string;
+  status: string;
+  /** "all", "ungrouped" or a group id. */
+  group: string;
+};
 
-      const leftReset = accountResetTimestamp(left, quotaDisplay);
-      const rightReset = accountResetTimestamp(right, quotaDisplay);
-      const resetComparison = compareResetTimestamps(leftReset, rightReset, "asc");
-      if (resetComparison !== 0) {
-        return resetComparison;
-      }
-      const labelComparison = accountSortLabel(left).localeCompare(accountSortLabel(right));
-      if (labelComparison !== 0) {
-        return labelComparison;
-      }
-      return left.accountId.localeCompare(right.accountId);
-    });
+export const DEFAULT_ACCOUNT_FILTERS: AccountFilters = { search: "", status: "all", group: "all" };
+
+/** Search matches alias, e-mail, display name and id, case-insensitively. */
+export function filterAccounts(accounts: AccountSummary[], filters: AccountFilters): AccountSummary[] {
+  const needle = filters.search.trim().toLowerCase();
+  return accounts.filter((account) => {
+    if (filters.status !== "all" && account.status !== filters.status) {
+      return false;
+    }
+    if (filters.group === "ungrouped" && account.groups.length > 0) {
+      return false;
+    }
+    if (filters.group !== "all" && filters.group !== "ungrouped" && !account.groups.includes(filters.group)) {
+      return false;
+    }
+    if (!needle) {
+      return true;
+    }
+    return [account.alias ?? "", account.email, account.displayName, account.accountId].some((value) =>
+      value.toLowerCase().includes(needle),
+    );
+  });
 }

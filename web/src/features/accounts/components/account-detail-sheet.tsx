@@ -1,28 +1,29 @@
-import { Check, Pencil, User, X } from "lucide-react";
+import { Check, Pencil, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { isEmailLabel } from "@/components/blur-email";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { usePrivacyStore } from "@/hooks/use-privacy";
 import { AccountGroupsEditor } from "@/features/accounts/components/account-groups-editor";
 import { AccountActions } from "@/features/accounts/components/account-actions";
 import { AccountTokenInfo } from "@/features/accounts/components/account-token-info";
 import { AccountUsagePanel } from "@/features/accounts/components/account-usage-panel";
-import type {
-  AccountRoutingPolicy,
-  AccountSummary,
-  AccountUsageResetCredits,
-} from "@/features/accounts/schemas";
+import type { CheckedResetCredits } from "@/features/accounts/hooks/use-accounts";
+import type { AccountRoutingPolicy, AccountSummary } from "@/features/accounts/schemas";
 import { useAccountTrends } from "@/features/accounts/hooks/use-accounts";
 import { formatCompactAccountId } from "@/utils/account-identifiers";
+import { normalizeStatus } from "@/utils/account-status";
 import { formatSlug } from "@/utils/formatters";
 
-export type AccountDetailProps = {
+export type AccountDetailSheetProps = {
+  /** The account shown; null closes the sheet. */
   account: AccountSummary | null;
-  showAccountId?: boolean;
+  onClose: () => void;
   busy: boolean;
   onPause: (accountId: string) => void;
   onResume: (accountId: string) => void;
@@ -30,24 +31,29 @@ export type AccountDetailProps = {
   onResetUsage: (accountId: string) => void;
   onSetAlias: (accountId: string, alias: string | null) => Promise<unknown>;
   onDelete: (accountId: string) => void;
-  onReauth: () => void;
+  onReauth: (accountId: string) => void;
   onExportAuth: (accountId: string) => void;
   onResetCredit: (accountId: string) => void;
   showResetCreditExpiryBadge?: boolean;
   onLimitWarmupChange: (accountId: string, enabled: boolean) => void;
-  onRoutingPolicyChange: (
-    accountId: string,
-    routingPolicy: AccountRoutingPolicy,
-  ) => void;
+  onRoutingPolicyChange: (accountId: string, routingPolicy: AccountRoutingPolicy) => void;
   onSecurityWorkAuthorizedChange: (accountId: string, enabled: boolean) => void;
-  resetCredits?: AccountUsageResetCredits | null;
-  resetCreditsLoading?: boolean;
-  resetCreditsUnavailable?: boolean;
+  checkedResetCredits: CheckedResetCredits | null;
+  checkingResetCredits: boolean;
+  onCheckResetCredits: (accountId: string) => void;
 };
 
-export function AccountDetail({
+/**
+ * One account's details in a sheet over the accounts table (dashboard
+ * redesign use case 8): alias editing, quota windows with resets and the
+ * 7-day quota chart (fetched only while open, every 5 minutes), usage of the
+ * last 7 days and lifetime, reset credits with Check now, tokens, groups and
+ * the routing, warm-up and trusted-access settings with the actions. Opening
+ * it never calls a provider (R42).
+ */
+export function AccountDetailSheet({
   account,
-  showAccountId = false,
+  onClose,
   busy,
   onPause,
   onResume,
@@ -62,29 +68,64 @@ export function AccountDetail({
   onLimitWarmupChange,
   onRoutingPolicyChange,
   onSecurityWorkAuthorizedChange,
-  resetCredits = null,
-  resetCreditsLoading = false,
-  resetCreditsUnavailable = false,
-}: AccountDetailProps) {
-  const { t } = useTranslation();
-  const { data: trends } = useAccountTrends(account?.accountId ?? null);
-  const blurred = usePrivacyStore((s) => s.blurred);
+  checkedResetCredits,
+  checkingResetCredits,
+  onCheckResetCredits,
+}: AccountDetailSheetProps) {
+  return (
+    <Sheet open={account !== null} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto sm:max-w-xl" data-testid="account-detail-sheet">
+        {account ? (
+          <AccountDetailContent
+            account={account}
+            busy={busy}
+            onPause={onPause}
+            onResume={onResume}
+            onProbe={onProbe}
+            onResetUsage={onResetUsage}
+            onSetAlias={onSetAlias}
+            onDelete={onDelete}
+            onReauth={onReauth}
+            onExportAuth={onExportAuth}
+            onResetCredit={onResetCredit}
+            showResetCreditExpiryBadge={showResetCreditExpiryBadge}
+            onLimitWarmupChange={onLimitWarmupChange}
+            onRoutingPolicyChange={onRoutingPolicyChange}
+            onSecurityWorkAuthorizedChange={onSecurityWorkAuthorizedChange}
+            checkedResetCredits={checkedResetCredits}
+            checkingResetCredits={checkingResetCredits}
+            onCheckResetCredits={onCheckResetCredits}
+          />
+        ) : null}
+      </SheetContent>
+    </Sheet>
+  );
+}
 
-  if (!account) {
-    return (
-      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed p-12">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
-          <User className="h-5 w-5 text-muted-foreground" />
-        </div>
-        <p className="mt-3 text-sm font-medium text-muted-foreground">
-          {t("accounts.detail.emptyTitle")}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground/70">
-          {t("accounts.detail.emptyDescription")}
-        </p>
-      </div>
-    );
-  }
+function AccountDetailContent({
+  account,
+  busy,
+  onPause,
+  onResume,
+  onProbe,
+  onResetUsage,
+  onSetAlias,
+  onDelete,
+  onReauth,
+  onExportAuth,
+  onResetCredit,
+  showResetCreditExpiryBadge,
+  onLimitWarmupChange,
+  onRoutingPolicyChange,
+  onSecurityWorkAuthorizedChange,
+  checkedResetCredits,
+  checkingResetCredits,
+  onCheckResetCredits,
+}: Omit<AccountDetailSheetProps, "account" | "onClose"> & { account: AccountSummary }) {
+  const { t } = useTranslation();
+  const { data: trends } = useAccountTrends(account.accountId);
+  const blurred = usePrivacyStore((s) => s.blurred);
+  const showAccountId = account.isEmailDuplicate === true;
 
   const aliasLabel = account.alias?.trim() ?? "";
   const localLabel = aliasLabel || account.displayName || account.email;
@@ -99,16 +140,11 @@ export function AccountDetail({
   const seatLabel = account.seatType ? ` | ${formatSlug(account.seatType)}` : "";
   const operatorRecoveryAction =
     account.status === "reauth_required" || account.status === "deactivated";
-  const usageResetDisabled =
-    busy || account.status === "paused" || operatorRecoveryAction || (resetCredits?.availableCount ?? 0) <= 0;
+  const inactive = account.status === "paused" || operatorRecoveryAction;
 
   return (
-    <div
-      key={account.accountId}
-      className="animate-fade-in-up min-w-0 space-y-4 rounded-xl border bg-card p-4 sm:p-5"
-    >
-      {/* Account header */}
-      <div>
+    <div key={account.accountId} className="min-w-0 space-y-4 p-4 sm:p-5">
+      <SheetHeader className="gap-0.5 p-0 pr-8">
         <AccountNameField
           key={account.accountId}
           accountId={account.accountId}
@@ -122,38 +158,38 @@ export function AccountDetail({
         />
         {emailSubtitle ? (
           <p
-            className="mt-0.5 text-xs text-muted-foreground"
-            title={
-              showAccountId ? t("accounts.detail.accountIdTitle", { accountId: account.accountId }) : undefined
-            }
+            className="text-xs text-muted-foreground"
+            title={showAccountId ? t("accounts.detail.accountIdTitle", { accountId: account.accountId }) : undefined}
           >
-            <span className={blurred ? "privacy-blur" : ""}>
-              {emailSubtitle}
-            </span>
+            <span className={blurred ? "privacy-blur" : ""}>{emailSubtitle}</span>
             {showAccountId ? ` | ID ${compactId}` : ""}
           </p>
         ) : null}
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {workspaceLabel} | {formatSlug(account.planType)}{seatLabel}
-        </p>
-      </div>
-
-      <AccountGroupsEditor
-        key={account.accountId}
-        accountId={account.accountId}
-        busy={busy}
-      />
+        <SheetDescription className="flex flex-wrap items-center gap-2 text-xs">
+          <span>
+            {workspaceLabel} | {formatSlug(account.planType)}{seatLabel}
+          </span>
+          <StatusBadge status={normalizeStatus(account.status)} />
+        </SheetDescription>
+      </SheetHeader>
 
       <AccountUsagePanel
         account={account}
         trends={trends}
-        resetCredits={resetCredits}
-        resetCreditsLoading={resetCreditsLoading}
-        resetCreditsUnavailable={resetCreditsUnavailable}
-        resetDisabled={usageResetDisabled}
+        checkedResetCredits={checkedResetCredits}
+        checking={checkingResetCredits}
+        checkDisabled={busy || inactive}
+        onCheckNow={onCheckResetCredits}
+        resetDisabled={busy || inactive}
         onReset={onResetUsage}
       />
       <AccountTokenInfo account={account} />
+      <AccountGroupsEditor
+        key={`${account.accountId}:${account.groups.join(",")}`}
+        accountId={account.accountId}
+        currentGroupIds={account.groups}
+        busy={busy}
+      />
       <AccountActions
         account={account}
         busy={busy}
@@ -161,7 +197,7 @@ export function AccountDetail({
         onResume={onResume}
         onProbe={onProbe}
         onDelete={onDelete}
-        onReauth={onReauth}
+        onReauth={() => onReauth(account.accountId)}
         onExportAuth={onExportAuth}
         onResetCredit={onResetCredit}
         showResetCreditExpiryBadge={showResetCreditExpiryBadge}
@@ -262,7 +298,7 @@ function AccountNameField({
 
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <h2 className="min-w-0 truncate text-base font-semibold">
+      <SheetTitle className="min-w-0 truncate text-base font-semibold">
         {labelIsEmail ? (
           <>
             <span className={cn(blurred && "privacy-blur")}>{localLabel}</span>
@@ -274,7 +310,7 @@ function AccountNameField({
             {idSuffix}
           </>
         )}
-      </h2>
+      </SheetTitle>
       <Button
         type="button"
         variant="ghost"

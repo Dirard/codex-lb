@@ -6,8 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   useAccounts,
-  useAccountUsageResetCredits,
+  useCheckResetCredits,
 } from "@/features/accounts/hooks/use-accounts";
+import { SHELL_STATUS_QUERY_KEY } from "@/components/layout/shell-status";
+import { createAccountSummary } from "@/test/mocks/factories";
+import { createShellStatus } from "@/test/mocks/overview-factories";
 import { server } from "@/test/mocks/server";
 
 function createTestQueryClient(): QueryClient {
@@ -84,12 +87,12 @@ describe("useAccounts", () => {
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["accounts", "list"] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["accounts", "trends"] });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["accounts", "usage-reset-credits"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["accounts", "reset-credits"] });
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: ["accounts", "trends", firstAccountId],
       });
       expect(invalidateSpy).toHaveBeenCalledWith({
-        queryKey: ["accounts", "usage-reset-credits", firstAccountId],
+        queryKey: ["accounts", "reset-credits", firstAccountId],
       });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["dashboard", "overview"] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["dashboard", "projections"] });
@@ -112,7 +115,7 @@ describe("useAccounts", () => {
 
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["accounts", "list"] });
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["accounts", "trends"] });
-    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["accounts", "usage-reset-credits"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["accounts", "reset-credits"] });
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["dashboard", "overview"] });
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["dashboard", "projections"] });
   });
@@ -208,21 +211,51 @@ describe("useAccounts", () => {
     expect(usageResetBodies[1]).not.toEqual(usageResetBodies[0]);
   });
 
-  it("does not permanently poll usage reset credits", async () => {
+  it("checks reset credits only on demand, once, without a polling query", async () => {
     const queryClient = createTestQueryClient();
-    const accountId = "acc_primary";
+    const requests: string[] = [];
+    server.use(
+      http.get("/api/accounts/:accountId/usage-reset-credits", ({ params }) => {
+        requests.push(String(params.accountId));
+        return HttpResponse.json({ accountId: String(params.accountId), rateLimitResetCredits: { availableCount: 4 } });
+      }),
+    );
 
-    const { result } = renderHook(() => useAccountUsageResetCredits(accountId), {
-      wrapper: createWrapper(queryClient),
-    });
+    const { result } = renderHook(() => useCheckResetCredits(), { wrapper: createWrapper(queryClient) });
+    expect(requests).toEqual([]);
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const checked = await result.current.mutateAsync("acc_primary");
 
-    const query = queryClient.getQueryCache().find({
-      queryKey: ["accounts", "usage-reset-credits", accountId],
-    });
-    const refetchInterval = (query?.options as { refetchInterval?: unknown } | undefined)
-      ?.refetchInterval;
-    expect(refetchInterval).toBeUndefined();
+    expect(requests).toEqual(["acc_primary"]);
+    expect(checked).toMatchObject({ accountId: "acc_primary", availableCount: 4 });
+    expect(Number.isNaN(Date.parse(checked.checkedAt))).toBe(false);
+    expect(queryClient.getQueryCache().findAll({ queryKey: ["accounts", "usage-reset-credits"] })).toEqual([]);
+  });
+
+  it("writes the shell status of the list and patches the row after a mutation", async () => {
+    const queryClient = createTestQueryClient();
+    server.use(
+      http.get("/api/accounts", () =>
+        HttpResponse.json({
+          accounts: [createAccountSummary({ accountId: "acc_row", status: "active", routingPolicy: "normal" })],
+          shell: createShellStatus({ reauthRequiredAccounts: 2 }),
+        }),
+      ),
+      // The refetch after the mutation must not race the patched row.
+      http.post("/api/accounts/:accountId/pause", () => HttpResponse.json({ status: "paused" })),
+    );
+    const shellWrites = vi.spyOn(queryClient, "setQueryData");
+    const { result } = renderHook(() => useAccounts(), { wrapper: createWrapper(queryClient) });
+
+    await waitFor(() => expect(result.current.accountsQuery.isSuccess).toBe(true));
+    expect(shellWrites).toHaveBeenCalledWith(SHELL_STATUS_QUERY_KEY, expect.objectContaining({ reauthRequiredAccounts: 2 }));
+    const query = queryClient.getQueryCache().find({ queryKey: ["accounts", "list"] });
+    expect((query?.options as { refetchInterval?: unknown } | undefined)?.refetchInterval).toBe(30_000);
+
+    const fetches = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+    await result.current.pauseMutation.mutateAsync("acc_row");
+
+    await waitFor(() => expect(result.current.accountsQuery.data?.[0]?.status).toBe("paused"));
+    expect(fetches).toHaveBeenCalledWith({ queryKey: ["accounts", "list"] });
   });
 });

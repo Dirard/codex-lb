@@ -130,6 +130,17 @@ export function createAccountSummary(
 		},
 		limitWarmupEnabled: false,
 		limitWarmup: null,
+		requestUsage: {
+			requestCount: 42,
+			totalTokens: 128_000,
+			cachedInputTokens: 32_000,
+			totalCostUsd: 1.25,
+		},
+		availableResetCredits: null,
+		resetCreditNearestExpiresAt: null,
+		resetCreditsObservedAt: null,
+		groups: [],
+		usage7d: { requests: 12, totalTokens: 36_000, costUsd: 0.4 },
 		...overrides,
 	});
 }

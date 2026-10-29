@@ -99,7 +99,7 @@ describe("AccountUsagePanel", () => {
     expect(screen.getByText("Resets in 6d 13h")).toBeInTheDocument();
   });
 
-  it("renders request log usage summary when available", () => {
+  it("labels the last 7 days and the lifetime usage (R44)", () => {
     const account = createAccountSummary({
       requestUsage: {
         requestCount: 7,
@@ -107,28 +107,61 @@ describe("AccountUsagePanel", () => {
         cachedInputTokens: 41_470,
         totalCostUsd: 0.13,
       },
+      usage7d: { requests: 3, totalTokens: 12_000, costUsd: 0.05 },
     });
 
     render(<AccountUsagePanel account={account} trends={null} />);
 
-    expect(screen.getByText("Request logs total")).toBeInTheDocument();
-    expect(screen.getByText(/\$0\.13/)).toBeInTheDocument();
-    expect(screen.getByText(/51\.48K tok/)).toBeInTheDocument();
+    const week = screen.getByTestId("usage-last-7-days");
+    expect(week).toHaveTextContent("Last 7 days");
+    expect(week).toHaveTextContent("12K");
+    expect(week).toHaveTextContent("$0.05");
+    const lifetime = screen.getByTestId("usage-lifetime");
+    expect(lifetime).toHaveTextContent("Lifetime");
+    expect(lifetime).toHaveTextContent("51.48K");
+    expect(lifetime).toHaveTextContent("$0.13");
+    expect(screen.queryByText("Request logs total")).not.toBeInTheDocument();
   });
 
-  it("renders usage reset credit availability when provided", () => {
-    const account = createAccountSummary();
+  it("shows the snapshot reset credits with the time they were observed", () => {
+    const account = createAccountSummary({ availableResetCredits: 3, resetCreditsObservedAt: "2026-01-01T00:00:00.000Z" });
+    const clock = new Date("2026-01-01T00:00:00.000Z");
+    const time = `${String(clock.getHours()).padStart(2, "0")}:${String(clock.getMinutes()).padStart(2, "0")}`;
 
-    render(
+    render(<AccountUsagePanel account={account} trends={null} onCheckNow={vi.fn()} />);
+
+    expect(screen.getByText("Usage resets")).toBeInTheDocument();
+    expect(screen.getByTestId("reset-credits-value")).toHaveTextContent(`3 available as of ${time}`);
+  });
+
+  it("prefers a Check now result for the same account and asks for Check now otherwise", () => {
+    const onCheckNow = vi.fn();
+    const account = createAccountSummary({ accountId: "acc_check", availableResetCredits: null });
+    const view = render(<AccountUsagePanel account={account} trends={null} onCheckNow={onCheckNow} />);
+
+    expect(screen.getByTestId("reset-credits-value")).toHaveTextContent("Not checked yet");
+    fireEvent.click(screen.getByRole("button", { name: "Check now" }));
+    expect(onCheckNow).toHaveBeenCalledWith("acc_check");
+
+    view.rerender(
       <AccountUsagePanel
         account={account}
         trends={null}
-        resetCredits={{ availableCount: 3 }}
+        onCheckNow={onCheckNow}
+        checkedResetCredits={{ accountId: "acc_check", availableCount: 5, checkedAt: "2026-01-01T00:00:00.000Z" }}
       />,
     );
+    expect(screen.getByTestId("reset-credits-value")).toHaveTextContent(/^5 available as of \d\d:\d\d$/);
 
-    expect(screen.getByText("Usage resets")).toBeInTheDocument();
-    expect(screen.getByText("3 available")).toBeInTheDocument();
+    view.rerender(
+      <AccountUsagePanel
+        account={account}
+        trends={null}
+        onCheckNow={onCheckNow}
+        checkedResetCredits={{ accountId: "acc_other", availableCount: 5, checkedAt: "2026-01-01T00:00:00.000Z" }}
+      />,
+    );
+    expect(screen.getByTestId("reset-credits-value")).toHaveTextContent("Not checked yet");
   });
 
   it("shows the nearest reset-credit expiry when provided", () => {
@@ -136,15 +169,10 @@ describe("AccountUsagePanel", () => {
     const isoExpiry = formatDateTimeInline(expiresAt, "iso8601");
     const account = createAccountSummary({
       resetCreditNearestExpiresAt: expiresAt,
+      availableResetCredits: 3,
     });
 
-    render(
-      <AccountUsagePanel
-        account={account}
-        trends={null}
-        resetCredits={{ availableCount: 3 }}
-      />,
-    );
+    render(<AccountUsagePanel account={account} trends={null} />);
 
     expect(
       screen.getByText((_, element) => {
@@ -166,23 +194,19 @@ describe("AccountUsagePanel", () => {
     expect(row?.textContent).not.toContain(isoExpiry);
   });
 
-  it("renders a usage reset action when provided", () => {
-    const account = createAccountSummary({ accountId: "acc_reset" });
+  it("renders a usage reset action when credits are available", () => {
+    const account = createAccountSummary({ accountId: "acc_reset", availableResetCredits: 1 });
     const onReset = vi.fn();
 
-    render(
-      <AccountUsagePanel
-        account={account}
-        trends={null}
-        resetCredits={{ availableCount: 1 }}
-        onReset={onReset}
-      />,
-    );
+    const view = render(<AccountUsagePanel account={account} trends={null} onReset={onReset} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Reset usage" }));
 
     expect(onReset).toHaveBeenCalledWith("acc_reset");
     expect(onReset).toHaveBeenCalledTimes(1);
+
+    view.rerender(<AccountUsagePanel account={{ ...account, availableResetCredits: 0 }} trends={null} onReset={onReset} />);
+    expect(screen.getByRole("button", { name: "Reset usage" })).toBeDisabled();
   });
 
   it("shows the weekly plan legend when scheduled trend data exists", () => {

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -17,15 +17,51 @@ import {
   probeAccount,
   reactivateAccount,
   setAccountAlias,
+  setAccountGroups,
   updateAccount,
   updateAccountLimitWarmup,
   updateAccountRoutingPolicy,
 } from "@/features/accounts/api";
 import type {
   AccountRoutingPolicy,
+  AccountsResponse,
+  AccountSummary,
   AccountUsageResetConsumeResponse,
 } from "@/features/accounts/schemas";
+import { SHELL_STATUS_QUERY_KEY } from "@/components/layout/shell-status";
 import { invalidateEntityViews } from "@/lib/invalidate-entity-views";
+
+export const ACCOUNTS_LIST_QUERY_KEY = ["accounts", "list"] as const;
+
+/** The Accounts page's one periodic request (dashboard redesign use case 8). */
+export const ACCOUNTS_POLL_MS = 30_000;
+
+/**
+ * Fetches the account list and writes the shell status it carries into the
+ * shared shell query, so the Accounts page needs no other periodic request.
+ */
+export async function fetchAccounts(queryClient: QueryClient): Promise<AccountsResponse> {
+  const response = await listAccounts();
+  if (response.shell) {
+    queryClient.setQueryData(SHELL_STATUS_QUERY_KEY, response.shell);
+  }
+  return response;
+}
+
+/**
+ * Shows a mutation's result in the account's row at once; the refetch that
+ * follows replaces it with the server's view (R45).
+ */
+export function patchAccountRow(queryClient: QueryClient, accountId: string, patch: Partial<AccountSummary>) {
+  queryClient.setQueryData<AccountsResponse>(ACCOUNTS_LIST_QUERY_KEY, (current) =>
+    current
+      ? {
+          ...current,
+          accounts: current.accounts.map((account) => (account.accountId === accountId ? { ...account, ...patch } : account)),
+        }
+      : current,
+  );
+}
 
 async function invalidateAccountRelatedQueries(queryClient: ReturnType<typeof useQueryClient>, accountId?: string) {
   const invalidations = [
@@ -36,10 +72,10 @@ async function invalidateAccountRelatedQueries(queryClient: ReturnType<typeof us
   ];
   if (accountId) {
     invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "trends", accountId] }));
-    invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "usage-reset-credits", accountId] }));
+    invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "reset-credits", accountId] }));
   } else {
     invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "trends"] }));
-    invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "usage-reset-credits"] }));
+    invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "reset-credits"] }));
   }
   await Promise.all(invalidations);
 }
@@ -94,7 +130,8 @@ export function useAccountMutations() {
 
   const pauseMutation = useMutation({
     mutationFn: pauseAccount,
-    onSuccess: () => {
+    onSuccess: (_data, accountId) => {
+      patchAccountRow(queryClient, accountId, { status: "paused" });
       toast.success(t("accounts.toasts.paused"));
       void invalidateAccountRelatedQueries(queryClient);
     },
@@ -105,7 +142,8 @@ export function useAccountMutations() {
 
   const resumeMutation = useMutation({
     mutationFn: reactivateAccount,
-    onSuccess: () => {
+    onSuccess: (_data, accountId) => {
+      patchAccountRow(queryClient, accountId, { status: "active" });
       toast.success(t("accounts.toasts.resumed"));
       void invalidateAccountRelatedQueries(queryClient);
     },
@@ -117,7 +155,11 @@ export function useAccountMutations() {
   const setAliasMutation = useMutation({
     mutationFn: ({ accountId, alias }: { accountId: string; alias: string | null }) =>
       setAccountAlias(accountId, alias),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      const account = queryClient
+        .getQueryData<AccountsResponse>(ACCOUNTS_LIST_QUERY_KEY)
+        ?.accounts.find((item) => item.accountId === data.accountId);
+      patchAccountRow(queryClient, data.accountId, { alias: data.alias, displayName: data.alias || account?.email || data.accountId });
       toast.success(t("accounts.toasts.aliasUpdated"));
       void invalidateAccountRelatedQueries(queryClient);
     },
@@ -175,7 +217,8 @@ export function useAccountMutations() {
   const limitWarmupMutation = useMutation({
     mutationFn: ({ accountId, enabled }: { accountId: string; enabled: boolean }) =>
       updateAccountLimitWarmup(accountId, enabled),
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
+      patchAccountRow(queryClient, variables.accountId, { limitWarmupEnabled: data.enabled });
       toast.success(data.enabled ? t("accounts.toasts.limitWarmupEnabled") : t("accounts.toasts.limitWarmupDisabled"));
       void invalidateAccountRelatedQueries(queryClient);
     },
@@ -193,6 +236,7 @@ export function useAccountMutations() {
       routingPolicy: AccountRoutingPolicy;
     }) => updateAccountRoutingPolicy(accountId, routingPolicy),
     onSuccess: (data) => {
+      patchAccountRow(queryClient, data.accountId, { routingPolicy: data.routingPolicy });
       const label =
         data.routingPolicy === "normal" ? "normal" : data.routingPolicy.replace("_", "-");
       toast.success(t("accounts.toasts.routingPolicySet", { label }));
@@ -216,7 +260,8 @@ export function useAccountMutations() {
   const updateMutation = useMutation({
     mutationFn: ({ accountId, securityWorkAuthorized }: { accountId: string; securityWorkAuthorized: boolean }) =>
       updateAccount(accountId, { securityWorkAuthorized }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      patchAccountRow(queryClient, variables.accountId, { securityWorkAuthorized: variables.securityWorkAuthorized });
       toast.success(t("accounts.toasts.updated"));
       void invalidateAccountRelatedQueries(queryClient);
     },
@@ -283,21 +328,61 @@ export function useAccountTrends(accountId: string | null) {
   });
 }
 
-export function useAccountUsageResetCredits(accountId: string | null) {
-  return useQuery({
-    queryKey: ["accounts", "usage-reset-credits", accountId],
-    queryFn: () => getAccountUsageResetCredits(accountId!),
-    enabled: !!accountId,
-    staleTime: 60_000,
+/** A reset-credit count checked with the provider, and when. */
+export type CheckedResetCredits = {
+  accountId: string;
+  availableCount: number;
+  checkedAt: string;
+};
+
+/**
+ * Check now: the only request of the Accounts page that refreshes usage from
+ * the provider (`GET /api/accounts/{id}/usage-reset-credits`, R42). The
+ * refreshed quotas reach the row through the list refetch.
+ */
+export function useCheckResetCredits() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (accountId: string): Promise<CheckedResetCredits> => {
+      const response = await getAccountUsageResetCredits(accountId);
+      return { accountId, availableCount: response.rateLimitResetCredits.availableCount, checkedAt: new Date().toISOString() };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ACCOUNTS_LIST_QUERY_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t("accounts.sheet.checkFailed"));
+    },
+  });
+}
+
+/** Replaces an account's groups (`PUT /api/accounts/{id}/groups`). */
+export function useSetAccountGroups() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ accountId, groupIds }: { accountId: string; groupIds: string[] }) => setAccountGroups(accountId, groupIds),
+    onSuccess: (data) => {
+      patchAccountRow(queryClient, data.accountId, { groups: [...data.groupIds].sort() });
+      toast.success(t("accounts.toasts.groupsUpdated"));
+      void queryClient.invalidateQueries({ queryKey: ACCOUNTS_LIST_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: ["account-groups", "list"] });
+      void invalidateEntityViews(queryClient);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t("accounts.toasts.groupsUpdateFailed"));
+    },
   });
 }
 
 export function useAccounts() {
+  const queryClient = useQueryClient();
   const { data, error, isFetching, isLoading, isPending, isSuccess, refetch } = useQuery({
-    queryKey: ["accounts", "list"],
-    queryFn: listAccounts,
+    queryKey: ACCOUNTS_LIST_QUERY_KEY,
+    queryFn: () => fetchAccounts(queryClient),
     select: (data) => data.accounts,
-    refetchInterval: 30_000,
+    refetchInterval: ACCOUNTS_POLL_MS,
     refetchIntervalInBackground: false,
   });
   const accountsQuery = { data, error, isFetching, isLoading, isPending, isSuccess, refetch };
