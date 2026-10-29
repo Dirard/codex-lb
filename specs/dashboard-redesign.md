@@ -1218,18 +1218,34 @@ After PR 3a and 3b:
 
 20. [x] Production-copy latency run of the new pages (2026-10-29, approved by the operator); the release notes of go-v1.4.0 list the deprecated key endpoints (R47, R49).
 
-PR 4 — keys, groups and accounts management:
+PR 4a — keys page (use cases 6 and 6.1):
 
-21. [ ] OpenSpec change `redesign-key-group-account-management`: `go-runtime` delta (R33–R45) and the `frontend-architecture` deltas of use cases 6–8; strict validation.
-22. [ ] SQLite: `ListAccountViews` batch reads; keys list readers reuse `ListKeyRows` and `KeyDailySpend` (R33, R43).
-23. [ ] Application and HTTP: `KeysListService`, `KeysBulkService`, `GroupsSummaryService`, `/api/keys`, `/api/keys/ids`, `/api/keys/bulk`, `/api/groups/summary`, batch-built `/api/accounts` (R33, R34, R36–R38, R40, R43).
-24. [ ] Web: Keys page, Groups page, Accounts table and sheet, Settings without key and group sections, final navigation order (R35, R39, R41, R42, R44, R45).
-25. [ ] Tests for partial bulk failure, selection across polls, no provider call on account open; benchmarks and production-copy run (R36, R37, R42, R49).
-26. [ ] Gates, PR, CI, release notes listing the deprecation of `GET /api/api-keys/`; archive the three OpenSpec changes after verification and sync their deltas.
+21. [ ] OpenSpec change `keys-page`: `go-runtime` delta (R33–R39) and the `frontend-architecture` deltas of use case 6; strict validation.
+22. [ ] Application and HTTP: `KeysListService` (batch reads reusing the overview key rows and key day slices, filter, sort and page in memory), `KeysBulkService`, `GET /api/keys`, `GET /api/keys/ids`, `POST /api/keys/bulk`; statement-count, boundary and partial-failure tests (R33, R34, R36–R38).
+23. [ ] Web: `features/keys` (`KeysPage`, `KeysTable`, `KeysFilters`, `BulkActionsBar`, URL-backed `useKeysList`) at `/keys`, the APIs page and `ApiKeysOverview` removed, locales and MSW mocks (R35, R39).
+24. [ ] Contract tests, `BenchmarkDashboardPages` for the keys list; gates, PR, CI (R46, R49).
+
+PR 4b — groups page and Settings (use case 7):
+
+25. [ ] OpenSpec change `groups-page`: `go-runtime` delta (R40, R41) and the `frontend-architecture` deltas of use case 7 and of the Settings page; strict validation.
+26. [ ] Application and HTTP: `GroupsSummaryService` reusing the overview group-row builder, `GET /api/groups/summary`; equality with the overview rows (R40).
+27. [ ] Web: `features/groups` (`GroupsPage`, `GroupsTable`, `GroupDetailSheet`, the pool runway card of Q2) at `/groups`; Settings without the key and group sections and without the appearance settings that no page uses; locales and MSW mocks (R40, R41).
+28. [ ] Contract tests, `BenchmarkDashboardPages` for the groups summary; gates, PR, CI (R46, R49).
+
+PR 4c — accounts management (use case 8):
+
+29. [ ] OpenSpec change `accounts-management`: `go-runtime` delta (R42–R45) and the `frontend-architecture` deltas of use case 8; strict validation.
+30. [ ] SQLite and HTTP: `Store.ListAccountViews` batch reads, `GET /api/accounts` built from them with every existing field plus `groups`, `usage7d` and `shell`; statement count equal for 9 and 100 accounts (R43).
+31. [ ] Web: `AccountsTable` with inline priority, pause or resume and re-login, `AccountDetailSheet` with labelled periods and Check now; no provider call on load or selection; locales and MSW mocks (R42, R44, R45).
+32. [ ] Contract tests, `BenchmarkDashboardPages` for the accounts list; gates, PR, CI (R46, R49).
+
+After PR 4a–4c:
+
+33. [ ] Production-copy latency run of the new pages (operator approval), release notes listing the deprecation of `GET /api/api-keys/`; archive the three OpenSpec changes and sync their deltas (R47, R49).
 
 Follow-up release:
 
-27. [ ] Remove the endpoints deprecated in PR 2–4 with their tests and mocks; update contract tests and release notes (R47).
+34. [ ] Remove the endpoints deprecated in PR 2–4 with their tests and mocks; update contract tests and release notes (R47).
 
 ## Open questions
 
@@ -1321,3 +1337,4 @@ Measured 2026-10-29 with the release binary on a `VACUUM INTO` copy of the produ
 - 2026-10-29: PR 3a reads the key page in one analytics snapshot through one store method (`KeyPageUsage`) instead of three, so the period, its error codes, the limit pace and the first page of recent requests are consistent; percentiles use the PR 1 interpolated `histQuantile` on both read paths.
 - 2026-10-29 (PR 3b): Reports sum only the resolved current keys, so the summary, the tables and the CSV always agree; the export reuses the report's snapshot read instead of a separate streaming reader and writes after the snapshot closes, bounded by keys × days; the daily series carry a top-level series list with compact points.
 - 2026-10-29: The production-copy run with go-v1.4.0 confirmed R49 for the overview, requests, key and owner pages and reports; the cold read during the startup verifier is recorded as an observation, not a requirement change. The OpenSpec changes `overview-groups`, `request-log-pending-index`, `key-page` and `key-usage-reports` are archived and synced into `go-runtime` and `frontend-architecture`.
+- 2026-10-29: PR 4 is split into PR 4a (keys page, OpenSpec change `keys-page`), PR 4b (groups page and the Settings rework, `groups-page`) and PR 4c (accounts management, `accounts-management`), built in parallel; they share only routing, locales and mocks. The Settings rework (R41) belongs to PR 4b so that only one slice edits the Settings page. Q2 keeps its default: the weekly credits pace becomes the pool runway card of the Groups page, so `GET /api/dashboard/projections` stays.
