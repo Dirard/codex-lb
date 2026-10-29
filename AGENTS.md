@@ -33,7 +33,7 @@ Tests sit beside the implementation and use deterministic loopback upstream stub
 ## Invariants reviewers check
 
 - Proxy failover and retries: file-pinned or provider-state-bound requests never cross accounts; failover requires an explicit upstream quota refusal before anything was visible to the client; excluded accounts leave the selection loop; an attempt that may have executed is never replayed.
-- Money: API-key reservations are taken before dispatch and settled exactly once before account-health writes; unknown usage stays reserved for reconciliation; idle disconnects are account-neutral.
+- Money: API-key reservations are taken before dispatch and settled exactly once before account-health writes; unknown usage stays reserved for reconciliation for one hour and is then released without charge (owner decision); idle disconnects are account-neutral.
 - Concurrency: every spawned goroutine is cancelled and joined on all paths; partial failures keep finalization; fan-out is bounded; tests cover partial failure, not only success.
 - Migrations: append-only, atomic, upgrade every earlier version, backfill rows affected by new columns; after migrating `PRAGMA user_version` equals the migration count. Mark a migration additive (`additiveMigrations`) only when older code keeps working on its result and it finishes in a few seconds (no table rewrite or large backfill): an additive migration runs while the previous version still serves, whose writes wait for the lock only within their own deadlines (settlement 10 s).
 - Security: credentials encrypted at rest; no tokens, keys, bodies or provider error bodies in logs; trusted forwarding only from configured proxies.
