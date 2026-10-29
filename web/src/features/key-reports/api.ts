@@ -24,12 +24,6 @@ export const KeyReportsSchema = ReportsResponseSchema.omit({ byAccount: true }).
   }).nullable().default(null),
 });
 export type KeyReport = z.infer<typeof KeyReportsSchema>;
-export type KeyReportFilters = {
-  startDate: string;
-  endDate: string;
-  timezone?: string;
-  model: string;
-};
 const SessionSchema = z.object({ authenticated: z.boolean() });
 const sessionOptions = { credentials: "same-origin", cache: "no-store", suppressUnauthorizedHandler: true } as const;
 
@@ -45,11 +39,4 @@ export function createKeyReportSession(apiKey: string, signal?: AbortSignal) {
 
 export function deleteKeyReportSession() {
   return del("/api/key-reports/session", SessionSchema.extend({ authenticated: z.literal(false) }), sessionOptions);
-}
-
-export function getKeyReport(filters: KeyReportFilters, signal?: AbortSignal) {
-  const params = new URLSearchParams({ start_date: filters.startDate, end_date: filters.endDate });
-  if (filters.timezone) params.set("timezone", filters.timezone);
-  if (filters.model.trim()) params.set("model", filters.model.trim());
-  return get(`/api/key-reports/reports?${params}`, KeyReportsSchema, { ...sessionOptions, signal });
 }

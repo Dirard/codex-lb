@@ -71,7 +71,7 @@ export function GroupRowDetail({ row, onAction }: { row: GroupRow; onAction: (ac
               {row.topKeys.map((key) => (
                 <tr key={key.id} className="border-t border-border/50">
                   <td className="max-w-40 truncate py-1">
-                    <Link className="hover:underline" to={`/keys?selected=${encodeURIComponent(key.id)}`}>
+                    <Link className="hover:underline" to={`/keys/${encodeURIComponent(key.id)}`}>
                       {key.name}
                     </Link>
                   </td>

@@ -14,7 +14,9 @@ describe("overview flow", () => {
   it.each([
     ["/", "/overview", ""],
     ["/dashboard", "/overview", ""],
-    ["/apis?selected=key_1", "/keys", "?selected=key_1"],
+    ["/apis?selected=key_1", "/keys/key_1", ""],
+    ["/keys?selected=key_1", "/keys/key_1", ""],
+    ["/apis?near_limit=1", "/keys", "?near_limit=1"],
   ])("redirects %s (R4)", async (from, pathname, search) => {
     window.history.pushState({}, "", from);
     renderWithProviders(<App />);

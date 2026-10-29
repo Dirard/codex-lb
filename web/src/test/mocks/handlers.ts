@@ -44,6 +44,13 @@ import {
   type RequestLogEntry,
 } from "@/test/mocks/factories";
 import { createDirectory, createOverview, createShellStatus } from "@/test/mocks/overview-factories";
+import { isValidPeriod, localDateISO, shiftISODate, type KeyPagePeriod } from "@/features/key-page/period";
+import {
+  createKeyPage,
+  createKeyRequestRows,
+  createOwnerKeyPage,
+  pageKeyRequests,
+} from "@/test/mocks/key-page-factories";
 
 const MODEL_OPTION_DELIMITER = ":::";
 const STATUS_ORDER = ["ok", "cancelled", "rate_limit", "quota", "error"] as const;
@@ -2160,7 +2167,80 @@ export const handlers = [
     }
     return HttpResponse.json(createApiKeyUsage7Day({ keyId }));
   }),
+
+  http.get("/api/api-keys/:keyId/page", ({ params, request }) => {
+    const apiKey = findApiKey(String(params.keyId));
+    if (!apiKey) {
+      return HttpResponse.json({ error: { code: "not_found", message: "API key not found" } }, { status: 404 });
+    }
+    const query = keyPageQuery(new URL(request.url));
+    if ("error" in query) return query.error;
+    return HttpResponse.json(createKeyPage(apiKey, { ...query, groupName: groupNameOf(apiKey) }));
+  }),
+
+  http.get("/api/api-keys/:keyId/requests", ({ params, request }) => {
+    const keyId = String(params.keyId);
+    if (!findApiKey(keyId)) {
+      return HttpResponse.json({ error: { code: "not_found", message: "API key not found" } }, { status: 404 });
+    }
+    return HttpResponse.json(pageKeyRequests(createKeyRequestRows(60, keyId), keyRequestsQuery(new URL(request.url)), "admin"));
+  }),
+
+  http.get("/api/key-reports/page", ({ request }) => {
+    const url = new URL(request.url);
+    const rejected = rejectOwnerParameters(url, ["start_date", "end_date", "timezone"]);
+    if (rejected) return rejected;
+    const query = keyPageQuery(url);
+    if ("error" in query) return query.error;
+    const apiKey = state.apiKeys[0] ?? createApiKey();
+    return HttpResponse.json(createOwnerKeyPage(apiKey, { ...query, groupName: groupNameOf(apiKey) }));
+  }),
+
+  http.get("/api/key-reports/requests", ({ request }) => {
+    const url = new URL(request.url);
+    const rejected = rejectOwnerParameters(url, ["cursor", "limit", "errors_only"]);
+    if (rejected) return rejected;
+    const apiKey = state.apiKeys[0] ?? createApiKey();
+    return HttpResponse.json(pageKeyRequests(createKeyRequestRows(60, apiKey.id), keyRequestsQuery(url), "owner"));
+  }),
 ];
+
+function groupNameOf(apiKey: ApiKey): string | null {
+  return state.accountGroups.find((group) => group.id === apiKey.groupId)?.name ?? null;
+}
+
+/** The key page period and zone, or the server's 400 for an invalid one. */
+function keyPageQuery(url: URL): { period: KeyPagePeriod; timezone: string } | { error: Response } {
+  const timezone = url.searchParams.get("timezone") || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+  } catch {
+    return { error: HttpResponse.json({ error: { code: "invalid_timezone", message: "Unknown time zone" } }, { status: 400 }) };
+  }
+  const today = localDateISO();
+  const period = {
+    from: url.searchParams.get("start_date") ?? shiftISODate(today, -6),
+    to: url.searchParams.get("end_date") ?? today,
+  };
+  if (!isValidPeriod(period)) {
+    return { error: HttpResponse.json({ error: { code: "invalid_report_date_range", message: "Invalid date range" } }, { status: 400 }) };
+  }
+  return { period, timezone };
+}
+
+function keyRequestsQuery(url: URL): { cursor: string | null; limit: number; errorsOnly: boolean } {
+  const limit = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "50", 10) || 50));
+  return { cursor: url.searchParams.get("cursor"), limit, errorsOnly: url.searchParams.get("errors_only") === "true" };
+}
+
+/** Owner routes accept only their parameters, each at most once (R25). */
+function rejectOwnerParameters(url: URL, allowed: string[]): Response | null {
+  const names = [...url.searchParams.keys()];
+  const invalid = names.some((name) => !allowed.includes(name)) || new Set(names).size !== names.length;
+  return invalid
+    ? HttpResponse.json({ error: { code: "invalid_report_filters", message: "Unsupported report filter" } }, { status: 400 })
+    : null;
+}
 
 export function createRuntimeCapacity() {
   return {

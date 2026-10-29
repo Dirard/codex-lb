@@ -10,13 +10,14 @@ import {
 } from "@/components/layout/shell-status";
 
 /**
- * Reads the shell status. On a page whose own poll carries it the query never
- * fetches and only shows what that poll wrote; elsewhere it is the page's one
- * periodic request, every 60 s while the tab is visible.
+ * Reads the shell status. On a page whose own poll carries it (the overview,
+ * and a key page whose period includes today) the query never fetches and
+ * only shows what that poll wrote; elsewhere it is the page's one periodic
+ * request, every 60 s while the tab is visible.
  */
 export function useShellStatus() {
-  const { pathname } = useLocation();
-  const carried = pageCarriesShellStatus(pathname);
+  const { pathname, search } = useLocation();
+  const carried = pageCarriesShellStatus(pathname, search);
   return useQuery({
     queryKey: SHELL_STATUS_QUERY_KEY,
     queryFn: getShellStatus,

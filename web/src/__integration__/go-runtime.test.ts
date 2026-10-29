@@ -21,6 +21,7 @@ import { ModelPriceDeleteSchema, ModelPriceSaveSchema, ModelPricesSchema } from 
 import { ConversationArchiveFileSchema, ConversationArchiveRecordsResponseSchema } from "@/features/conversation-archive/schemas";
 import { StickySessionsDeleteResponseSchema, StickySessionsListResponseSchema } from "@/features/sticky-sessions/schemas";
 import { KeyReportsSchema } from "@/features/key-reports/api";
+import { KeyPageResponseSchema, KeyRequestsResponseSchema } from "@/features/key-page/schemas";
 import { ShellStatusSchema } from "@/components/layout/shell-status";
 import { OverviewResponseSchema } from "@/features/overview/schemas";
 import { DirectorySchema } from "@/features/search/api";
@@ -149,6 +150,32 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     expect(directory.keys.find((key) => key.id === created.id)).toMatchObject({ status: "active", prefix: created.keyPrefix });
     await request(`/api/api-keys/${created.id}`, "DELETE");
     expect(DirectorySchema.parse(await request("/api/directory")).keys.some((key) => key.id === created.id)).toBe(false);
+  });
+
+  it("serves the key page to the administrator and, redacted, to the key owner", async () => {
+    const created = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "contract key page" }));
+    const admin = KeyPageResponseSchema.parse(await request(`/api/api-keys/${created.id}/page?timezone=Europe/Prague`));
+    expect(admin).toMatchObject({ scope: "admin", key: { id: created.id, status: "active" }, period: { days: 7, includesToday: true } });
+    expect(admin.shell).toBeDefined();
+    expect(admin.lifetime).toBeDefined();
+    KeyRequestsResponseSchema.parse(await request(`/api/api-keys/${created.id}/requests?limit=10&errors_only=true`));
+    const login = await fetch(`${base}/api/key-reports/session`, {
+      method: "POST", headers: { Authorization: `Bearer ${created.key}` }, signal: AbortSignal.timeout(4_000),
+    });
+    expect(login.status).toBe(200);
+    const ownerCookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+    const owner = (route: string) => fetch(base + route, { headers: { Cookie: ownerCookie }, signal: AbortSignal.timeout(4_000) });
+    const page = await owner("/api/key-reports/page?timezone=UTC");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("cache-control")).toBe("no-store");
+    const body = await page.json();
+    expect(KeyPageResponseSchema.parse(body)).toMatchObject({ scope: "owner", key: { id: created.id } });
+    for (const field of ["shell", "byAccount", "lifetime"]) expect(body).not.toHaveProperty(field);
+    expect(body.key).not.toHaveProperty("assignedAccounts");
+    KeyRequestsResponseSchema.parse(await (await owner("/api/key-reports/requests?limit=5&errors_only=false")).json());
+    expect((await owner(`/api/key-reports/page?api_key_id=${created.id}`)).status).toBe(400);
+    await request(`/api/api-keys/${created.id}`, "DELETE");
+    expect((await owner("/api/key-reports/page")).status).toBe(401);
   });
 
   it("saves real UI setting patches without materializing unrelated defaults", async () => {

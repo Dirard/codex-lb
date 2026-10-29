@@ -14,7 +14,7 @@ describe("locale catalogues", () => {
     const english = en as Record<string, string>;
     expect(Object.keys(english).filter((key) => !(key in catalogue))).toEqual([]);
     expect(Object.keys(catalogue).filter((key) => !(key in english))).toEqual([]);
-    for (const key of Object.keys(english).filter((k) => k.startsWith("overview.") || k.startsWith("search.") || k.startsWith("requests."))) {
+    for (const key of Object.keys(english).filter((k) => k.startsWith("overview.") || k.startsWith("search.") || k.startsWith("requests.") || k.startsWith("keyPage."))) {
       expect(placeholders(catalogue[key]), key).toEqual(placeholders(english[key]));
     }
   });

@@ -85,6 +85,25 @@ describe("AppHeader", () => {
     expect(requests).toEqual([]);
   });
 
+  it.each([
+    ["/keys/key_1", false],
+    ["/keys/key_1?from=2020-01-01&to=2020-01-07", true],
+  ])("on the key page %s requests the status only for a historical period", async (entry, polled) => {
+    const requests: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      requests.push(new URL(request.url).pathname);
+    });
+
+    renderHeader(entry);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    if (polled) await waitFor(() => expect(requests).toContain("/api/dashboard/status"));
+    server.events.removeAllListeners("request:start");
+    expect(requests.includes("/api/dashboard/status")).toBe(polled);
+  });
+
   it("polls only the status endpoint on other pages, never the accounts or the readiness probe", async () => {
     const requests: string[] = [];
     server.events.on("request:start", ({ request }) => {

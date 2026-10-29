@@ -96,7 +96,7 @@ export function useOverviewActions(): { perform: (action: OverviewAction) => voi
           navigate(`/groups?selected=${encodeURIComponent(action.target)}`);
           return;
         case "open_key":
-          navigate(`/keys?selected=${encodeURIComponent(action.target)}`);
+          navigate(`/keys/${encodeURIComponent(action.target)}`);
           return;
         case "open_key_errors":
           navigate(keyErrorsRoute(action.target));

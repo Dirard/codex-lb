@@ -134,7 +134,7 @@ describe("OverviewPage", () => {
     expect(screen.getByText("No keys need attention")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Expand Team A" }));
     expect(screen.getByText("Paused one")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Top key" })).toHaveAttribute("href", "/keys?selected=key_t");
+    expect(screen.getByRole("link", { name: "Top key" })).toHaveAttribute("href", "/keys/key_t");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
