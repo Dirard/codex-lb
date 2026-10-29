@@ -251,4 +251,5 @@ func BenchmarkDashboardPages(b *testing.B) {
 			}
 		}
 	})
+	benchmarkKeyUsageReports(b, s)
 }

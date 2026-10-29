@@ -3,10 +3,14 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -285,5 +289,157 @@ func TestKeyUsageReportBounds(t *testing.T) {
 	q.DayStarts = append(q.DayStarts, q.End)
 	if _, err := s.KeyUsageReport(ctx, q); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("732 days: %v", err)
+	}
+}
+
+// keyUsageReportAt runs the report use case on a store at dashboardNow.
+func keyUsageReportAt(t testing.TB, s *Store, p application.KeyUsageReportParams) domain.KeyUsageReport {
+	t.Helper()
+	report, err := application.NewKeyUsageReportService(s, func() time.Time { return dashboardNow }).Report(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report
+}
+
+// keyUsageExportAt runs the per-day export on a store at dashboardNow and
+// returns its rows.
+func keyUsageExportAt(t testing.TB, s *Store, p application.KeyUsageReportParams) int {
+	t.Helper()
+	export, err := application.NewKeyUsageReportService(s, func() time.Time { return dashboardNow }).Export(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := 0
+	for range export.Rows() {
+		rows++
+	}
+	return rows
+}
+
+// The report and the export execute the same number of statements for 30
+// keys, 5 groups and 10 accounts as for 300 keys, 50 groups and 100
+// accounts, and for 7 as for 90 days (R30).
+func TestKeyUsageReportStatementCountIsIndependentOfScale(t *testing.T) {
+	prague, _ := time.LoadLocation("Europe/Prague")
+	kolkata, _ := time.LoadLocation("Asia/Kolkata")
+	counts := map[string][]int64{}
+	for _, scale := range []dashboardScale{{keys: 30, groups: 5, accounts: 10, days: 2, eventsPerKeyHour: 1},
+		{keys: 300, groups: 50, accounts: 100, days: 2, eventsPerKeyHour: 1}} {
+		s, counter := countingStore(t)
+		seedDashboardScale(t, s, scale)
+		measure := func(name string, read func()) {
+			before := counter.count()
+			read()
+			counts[name] = append(counts[name], counter.count()-before)
+		}
+		for _, days := range []int{7, 90} {
+			start := dashboardNow.AddDate(0, 0, 1-days).Format(time.DateOnly)
+			measure("prague all keys", func() {
+				report := keyUsageReportAt(t, s, application.KeyUsageReportParams{StartDate: start, Location: prague})
+				if report.Selection.ResolvedKeyCount != scale.keys || report.ActiveKeys != scale.keys || report.SeriesBy != domain.SeriesGroup {
+					t.Fatalf("report of %d keys: %+v, %d active", scale.keys, report.Selection, report.ActiveKeys)
+				}
+			})
+			measure("prague groups", func() {
+				report := keyUsageReportAt(t, s, application.KeyUsageReportParams{StartDate: start, Location: prague,
+					GroupIDs: []string{"grp-1", "grp-2"}, KeyIDs: []string{"key-0"}})
+				if report.Selection.ResolvedKeyCount == 0 || len(report.Groups) != 3 {
+					t.Fatalf("group report %+v %d groups", report.Selection, len(report.Groups))
+				}
+			})
+			measure("kolkata all keys", func() {
+				keyUsageReportAt(t, s, application.KeyUsageReportParams{StartDate: start, Location: kolkata})
+			})
+			measure("prague export", func() {
+				if rows := keyUsageExportAt(t, s, application.KeyUsageReportParams{StartDate: start, Location: prague}); rows < scale.keys {
+					t.Fatalf("%d export rows", rows)
+				}
+			})
+		}
+	}
+	for name, n := range counts {
+		t.Logf("%s: %v statements", name, n)
+		for _, count := range n {
+			if count != n[0] || count == 0 {
+				t.Errorf("%s: statement counts %v differ with keys or days", name, n)
+				break
+			}
+		}
+	}
+}
+
+// The report answers within the 300 ms page budget, warm, for 300 keys and
+// 50 groups with every key active in every hour of the days it reads (R49).
+// The race detector slows SQLite about 40-fold, so it only checks the shape
+// there.
+func TestKeyUsageReportMeetsItsLatencyBudgetAtTargetScale(t *testing.T) {
+	scale := dashboardScale{keys: 300, groups: 50, accounts: 100, days: 8, eventsPerKeyHour: 1}
+	if raceDetector {
+		scale.days = 1
+	}
+	s, _ := testStore(t)
+	seedDashboardScale(t, s, scale)
+	prague, _ := time.LoadLocation("Europe/Prague")
+	params := application.KeyUsageReportParams{StartDate: dashboardNow.AddDate(0, 0, -29).Format(time.DateOnly), Location: prague}
+	report := keyUsageReportAt(t, s, params)
+	if report.ActiveKeys != scale.keys || len(report.Daily) != 30 || len(report.Series) != 9 {
+		t.Fatalf("unexpected report: %d active keys, %d days, %d series", report.ActiveKeys, len(report.Daily), len(report.Series))
+	}
+	var runs []time.Duration
+	for range 5 {
+		start := time.Now()
+		keyUsageReportAt(t, s, params)
+		runs = append(runs, time.Since(start))
+	}
+	slices.Sort(runs)
+	t.Logf("30-day key report at 300 keys / 50 groups, %d events: median %v (min %v, max %v)",
+		scale.keys*scale.days*24*scale.eventsPerKeyHour, runs[2], runs[0], runs[4])
+	if !raceDetector && runs[2] > 300*time.Millisecond {
+		t.Fatalf("key report median %v exceeds the 300 ms budget", runs[2])
+	}
+}
+
+// benchmarkKeyUsageReports adds the reports for API-key users to
+// BenchmarkDashboardPages: every key and three groups for 30 and 90 days, and
+// the 90-day per-day export encoded as CSV.
+func benchmarkKeyUsageReports(b *testing.B, s *Store) {
+	for _, zone := range []string{"UTC", "Europe/Prague"} {
+		loc, err := time.LoadLocation(zone)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, days := range []int{30, 90} {
+			start := dashboardNow.AddDate(0, 0, 1-days).Format(time.DateOnly)
+			b.Run(fmt.Sprintf("key_report_all_%dd_%s", days, zone), func(b *testing.B) {
+				for range b.N {
+					keyUsageReportAt(b, s, application.KeyUsageReportParams{StartDate: start, Location: loc})
+				}
+			})
+			b.Run(fmt.Sprintf("key_report_3groups_%dd_%s", days, zone), func(b *testing.B) {
+				for range b.N {
+					keyUsageReportAt(b, s, application.KeyUsageReportParams{StartDate: start, Location: loc,
+						GroupIDs: []string{"grp-1", "grp-2", "grp-3"}})
+				}
+			})
+		}
+		b.Run("key_report_csv_90d_"+zone, func(b *testing.B) {
+			params := application.KeyUsageReportParams{StartDate: dashboardNow.AddDate(0, 0, -89).Format(time.DateOnly), Location: loc}
+			service := application.NewKeyUsageReportService(s, func() time.Time { return dashboardNow })
+			for range b.N {
+				export, err := service.Export(context.Background(), params)
+				if err != nil {
+					b.Fatal(err)
+				}
+				out := csv.NewWriter(io.Discard)
+				for row := range export.Rows() {
+					if err := out.Write([]string{row.Date, row.GroupName, row.KeyID, row.KeyName, strconv.FormatInt(row.Usage.Requests, 10),
+						strconv.FormatInt(row.Usage.InputTokens, 10), strconv.FormatFloat(row.Usage.CostUSD, 'f', 6, 64)}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				out.Flush()
+			}
+		})
 	}
 }
