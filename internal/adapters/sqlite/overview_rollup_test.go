@@ -68,9 +68,7 @@ func TestOverviewUsageMatchesRawEventsInEveryFoldState(t *testing.T) {
 	if err := s.RebuildUsageRollups(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FoldUsageRollups(ctx, 1+random.IntN(events-1), 1000); err != nil {
-		t.Fatal(err)
-	}
+	foldRollupsTo(t, s, 1+random.IntN(events-1))
 	assertRollupReadsMatchRaw(t, s, "(b) cursor", cases)
 	foldRollups(t, s, 1000)
 	for round := range 2 {
