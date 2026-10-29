@@ -73,9 +73,19 @@ func setRollupWatermark(t testing.TB, s *Store, at time.Time) {
 	}
 }
 
+// testFoldBatch caps a fold batch under -race: there one batch of 1000
+// events can outlast the writer's 5 s execution budget on a busy CI runner.
+func testFoldBatch(batch int) int {
+	if raceDetector {
+		return min(batch, 250)
+	}
+	return batch
+}
+
 // foldRollups folds until no backlog in jobs of batch rows.
 func foldRollups(t testing.TB, s *Store, batch int) application.UsageRollupFold {
 	t.Helper()
+	batch = testFoldBatch(batch)
 	var total application.UsageRollupFold
 	for {
 		fold, err := s.FoldUsageRollups(context.Background(), batch, batch)
@@ -91,6 +101,26 @@ func foldRollups(t testing.TB, s *Store, batch int) application.UsageRollupFold 
 			return total
 		}
 	}
+}
+
+// foldRollupsTo stops the folder after about target events (or at the end of
+// the tail), folding in small batches like foldRollups, and returns how many
+// events it folded.
+func foldRollupsTo(t testing.TB, s *Store, target int) int {
+	t.Helper()
+	batch := testFoldBatch(1000)
+	folded := 0
+	for folded < target {
+		fold, err := s.FoldUsageRollups(context.Background(), min(batch, target-folded), batch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fold.Rows == 0 {
+			break
+		}
+		folded += fold.Rows
+	}
+	return folded
 }
 
 // rollupRows formats every row of a query as one string.
