@@ -79,8 +79,14 @@ func TestRequestLogKeysetPagesMatchOffsetPages(t *testing.T) {
 
 func TestRequestLogPageUsesTimeIndexWithoutSorting(t *testing.T) {
 	s, _ := testStore(t)
-	events, pending, args := requestLogSources(domain.RequestLogFilter{Limit: 25})
-	rows, err := s.readDB.Query("EXPLAIN QUERY PLAN "+requestLogPageSource(events, pending)+"SELECT request_id FROM log_page", append(args, 26, 0)...)
+	filter := domain.RequestLogFilter{Limit: 25}
+	events, args := requestLogEventSource(filter)
+	pending, pageArgs, err := newPendingLogReader(s.readDB).pageCTE(context.Background(), filter, 26)
+	if err != nil || pending == "" {
+		t.Fatal(pending, err)
+	}
+	rows, err := s.readDB.Query("EXPLAIN QUERY PLAN "+requestLogPageSource(events, pending)+"SELECT request_id FROM log_page",
+		append(append(pageArgs, args...), 26, 0)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +100,8 @@ func TestRequestLogPageUsesTimeIndexWithoutSorting(t *testing.T) {
 		}
 		plan += detail + "\n"
 	}
-	if !strings.Contains(plan, "idx_usage_events_time_id") || strings.Contains(plan, "SCAN e\n") {
+	if !strings.Contains(plan, "idx_usage_events_time_id") || strings.Contains(plan, "SCAN e\n") ||
+		!strings.Contains(plan, "COVERING INDEX idx_usage_reservations_pending") {
 		t.Fatalf("request-log page plan:\n%s", plan)
 	}
 	rows2, err := s.readDB.Query(`EXPLAIN QUERY PLAN SELECT id FROM usage_reservations WHERE needs_reconciliation=1 AND status='reserved' AND id>? ORDER BY id LIMIT 10`, "")

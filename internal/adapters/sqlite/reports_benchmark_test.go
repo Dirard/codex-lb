@@ -142,10 +142,10 @@ func BenchmarkUsageRollupReads(b *testing.B) {
 			if err != nil || reader == nil {
 				return fmt.Errorf("rollups unusable: %w", err)
 			}
-			_, err = reader.requestLogTotal(ctx, test.filter)
+			_, err = reader.requestLogTotal(ctx, newPendingLogReader(tx), test.filter)
 			return err
 		}, func(tx *sql.Tx) error {
-			_, err := requestLogTotalRaw(ctx, tx, test.filter)
+			_, err := requestLogTotalRaw(ctx, tx, newPendingLogReader(tx), test.filter)
 			return err
 		}})
 	}

@@ -51,7 +51,7 @@ const walSizeLimit = 64 << 20
 
 var memoryDBSequence atomic.Int64
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34, schemaV35, schemaV36, schemaV37, schemaV38, schemaV39, schemaV40, schemaV41, schemaV42}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21, schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33, schemaV34, schemaV35, schemaV36, schemaV37, schemaV38, schemaV39, schemaV40, schemaV41, schemaV42, schemaV43}
 
 // additiveMigrations are the migrations (by resulting version) that code of
 // the previous schema keeps working on: they only add defaulted columns and
@@ -60,7 +60,7 @@ var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, sche
 // An additive migration runs while the previous version still serves, whose
 // writes wait for the lock only within their own deadlines (settlement 10 s),
 // so it must finish in a few seconds: no table rewrites or large backfills.
-var additiveMigrations = map[int]bool{41: true, 42: true}
+var additiveMigrations = map[int]bool{41: true, 42: true, 43: true}
 
 type Store struct {
 	db                  *sql.DB
