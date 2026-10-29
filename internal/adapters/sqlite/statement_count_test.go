@@ -4,15 +4,35 @@ import (
 	"context"
 	"database/sql/driver"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
 
 // statementCounter counts the SQL statements the read and analytics pools
-// execute, so tests can require a statement count independent of data size.
-type statementCounter struct{ n atomic.Int64 }
+// execute, so tests can require a statement count independent of data size,
+// and keeps their text so tests can require that a table is not read.
+type statementCounter struct {
+	n       atomic.Int64
+	mu      sync.Mutex
+	queries []string
+}
 
 func (c *statementCounter) count() int64 { return c.n.Load() }
+
+func (c *statementCounter) record(query string) {
+	c.n.Add(1)
+	c.mu.Lock()
+	c.queries = append(c.queries, query)
+	c.mu.Unlock()
+}
+
+// since returns the statements executed after the first n.
+func (c *statementCounter) since(n int64) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.queries[n:]...)
+}
 
 type countingConnector struct {
 	driver.Connector
@@ -35,17 +55,17 @@ type countingConn struct {
 }
 
 func (c *countingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	c.counter.n.Add(1)
+	c.counter.record(query)
 	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
 }
 
 func (c *countingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	c.counter.n.Add(1)
+	c.counter.record(query)
 	return c.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
 }
 
 func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
-	c.counter.n.Add(1)
+	c.counter.record(query)
 	return c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
 }
 

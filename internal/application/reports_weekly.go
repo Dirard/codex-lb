@@ -11,7 +11,10 @@ import (
 
 // weeklyCreditPace joins persisted observations and operator settings for UC5.2.
 // It never fetches provider data or changes routing, quota, or warmup state.
-func (s *ReportsService) weeklyCreditPace(ctx context.Context, accounts []domain.Account, quotas map[string][]domain.AccountQuota, history []domain.AccountQuota, now time.Time) (*domain.WeeklyCreditPace, error) {
+// weeklyCreditPace builds the read-only weekly credit pace; attributeKeys adds
+// the top keys of the last two hours, which only the deprecated overview
+// shows and which groups every raw event of those hours.
+func (s *ReportsService) weeklyCreditPace(ctx context.Context, accounts []domain.Account, quotas map[string][]domain.AccountQuota, history []domain.AccountQuota, now time.Time, attributeKeys bool) (*domain.WeeklyCreditPace, error) {
 	settings, err := s.repo.LoadSettings(ctx)
 	if err != nil {
 		return nil, err
@@ -48,7 +51,7 @@ func (s *ReportsService) weeklyCreditPace(ctx context.Context, accounts []domain
 		input.TrailingDemandUsedPercent[account.ID] = demand[account.ID][secondary.Window]
 	}
 	pace := BuildWeeklyCreditPace(input)
-	if pace != nil {
+	if pace != nil && attributeKeys {
 		pace.TopAPIKeys, err = s.repo.WeeklyPaceTopKeys(ctx, now.Add(-2*time.Hour), now)
 	}
 	return pace, err
