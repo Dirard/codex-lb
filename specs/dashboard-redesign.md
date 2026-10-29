@@ -1181,7 +1181,7 @@ PR 3a — key page (use cases 4 and 4.1):
 11. [x] SQLite: `KeyPeriodUsage`, `KeyErrorCodes`, `KeyLimitPace`; raw-equivalence tests across zones and fold states (R20–R23).
 12. [x] Application and HTTP: `KeyPageService` with admin and owner scopes; `GET /api/api-keys/{id}/page`, `GET /api/api-keys/{id}/requests`, `GET /api/key-reports/page`, `GET /api/key-reports/requests` with parameter validation, owner projection, compression and `Server-Timing`; security tests (R20, R23, R25–R28, R50).
 13. [x] Web: `features/key-page` shared by `/keys/:id` and owner mode, `AuthGate` keeping `from`/`to`, key links switched from `/keys?selected=<id>` to `/keys/:id`, locales and MSW mocks (R19, R24, R29).
-14. [ ] Contract tests, `BenchmarkDashboardPages` for the key page; gates, PR, CI (R46, R49).
+14. [x] Contract tests, `BenchmarkDashboardPages` for the key page; gates, PR (#17), CI (R46, R49).
 
 PR 3b — reports for API-key users (use case 5):
 
