@@ -16,6 +16,6 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Gates: Go build, vet, lint, tests, race; web lint, typecheck, tests, build; OpenSpec strict validation.
+- [x] 4.1 Gates: Go build, vet, lint, tests, race; web lint, typecheck, tests, build; OpenSpec strict validation.
 - [x] 4.2 Contract tests for the new endpoints; `BenchmarkDashboardPages` for the key page at target scale.
 - [ ] 4.3 Release notes listing the deprecation of `GET /api/api-keys/{id}/trends`, `GET /api/api-keys/{id}/usage-7d` and `GET /api/key-reports/reports`.
