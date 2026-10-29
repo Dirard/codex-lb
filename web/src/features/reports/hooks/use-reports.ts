@@ -1,37 +1,39 @@
-import { useQuery } from "@tanstack/react-query";
-import { getReports } from "../api";
-import { isReportDateRangeValid } from "../date";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
-type ReportsFilterState = {
-  startDate: string | undefined;
-  endDate: string | undefined;
-  accountId: string[];
-  apiKeyId?: string[];
-  model: string | undefined;
-  useragent?: string | undefined;
+import { getReports } from "../api";
+import { localDateISO } from "../date";
+
+/** The traffic-details filter of GET /api/reports; no key ids means every key. */
+export type TrafficReportParams = {
+  startDate: string;
+  endDate: string;
+  timezone?: string;
+  apiKeyIds: string[];
 };
 
-export function useReports(
-  filters: ReportsFilterState,
-  timeZone: string | undefined,
-) {
+/**
+ * Model, user-agent and latency details from GET /api/reports, loaded only
+ * while enabled (the traffic details are expanded). Like the key report it
+ * never polls and refetches on focus only for a period including today.
+ */
+export function useReports(params: TrafficReportParams, enabled: boolean) {
+  const includesToday = params.endDate >= localDateISO();
   return useQuery({
-    enabled: isReportDateRangeValid(filters.startDate, filters.endDate),
-    queryKey: ["reports", filters, timeZone],
-    queryFn: () =>
-      getReports({
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-        accountId: filters.accountId.length > 0 ? filters.accountId : undefined,
-        apiKeyId:
-          filters.apiKeyId && filters.apiKeyId.length > 0
-            ? filters.apiKeyId
-            : undefined,
-        model: filters.model || undefined,
-        useragent: filters.useragent || undefined,
-        timezone: timeZone,
-      }),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    enabled,
+    queryKey: ["reports", "traffic", params],
+    queryFn: ({ signal }) =>
+      getReports(
+        {
+          startDate: params.startDate,
+          endDate: params.endDate,
+          apiKeyId: params.apiKeyIds.length > 0 ? params.apiKeyIds : undefined,
+          timezone: params.timezone,
+        },
+        signal,
+      ),
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+    refetchOnWindowFocus: includesToday,
+    refetchInterval: false,
   });
 }

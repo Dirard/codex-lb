@@ -31,6 +31,7 @@ type Repository interface {
 	application.OverviewRepository
 	application.ShellStatusRepository
 	application.DirectoryRepository
+	application.KeyUsageReportRepository
 }
 
 type Config struct {
@@ -165,6 +166,7 @@ func (s *Server) adminRoutes() *http.ServeMux {
 	s.registerAdmin(admin)
 	s.registerReportsRoutes(admin, s.store)
 	s.registerOverviewRoutes(admin)
+	s.registerKeyUsageReportRoutes(admin)
 	s.registerAffinityRoutes(admin)
 	if s.modelPricing != nil {
 		s.modelPricing.RegisterAdminRoutes(admin)
