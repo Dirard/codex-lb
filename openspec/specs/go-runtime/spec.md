@@ -1776,7 +1776,7 @@ The writer connection SHALL set `journal_size_limit` to 64 MiB. A dedicated main
 
 ### Requirement: Reports and request logs use bounded queries
 
-Admin report responses SHALL be computed with a number of database statements independent of the number of days, and their totals, daily sums, breakdowns, distinct conversation and account counts and comparisons SHALL equal an evaluation over the retained raw events and folded history for every filter, time zone and window. Daily median TTFT, queue latency and tokens per second SHALL come from fixed log-linear histograms and be within 1/64 of the exact median plus rounding; costs SHALL be summed as integer microdollars before conversion. Request-log pages SHALL be ordered through an index on `(requested_at, request_id)`, and the request-log API SHALL accept an optional opaque keyset `cursor`, returned as `nextCursor` when more rows exist, that returns rows strictly after the last returned row in the existing descending order, while offset paging remains supported and the total, conversation aggregate and filter options ignore the cursor. Open reservations SHALL use a partial index on reserved rows.
+Admin report responses SHALL be computed with a number of database statements independent of the number of days, and their totals, daily sums, breakdowns, distinct conversation and account counts and comparisons SHALL equal an evaluation over the retained raw events and folded history for every filter, time zone and window. Daily median TTFT, queue latency and tokens per second SHALL come from fixed log-linear histograms and be within 1/64 of the exact median plus rounding; costs SHALL be summed as integer microdollars before conversion. Request-log pages SHALL be ordered through an index on `(requested_at, request_id)`, and the request-log API SHALL accept an optional opaque keyset `cursor`, returned as `nextCursor` when more rows exist, that returns rows strictly after the last returned row in the existing descending order, while offset paging remains supported and the total, conversation aggregate and filter options ignore the cursor. Open reservations SHALL use a partial index on reserved rows. Pending request-log entries, reservations still reserved, flagged for reconciliation and without a usage event, SHALL be filtered, counted, grouped into filter options and paged through a covering partial index on flagged reserved reservations, reading at most the first `offset + limit + 1` of them for a page, and their entries, filter options, totals and cursors SHALL equal an evaluation over every reservation.
 
 #### Scenario: Daylight-saving week
 - **WHEN** a report window spans a daylight-saving transition in the selected time zone
@@ -1785,6 +1785,10 @@ Admin report responses SHALL be computed with a number of database statements in
 #### Scenario: Keyset page
 - **WHEN** a client passes a page's `nextCursor` as `cursor`
 - **THEN** the response equals the next offset page without scanning the skipped rows
+
+#### Scenario: Interrupted usage awaiting reconciliation
+- **WHEN** about 74 thousand of 1.6 million reservations are flagged for reconciliation and the request-log options and first page are requested
+- **THEN** the pending entries are read from the pending index, reservation rows only for the entries shown, and the entries, options, total and cursor equal the evaluation over every reservation
 
 ### Requirement: Storage bookkeeping is atomic and bounded
 
@@ -1915,3 +1919,374 @@ A reservation flagged for reconciliation (interrupted owner or unreported usage)
 #### Scenario: A request still in flight
 - **WHEN** a reservation older than one hour is not flagged because its request is still running
 - **THEN** it stays reserved and is settled by its request
+
+### Requirement: Admin pages poll once and read the shell status from that poll
+
+Every administrator page SHALL issue at most one periodic request: its page endpoint, or `GET /api/dashboard/status` every 60 seconds while visible on a page without one. `GET /api/dashboard/status` SHALL return the shell status: `ready` (the readiness of `/health/ready`), `lastSyncAt` (the newest quota observation of non-deleted ChatGPT accounts), `usageFoldedAt` and `rollupsUsable` (the usage rollup state), `reauthRequiredAccounts`, `availableResetCredits` (from the in-memory reset-credit snapshot), `showResetCreditBadges`, `apiKeyAuthEnabled` and the routing settings shown in the status bar. The shell status SHALL be computed from in-memory state and a fixed number of batch reads, independent of the number of accounts and keys. A page endpoint that carries the shell status SHALL return it as `shell`; the header badge, the API-key authentication warning and the status bar SHALL read it from that response or from `GET /api/dashboard/status` and SHALL NOT poll `/api/accounts`, `/api/settings` or `/health/ready`.
+
+#### Scenario: Overview carries the shell status
+
+- **WHEN** an administrator keeps the Overview page open
+- **THEN** the only periodic request is `GET /api/overview`, whose `shell` updates the header badge and the status bar
+- **AND** no request is made to `/api/accounts` or `/health/ready`
+
+#### Scenario: Page without its own poll
+
+- **WHEN** an administrator keeps the Settings page open
+- **THEN** `GET /api/dashboard/status` is requested every 60 seconds while the tab is visible
+
+#### Scenario: Status cost does not grow with the installation
+
+- **WHEN** the shell status is computed for 9 or for 100 accounts
+- **THEN** the same number of SQL statements is executed
+
+### Requirement: Global search finds keys, groups and accounts
+
+`GET /api/directory` SHALL return the non-deleted, non-internal API keys (id, name, prefix, group id, status `active`, `disabled` or `expired`), the account groups with their non-deleted member account count and non-deleted key count, and the non-deleted accounts (id, label as alias or else e-mail, e-mail, status, kind) in a number of statements independent of their count. The dashboard search, opened with Ctrl+K or Cmd+K, SHALL match keys by name and prefix, groups by name and accounts by alias, e-mail and id case-insensitively, SHALL show at most 20 results grouped by kind and SHALL navigate to the entity's page; an input shaped like a request id SHALL offer to open `/requests?request_id=<id>`. The directory SHALL be cached for 5 minutes and invalidated by key, group and account mutations.
+
+#### Scenario: Prefix match
+
+- **WHEN** the operator types the first characters of a key prefix
+- **THEN** that key is listed under Keys and selecting it opens the key
+
+#### Scenario: Deleted keys are not listed
+
+- **WHEN** a key is deleted or is an internal key
+- **THEN** it is absent from `GET /api/directory` and from the group's key count
+
+### Requirement: Replaced dashboard routes redirect
+
+`/` and `/dashboard` SHALL redirect to `/overview`, `/apis` SHALL redirect to `/keys` with its query string, and `/groups` SHALL open the account-group management that exists until a Groups page replaces it. The navigation SHALL list Overview, Groups, Accounts, Keys, Reports, Automations and Settings in that order, and the Accounts entry SHALL carry a badge with the number of accounts needing re-login, or otherwise the available reset credits when reset-credit badges are enabled.
+
+#### Scenario: Old bookmark
+
+- **WHEN** an operator opens `/apis?selected=key_1`
+- **THEN** the dashboard shows `/keys?selected=key_1`
+
+### Requirement: The overview summarizes pool, groups, alerts and attention keys in one bounded read
+
+`GET /api/overview?timezone=<IANA>` (default UTC; an unknown zone SHALL return 400 `invalid_timezone`) SHALL return the pool summary, one row per account group, a row for ungrouped keys, the alerts and at most 10 keys needing attention for the requested zone in one response, using a number of SQL statements independent of the number of keys, groups and accounts. Spend SHALL be estimated cost in USD for the current local day and for each of the 7 local days ending today, read from the usage rollups combined with the journal, the unfolded tail and raw partial hours; while the rollups are usable the overview SHALL NOT read raw usage events beyond those sources. Group spend SHALL be the sum over the group's current non-deleted, non-internal member keys; the ungrouped row SHALL sum the keys without a group and SHALL use the whole account pool. Pool spend, requests and error rates SHALL include all reported traffic. While the rollups are unusable the overview SHALL compute today's values and the error windows from raw events of at most the last 26 hours only and SHALL return null 7-day trends and a null spend at the same time yesterday.
+
+#### Scenario: Key moved between groups
+
+- **WHEN** a key that spent yesterday in group A now belongs to group B
+- **THEN** its spend of every day counts in group B and not in group A
+
+#### Scenario: Statement count at scale
+
+- **WHEN** the overview is computed for 30 and for 300 keys with the same number of days
+- **THEN** both evaluations execute the same number of SQL statements
+
+#### Scenario: Rollups catching up
+
+- **WHEN** the rollups are not usable after an upgrade
+- **THEN** today's spend equals the raw evaluation of today's events and every 7-day trend is null
+
+### Requirement: The overview page has fixed periods and one poll
+
+The Overview page SHALL render the alerts, the pool strip, the groups table and the keys needing attention in that order, SHALL have no period picker and SHALL label every metric with its fixed period (today, last hour, 7 days, current 5 h or weekly window). It SHALL poll only `GET /api/overview`, every 30 seconds while the tab is visible and on focus, and SHALL keep showing the previous data with a stale label and a retry action when a refetch fails. Expanding a group row SHALL show its problem accounts (at most 10) and its top keys by spend today (at most 5) from the same response.
+
+#### Scenario: Failed refetch
+
+- **WHEN** a refetch of the overview fails after data was shown
+- **THEN** the previous data stays visible with a "stale since" label and a retry action
+
+#### Scenario: Rollups unusable
+
+- **WHEN** the response reports that the rollups are not usable
+- **THEN** the page shows that usage analytics are catching up and hides 7-day trends
+
+### Requirement: Group window health is capacity-weighted and projected from account burn
+
+Pool and group window health SHALL be capacity-weighted over non-deleted ChatGPT accounts with a current observation of the window: remaining percent is the sum of remaining credits over the sum of known capacity, coverage SHALL be reported, and an unknown window SHALL be null, never zero. An account in several groups SHALL count fully in each group and once in the pool. The burn of an account SHALL be the positive used-percent deltas within one reset window over the trailing at most 5 hours of quota history, times capacity over 100, per hour, and SHALL be unknown with fewer than two observations. The projected exhaustion SHALL follow the runway $R(t) = \sum_a R_a - B\,(t - t_0) + \sum_{a:\ t_0 < \rho_a \le t} \min(C_a, C_a - R_a + b_a(\rho_a - t_0))$ over the accounts with known burn, and a group SHALL be marked as running out before reset only when the runway reaches zero before the latest reset of its covered accounts; no projection SHALL be made when the burn is unknown or zero. Account health SHALL be `reauth`, `paused`, `off` (deactivated), `limited` (rate limited, quota exceeded, or a window at 0 % without usable purchased credits), `low` (a window at or below 10 % remaining) or `ok`.
+
+#### Scenario: A reset arrives before exhaustion
+
+- **WHEN** an account of the group resets its window before the pooled remaining reaches zero
+- **THEN** the projection adds back that account's used credits at its reset time
+
+#### Scenario: No burn
+
+- **WHEN** no account of the group has two observations in the last 5 hours
+- **THEN** the window has no projected exhaustion and is not marked as running out
+
+### Requirement: Group rows are ordered by attention
+
+Group rows, including the ungrouped row, SHALL be ordered by attention score (2 with a critical alert, 1 with a warning alert, else 0), then by the number of problem accounts, then by member keys at or above 90 % of a limit, then by spend today, then by name. Limit fill of a key SHALL be the highest `current / max` over its active limits with expired windows counted as zero without changing storage; group fill SHALL be the highest member fill with the counts of members at or above 90 % and at or above 100 %.
+
+#### Scenario: Critical group first
+
+- **WHEN** one group has an account needing re-login and another spends more today
+- **THEN** the group with the account needing re-login is listed first
+
+### Requirement: Overview alerts follow fixed rules and are never stored
+
+The overview SHALL evaluate exactly these rules on every read and SHALL NOT persist, acknowledge or send alerts:
+
+| Rule | Subject | Warning | Critical | Action |
+|---|---|---|---|---|
+| `account_reauth` | account | — | status `reauth_required` | re-login |
+| `quota_runway` | pool and each group | runs out before reset in the 5 h or weekly window | exhaustion within 1 h (5 h window) or 12 h (weekly), or remaining ≤ 5 % | open the group, or Accounts for the pool |
+| `key_limit` | key | an active limit ≥ 90 % | an active limit ≥ 100 % | edit limits, or the group's limits for a grouped key |
+| `error_spike` | pool | last hour: error rate ≥ 5 %, ≥ 20 errors and ≥ 3 × the trailing 24 h rate (floor 1 %) | last hour: error rate ≥ 20 % with ≥ 20 errors | open the failed requests of the last hour |
+| `key_error_spike` | key | last hour: ≥ 20 errors and error rate ≥ 25 % | — | open the key's failed requests |
+| `key_expiry` | key | an active key expires within 7 days | within 24 hours | extend the expiry by 30 days |
+| `quota_data_stale` | pool | newest quota observation older than 10 min while ChatGPT accounts exist | older than 60 min | open Accounts |
+
+Errors SHALL exclude `cancelled` requests and the `client_disconnected` error code; the last hour SHALL be the previous whole hour plus the current partial hour and the trailing window the 24 hours before it. The ungrouped row SHALL raise no `quota_runway` alert of its own. Every alert SHALL have a stable id `rule:subjectType:subjectId:window` and exactly one action that the page performs or navigates to without a request other than the action's own. Alerts SHALL be sorted critical first, then by the rule order of the table, then by value, and more than five subjects of one rule and severity SHALL collapse into one summary alert whose action opens the filtered list.
+
+#### Scenario: Limit boundary
+
+- **WHEN** a key's fullest active limit is at 89.9 %, 90 % or 100 %
+- **THEN** it raises no alert, a warning or a critical `key_limit` alert respectively
+
+#### Scenario: Many keys near their limits
+
+- **WHEN** six keys are at or above 90 % of a limit
+- **THEN** one summary warning with count 6 replaces their six alerts
+
+### Requirement: Keys needing attention are ranked and actionable
+
+The overview SHALL list at most 10 active, non-deleted, non-internal keys with at least one reason — `limit_blocked` (an active limit ≥ 100 %, critical), `limit_near` (≥ 90 %, warning), `error_spike` (the `key_error_spike` rule), `expiring` (within 7 days, critical within 24 hours) or `spend_spike` (spend today ≥ 2 × the average of the previous 7 local days and ≥ 10 USD) — ranked by highest severity, then reason order, then the reason's value, then spend today, and SHALL report how many keys have a reason in total. The primary action of the top reason SHALL be available inline; Extend SHALL set `expiresAt` to 30 days after the later of now and the current expiry and Disable SHALL set `isActive=false`, each after a confirmation and through `PATCH /api/api-keys/{id}`, after which the overview, the directory and the shell status are refetched. `GET /api/api-keys/{id}` SHALL return one key for the edit dialog.
+
+#### Scenario: Extend an expiring key
+
+- **WHEN** the operator confirms Extend on a key expiring in two days
+- **THEN** the dashboard sends `PATCH /api/api-keys/{id}` with `expiresAt` 30 days after that expiry and refetches the overview
+
+#### Scenario: Spend spike floor
+
+- **WHEN** a key spends 8 USD today after spending 1 USD per day
+- **THEN** it has no `spend_spike` reason
+
+### Requirement: The Requests page holds the request log and conversations
+
+The request log and the conversation list SHALL live on a Requests page with one period picker shared by both views (1 h, 24 h default, 7 d, 30 d), a Live toggle that is off by default, and no polling unless Live is on (30 seconds, first page only). Filter options SHALL be fetched only for the selected timeframe and only when the filter panel opens; key and account names SHALL come from the directory. The URL parameters `timeframe`, `status`, `api_key_id`, `account_id`, `request_id` and `conversation_id` SHALL prefill the filters. `GET /api/request-logs` and its options SHALL accept `timeframe=30d`, and `GET /api/conversations` SHALL accept `timeframe=1h` and `timeframe=24h`, in addition to their existing values.
+
+#### Scenario: Default view
+
+- **WHEN** an operator opens `/requests`
+- **THEN** the request log of the last 24 hours is requested once and no further request follows while Live is off
+
+#### Scenario: Alert link
+
+- **WHEN** the operator follows the error-spike alert
+- **THEN** the Requests page opens with the error status and the last hour selected
+
+### Requirement: Public key-usage contracts stay unchanged
+
+`GET /v1/usage`, `GET /api/codex/usage` and `GET /v1/usage/reports` SHALL keep their request parameters, response fields, authentication, caching headers and response encoding unchanged by the dashboard redesign.
+
+#### Scenario: Existing client tools
+
+- **WHEN** a key holder's tool calls `GET /v1/usage` after the upgrade
+- **THEN** it receives the same fields with the same authentication and caching as before
+
+### Requirement: Replaced admin endpoints are deprecated for one release
+
+An admin endpoint that the embedded dashboard stops calling SHALL stay unchanged in the release that ships its replacement and SHALL be removed no earlier than the following release; release notes SHALL list each deprecation and removal. `GET /api/dashboard/overview` and `GET /api/dashboard/projections` SHALL be deprecated by this change.
+
+#### Scenario: Tab opened before the update
+
+- **WHEN** a browser tab loaded before the update still polls `GET /api/dashboard/overview`
+- **THEN** the endpoint answers as before until the release after the one that deprecated it
+
+### Requirement: New admin endpoints follow the admin routing conventions
+
+New administrator endpoints SHALL be registered behind administrator authentication and JSON compression with the existing trailing-slash conventions, and new key-owner endpoints SHALL live under `/api/key-reports/` so that the report cookie path covers them.
+
+#### Scenario: Anonymous request
+
+- **WHEN** `GET /api/overview` or `GET /api/directory` is requested without an administrator session
+- **THEN** the response is 401 and no data is returned
+
+### Requirement: Page endpoints meet a latency budget and report server time
+
+With usable rollups, the main endpoint of each dashboard page SHALL answer in under 300 ms of server time, warm, on a synthetic store with 300 keys, 50 groups, 100 accounts and at least 1.5 million events over 30 days, and on a copy of production data. Page endpoints SHALL send `Server-Timing: app;dur=<ms>`, which proxy routes SHALL NOT send. While the rollups are usable, no request issued on page load SHALL read raw usage events outside the rollup journal, the unfolded tail and partial hours, except recent-request reads bounded by their limit and the request-log page bounded by its timeframe.
+
+#### Scenario: Overview at target scale
+
+- **WHEN** `GET /api/overview` is measured warm on the synthetic store at target scale
+- **THEN** its server time is under 300 ms and the response carries `Server-Timing`
+
+### Requirement: Reports for API-key users resolve a selection of groups and keys in one bounded read
+
+`GET /api/reports/keys` SHALL be an administrator endpoint behind JSON compression that sends `Server-Timing` and accepts only the repeatable `group_id` and `api_key_id` parameters, `ungrouped=1`, `start_date` and `end_date` (`YYYY-MM-DD`, default the 7 local days ending today) and `timezone` (IANA, default UTC). It SHALL resolve, in one analytics read snapshot, the selected groups to their current non-deleted, non-internal member keys and unite them with the explicitly selected keys of that kind and, with `ungrouped=1`, the keys without a group; an empty selection SHALL select every non-deleted, non-internal key, and unknown ids SHALL select nothing. It SHALL return the period with the previous period of the same length, the selection with its resolved key count, the totals (requests, input, output, cached input and reasoning tokens, estimated cost in USD, errors, cancelled), the previous period's totals or null when the previous period has no requests, the number of keys with requests, one row per group of the resolved keys and one for the ungrouped keys with key counts, measures and cost share, one row per resolved key with its group, status, measures, cost share, last use and fullest current limit, and one entry per local day with the day's totals and the measures of up to 8 series ranked by cost plus `other`: groups when the selection names more than one group (counting the ungrouped keys as one) or is empty and the resolved keys belong to more than one group, otherwise keys. Every measure of a key and local day SHALL equal the raw evaluation of the reported events and folded legacy hours of that key and day, cost up to the final rounding to six decimals; keys count in their current group for every day. While the rollups are usable the endpoint SHALL read key slices, folded legacy hours, the journal, the unfolded tail and raw partial hours only, with a number of SQL statements independent of the number of keys, groups and days. A period longer than 731 days, an inverted or malformed date SHALL return 400 `invalid_report_date_range`; an unknown parameter, a blank or longer than 256 characters id, more than 200 group ids or more than 1000 key ids or another `ungrouped` value SHALL return 400 `invalid_report_filters`; an unknown zone SHALL return 400 `invalid_timezone`; a selection whose resolved keys times days exceed 500 000 SHALL return 400 `report_too_large`.
+
+#### Scenario: Group selected after a key moved
+
+- **WHEN** a key that spent last week in group A now belongs to group B and the report selects group B
+- **THEN** its spend of every day of the period counts in the report and in group B
+
+#### Scenario: Ungrouped keys and pruned days
+
+- **WHEN** the report selects only the ungrouped keys for a period whose first days were pruned into folded legacy hours
+- **THEN** the per-key and per-day measures equal the raw evaluation of the ungrouped keys' events and legacy hours of each local day
+
+#### Scenario: Statement count at scale
+
+- **WHEN** the report is computed for 30 and for 300 keys over the same period
+- **THEN** both evaluations execute the same number of SQL statements
+
+#### Scenario: Several groups
+
+- **WHEN** the report selects three groups
+- **THEN** the daily series are those groups ranked by cost, with `other` only when more than 8 series have requests
+
+### Requirement: Key usage export is a per-day CSV that matches the report
+
+`GET /api/reports/keys/export.csv` SHALL accept the parameters of `GET /api/reports/keys` with the same validation and SHALL answer `text/csv; charset=utf-8` with `Content-Disposition: attachment`, the header `date,group_id,group_name,key_id,key_name,requests,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,cost_usd,errors,cancelled` and one row per local day and resolved key with requests, ordered by date, group name with ungrouped keys last, key name and key id. `reasoning_tokens` SHALL be empty when unknown, `cost_usd` SHALL carry six decimals and text cells starting with `=`, `+`, `-`, `@`, tab or carriage return SHALL be prefixed with an apostrophe. The rows SHALL be computed in one analytics read snapshot that is closed before the first row is written, and their sums SHALL equal the totals of `GET /api/reports/keys` for the same parameters.
+
+#### Scenario: Sums match the report
+
+- **WHEN** an operator exports the CSV for the parameters of a report
+- **THEN** the sums of every numeric column equal the report's totals, cost up to the six-decimal rounding of each row
+
+#### Scenario: Idle keys
+
+- **WHEN** a selected key has no requests on a day
+- **THEN** the CSV has no row for that key and day
+
+### Requirement: The Reports page reports on key users by selection and period
+
+The Reports page SHALL show the report of `GET /api/reports/keys` for a selection of groups and keys chosen in a searchable picker over the directory (every key when nothing is selected) and one period picker (Today, Yesterday, 7 days by default, 30 days, 90 days, This month, Last month, or custom dates up to 730 days ending no later than today), SHALL encode the selection and the period in its URL so that a copied link reopens the same report, SHALL offer Export CSV for the same parameters, and per key an Open action to the key page and a Copy owner link action whose link opens the key sign-in with the report period and carries no credential. It SHALL load model, user-agent and latency details from `GET /api/reports` only when the operator expands them, filtered by the resolved keys when at most 50 are selected, unfiltered for every key, and otherwise SHALL ask the operator to narrow the selection. It SHALL NOT poll on an interval and SHALL refetch on window focus only when the period includes today and the data are older than 60 seconds. It SHALL NOT request `/api/accounts` or `/api/request-logs/options`.
+
+#### Scenario: Shared link
+
+- **WHEN** an operator copies the link of a report on two groups for the last 30 days and opens it in another tab
+- **THEN** the same two groups and the last 30 days are selected and one `GET /api/reports/keys` request is sent
+
+#### Scenario: Traffic details on demand
+
+- **WHEN** the Reports page loads
+- **THEN** no `GET /api/reports` request is sent until the operator expands the traffic details
+
+#### Scenario: Idle tab
+
+- **WHEN** a Reports page for the last 7 days stays open and visible
+- **THEN** no further report request is sent until the window regains focus at least 60 seconds after the last response
+
+### Requirement: The key page reads one key's period in one bounded read
+
+`GET /api/api-keys/{id}/page` (administrator) and `GET /api/key-reports/page` (key owner) SHALL accept `start_date` and `end_date` (`YYYY-MM-DD`, inclusive local days, default the 7 days ending today, at most 730 days) and `timezone` (IANA, default UTC; an unknown zone SHALL return 400 `invalid_timezone`; an invalid range SHALL return 400 `invalid_report_date_range`) and SHALL return, for that key and period: the key's properties and status, its current limits, the period summary (requests, input, output, cached and reasoning tokens, cost, errors, cancelled, TTFT p50 and p95, total latency p50 and p95) with the requests, tokens and cost of the previous period of equal length, one row per local day (requests, tokens, cost, errors, the top five models of the period plus the rest, TTFT p50 and p95, total latency p50 and p95, queue latency p95, tokens per second p50), one row per model (requests, tokens, cost, share, TTFT p50), errors by code (count, share, last seen hour), user-agent groups (requests, cost, share) and the first 50 recent requests with a `nextCursor`. Usage SHALL be read from the usage rollups for whole hours combined with raw partial hours, the unfolded tail, the journal and folded legacy hours, in one analytics snapshot, with a number of SQL statements independent of the period length; while the rollups are unusable the same values SHALL be computed from raw events of the key. Percentiles SHALL use the rollup histograms' interpolated quantile and their documented relative bound, also on the raw path. Folded legacy hours carry no latency, user-agent groups or error codes; the response SHALL report from when these details are complete. Reading a key page MUST NOT mutate limit counters, reservations or any other stored state.
+
+#### Scenario: Statement count does not grow with the period
+
+- **WHEN** the key page is read for 7 days and for 90 days of the same key
+- **THEN** both reads execute the same number of SQL statements
+
+#### Scenario: Rollups and raw events agree
+
+- **WHEN** the key page usage is read in Europe/Prague or Asia/Kolkata while the folder stopped at a random cursor or journal rows are pending
+- **THEN** every day, model, user-agent, account and error-code row equals the evaluation of the key's raw events
+
+#### Scenario: Pruned days
+
+- **WHEN** the period includes days whose events were pruned into legacy hourly rows
+- **THEN** their requests, tokens and cost are included and the response states that latency, user agents and error codes are complete only from the first unpruned instant
+
+### Requirement: Key limits show their reset and projected exhaustion
+
+Each active limit of the key page SHALL show its type, window, model filter, current and maximum values, percent and reset time. An expired window SHALL show zero usage and the advanced reset without writing storage. The page SHALL project the exhaustion time from the key's consumption of the limit's measure in the last 3 hours (tokens or cost, restricted to the limit's model filter), and SHALL report it only when that pace reaches the maximum before the reset; a credits limit, a zero pace or a limit already at its maximum SHALL have no projection.
+
+#### Scenario: Runs out before reset
+
+- **WHEN** a daily cost limit is at 80 % with 6 hours to its reset and the last 3 hours spent 10 % of the maximum
+- **THEN** the projected exhaustion is 6 hours from now, when the remaining 20 % is spent at that pace, which is not after the reset
+
+#### Scenario: Lasts until reset
+
+- **WHEN** the same pace would reach the maximum only after the reset
+- **THEN** no projected exhaustion is reported
+
+### Requirement: Key recent requests page through the key index
+
+`GET /api/api-keys/{id}/requests` and `GET /api/key-reports/requests` SHALL accept `cursor` (an opaque keyset cursor from a previous `nextCursor`), `limit` (1 to 100, default 50) and `errors_only` (`true` or `false`) and SHALL return `{items, nextCursor}` for the key, newest first in `(requested_at, request_id)` order, read through `idx_usage_events_key_time` and merged with the key's pending entries of the request log. Cursor pages SHALL equal the corresponding offset pages. With `errors_only=true` the read SHALL examine at most 5 000 of the key's rows per call and return the failed ones (status other than success, completed or cancelled), with a `nextCursor` that continues after the last examined row when the bound was reached.
+
+#### Scenario: Load more
+
+- **WHEN** the dashboard passes a page's `nextCursor` as `cursor`
+- **THEN** the next rows equal the following offset page without scanning the skipped rows
+
+#### Scenario: Rare errors
+
+- **WHEN** a key has one failed request among 20 000 successful ones
+- **THEN** each errors-only call reads at most 5 000 rows and returns a cursor until the failed request is found
+
+### Requirement: The key page is one dashboard component for the administrator and the owner
+
+The administrator page `/keys/:id` and the key owner's page after key sign-in SHALL be one React component with an administrator and an owner mode. It SHALL show, in order: the header (name, prefix, status, group, created, last used, expiry), one period picker (Today, 7 days by default, 30 days, 90 days, custom up to 730 days) reflected as `from` and `to` in the URL, the current limits with the pool or group remaining, the period KPIs with the previous-period comparison, usage by day and model, errors by code, latency per day, user agents, recent requests with an errors-only toggle and "load more", and the key properties; the administrator mode adds the actions Edit, Edit limits or Open group limits, Move to group, Disable or Enable, Regenerate, Reset period (for a grouped key, naming the whole group), Delete and Copy owner link, the account, client IP and conversation of each request with its details, cost by account and lifetime totals labelled "Lifetime". The page SHALL poll its page endpoint every 60 seconds while visible only when the period includes today. The owner mode SHALL NOT mount the administrator navigation or issue administrator requests, SHALL end the session on a 401 like the key report and SHALL keep showing the previous data with a retryable error on other failures.
+
+#### Scenario: Historical period does not poll
+
+- **WHEN** the operator selects a period that ends yesterday
+- **THEN** the page endpoint is requested once and not polled
+
+#### Scenario: Owner mode
+
+- **WHEN** a key owner signs in with the key
+- **THEN** the key page renders without the administrator navigation, actions, account columns, cost by account or lifetime totals, and no `/api/` request outside `/api/key-reports/` is made
+
+### Requirement: Owner key page data is bound to the authenticated key and redacted
+
+The owner routes SHALL bind every section to the key of the report session, SHALL accept only `start_date`, `end_date` and `timezone` (page) and `cursor`, `limit` and `errors_only` (requests), each at most once, and SHALL reject any other parameter with 400 `invalid_report_filters`. Owner responses SHALL omit account ids, e-mails and plan types, client IPs, full user-agent strings, conversation ids, error messages, model-source ids, cost by account, lifetime totals, the shell status and assigned account ids (only their counts remain), and SHALL include request ids, error codes and user-agent groups. A grouped owner key SHALL keep the same-group mini-list of the key report with the same safe fields, derived from the key's current membership in the read snapshot; a key that is disabled, expired or deleted by the time of that snapshot SHALL be rejected as unauthenticated.
+
+#### Scenario: Key A cannot read key B
+
+- **WHEN** an owner signed in with key A passes key B's id, account ids or any other selector as a parameter
+- **THEN** the request is rejected with 400 and no data of key B is returned
+
+#### Scenario: Omitted fields
+
+- **WHEN** an owner reads the key page and its requests
+- **THEN** the JSON contains no `accountId`, `clientIp`, `conversationId`, `useragent`, `errorMessage`, `byAccount`, `lifetime`, `shell` or `assignedAccounts` fields
+
+### Requirement: Owner key page shows the upstream remaining only when visible
+
+The pool or group remaining section (5-hour and weekly remaining with next reset and projected exhaustion, and the purchased-credit summary) SHALL appear in owner scope only when upstream quotas are visible to the key: `HideUpstreamQuotaFromKeys` is off and the key's usage sections include `account_pool_usage`. For an ungrouped key it SHALL cover the whole ChatGPT account pool, for a grouped key the group's non-deleted ChatGPT accounts; only aggregate values and counts SHALL be exposed.
+
+#### Scenario: Hidden upstream quotas
+
+- **WHEN** `HideUpstreamQuotaFromKeys` is on, or the key's usage sections omit `account_pool_usage`
+- **THEN** the owner page response has `pool: null` for grouped and ungrouped keys, while the administrator page still shows it
+
+### Requirement: Owner key page routes keep the key-report session rules
+
+`GET /api/key-reports/page` and `GET /api/key-reports/requests` SHALL authenticate only with the report-session cookie, SHALL revalidate the key's active, expiry, internal status and credential fingerprint on every read, SHALL apply the proxy IP allowlist, SHALL send `Cache-Control: no-store` and `Vary: Cookie`, SHALL be gzip-compressed when the client accepts it, SHALL send `Server-Timing: app;dur=<ms>`, SHALL accept no mutation method and MUST NOT consume key quota, change limit counters or reservations or create administrator sessions.
+
+#### Scenario: Key rotated mid-session
+
+- **WHEN** the key of an open owner page is regenerated, disabled or deleted
+- **THEN** the next page or requests read answers 401 and the dashboard ends the report session
+
+#### Scenario: Firewall
+
+- **WHEN** a client outside the proxy IP allowlist reads the owner page
+- **THEN** the request is denied with 403 `ip_forbidden`
+
+### Requirement: Owner links keep the period through key sign-in
+
+The dashboard entry SHALL keep the `from` and `to` query parameters through key sign-in and SHALL open the owner key page for that period; when they are present the key sign-in method SHALL be preselected. A link copied from the administrator key page or from Reports SHALL be the dashboard origin with only `from` and `to` and SHALL NOT contain or grant any credential: the owner still signs in with the key.
+
+#### Scenario: Link from the administrator
+
+- **WHEN** the operator copies the owner link of a key for 2026-10-01 to 2026-10-28 and the owner opens it and signs in with the key
+- **THEN** the owner page shows 2026-10-01 to 2026-10-28
+
+### Requirement: Key links open the key page
+
+Key links from the global search, the overview and the APIs list SHALL open `/keys/<id>`; `/keys?selected=<id>` and `/apis?selected=<id>` SHALL redirect to `/keys/<id>`, while `/keys` without a selection keeps the key list until the Keys page replaces it.
+
+#### Scenario: Old bookmark
+
+- **WHEN** an operator opens `/apis?selected=key_1`
+- **THEN** the dashboard shows the key page `/keys/key_1`
+
+### Requirement: Endpoints replaced by the key page are deprecated for one release
+
+`GET /api/api-keys/{id}/trends`, `GET /api/api-keys/{id}/usage-7d` and `GET /api/key-reports/reports` SHALL stay unchanged in the release that ships the key page, which the embedded dashboard no longer calls, and SHALL be removed no earlier than the following release; the release notes SHALL list the deprecation.
+
+#### Scenario: Tab opened before the update
+
+- **WHEN** a key report tab loaded before the update still requests `GET /api/key-reports/reports`
+- **THEN** it answers as before

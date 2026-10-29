@@ -1194,8 +1194,8 @@ PR 2 — overview, alerts and attention keys:
 4. [x] SQLite: `OverviewEntities` (batch account health and key rows), `OverviewUsage` (local-day key spend and error windows), `ShellSnapshot`, `Directory`; raw-equivalence tests across zones and fold states; raw fallback for today (R5, R6, R9).
 5. [x] Application and HTTP: `OverviewService`, `ShellStatusService`, `DirectoryService`, `/api/overview`, `/api/directory`, `GET /api/api-keys/{id}`, additive `/api/dashboard/status`, `Server-Timing` (R1, R2, R5, R48, R50).
 6. [x] Web: `useShellStatus`, header and status bar without own polls, `GlobalSearch`, `features/overview`, `features/requests` (moved components), redirects, locales (`en`, `ko`, `zh-CN`), MSW mocks and handler coverage (R1, R3, R4, R7, R8, R15, R17, R18).
-7. [ ] Contract tests for the new endpoints and the unchanged public key-usage endpoints and `BenchmarkDashboardPages` for the overview are done; the production-copy latency run is open (needs operator approval) (R46, R49).
-8. [ ] Use case 4 of `specs/dashboard-delivery.md` is marked outdated and the local gates pass; PR, CI and the release notes listing the deprecation of `/api/dashboard/overview` and `/api/dashboard/projections` are open.
+7. [x] Contract tests for the new endpoints and the unchanged public key-usage endpoints, `BenchmarkDashboardPages` for the overview and the production-copy latency run (R46, R49).
+8. [x] Use case 4 of `specs/dashboard-delivery.md` is marked outdated; gates, PR (#11), CI and the release notes of go-v1.3.0 listing the deprecation of `/api/dashboard/overview` and `/api/dashboard/projections`.
 
 PR 3a — key page (use cases 4 and 4.1):
 
@@ -1216,7 +1216,7 @@ PR 3b — reports for API-key users (use case 5):
 
 After PR 3a and 3b:
 
-20. [ ] Production-copy latency run of the new pages (operator approval) is open; the release notes of go-v1.4.0 list the deprecated key endpoints (R47, R49).
+20. [x] Production-copy latency run of the new pages (2026-10-29, approved by the operator); the release notes of go-v1.4.0 list the deprecated key endpoints (R47, R49).
 
 PR 4 — keys, groups and accounts management:
 
@@ -1248,7 +1248,7 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 
 ## Implementation notes (PR 2)
 
-- Branch `feat/overview-groups` from `feat/usage-rollups`; OpenSpec change `openspec/changes/overview-groups/` (the owner's name for `redesign-overview-alerts`).
+- Branch `feat/overview-groups` from `feat/usage-rollups`; OpenSpec change `overview-groups`, archived as `openspec/changes/archive/2026-10-29-overview-groups/` (the owner's name for `redesign-overview-alerts`).
 - Reads: `GET /api/overview` runs 24 SQL statements at any scale (entity snapshot 8, usage snapshot with legacy facts, raw spans, tail, journal, total hours, one key-slice statement of range arms and client-disconnect error hours, quota history 1, shell status 6); the directory 3 and the shell status 6. Past local days of whole-hour zones read the UTC-day slice row plus the hour rows of the offset; yesterday, which holds the same-time split, and today read hour rows; fractional zones read hour rows with the PR 1 split hours.
 - Measured (i9-14900K, modernc, warm): 300 keys, 50 groups, 100 accounts, every key active every hour of 8 days, overview median 37 ms (`TestOverviewMeetsItsLatencyBudgetAtTargetScale`, asserted < 300 ms); `BenchmarkDashboardPages` with 1.51 M events over 30 days: overview 46 ms (UTC), 47 ms (Europe/Prague), 123 ms (Asia/Kolkata), directory 0.7 ms, shell status 0.8 ms, request log 24 h 4 ms.
 - Shell status adds `stickyThreadsEnabled`, `preferEarlierResetAccounts` and `preferEarlierResetWindow` so the status bar's routing label needs no settings read; `spendYesterdaySameTimeUsd` and `spend7dUsd` are nullable (null while the rollups are unusable).
@@ -1260,7 +1260,7 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 
 ## Implementation notes (PR 3a)
 
-- Branch `feat/key-page` from `feat/overview-groups` (PR #11); OpenSpec change `openspec/changes/key-page/`.
+- Branch `feat/key-page` from `feat/overview-groups` (PR #11); OpenSpec change `key-page`, archived as `openspec/changes/archive/2026-10-29-key-page/`.
 - Reads: one `Store.KeyPageUsage` runs the period, error-code, pace and first-page readers (`keyPeriodUsage`, `keyErrorCodes`, `keyLimitPace`, `keyRecentRequestsTx`) in one analytics snapshot: 14 statements, 15 with model-filtered limits, for 7 and for 90 days (`TestKeyPageUsageStatementCountIsIndependentOfThePeriod`). The period and the previous period share one plan split at every local midnight; raw split hours and edges read the key's events through `idx_usage_events_key_time` (`keyImages`) instead of every key's events of the hour; the previous period reads the key's slice rows (UTC days inside, hours at the edges); folded legacy hours are read once for both periods. The raw path, fallback and oracle, reads the key's events through the key index and builds the same histograms, so both paths return identical results (`TestKeyPageUsageMatchesRawEventsInEveryFoldState`, UTC, Europe/Prague and Asia/Kolkata in all four fold states).
 - The use case reads, besides that snapshot, `GetAPIKey`, `OverviewEntities` (projected limits, group, same-group mini-list, accounts for the pool and the labels), `RecentAccountQuotaHistory` (burn rates), the settings (owner visibility), and for the administrator `UsageTotals` and the shell status. The owner's key is checked again in the entity snapshot: disabled, expired or deleted by then is 401.
 - Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages` with 1.51 M events of 300 keys over 30 days plus the busiest key at 57.7 k events per 7 days, 247 k in 30 days, 24 cube rows per hour): administrator key page of the busiest key 41 ms (7 d) and 90 ms (30 d) in UTC, 43 and 92 ms in Europe/Prague, 57 and 131 ms in Asia/Kolkata; a typical key's 30 days 31 ms (mostly the fixed entity, quota-history and shell reads); recent requests 0.9 ms, errors only 2.1 ms. `TestKeyPageMeetsItsLatencyBudgetAtTargetScale` asserts the busiest key's 30 days under 300 ms next to 300 keys (60 ms for 60 k events).
@@ -1273,7 +1273,7 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 
 ## Implementation notes (PR 3b)
 
-- Branch `feat/key-usage-reports` from `feat/overview-groups` (PR #11); OpenSpec change `openspec/changes/key-usage-reports/`.
+- Branch `feat/key-usage-reports` from `feat/overview-groups` (PR #11); OpenSpec change `key-usage-reports`, archived as `openspec/changes/archive/2026-10-29-key-usage-reports/`.
 - Scope: every figure sums the resolved current keys (non-deleted, non-internal), so totals, groups, keys, the daily series and the CSV agree; requests without a key, deleted and internal keys are in no selection, and `usage_rollup_total_hour` is not read. Unknown ids select nothing; a selected group without keys keeps a row with zero keys.
 - Daily series: keys, or groups when the selection names more than one group (ungrouped counting as one) or is empty and the keys span several groups; top 8 by cost with requests, plus `other`. The top-level `series` list names them once and every `daily[].series` holds requests, tokens and cost in that order, which keeps 90 days under 150 KB raw.
 - `previous` is null when the previous period has no requests (no history-wide existence read). Costs are rounded to six decimals; CSV sums equal the JSON totals up to that rounding of each row.
@@ -1282,6 +1282,25 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages`, 300 keys, 50 groups, 100 accounts, 1.51 M events over 30 days): all keys 30 d 16 ms (UTC), 48 ms (Europe/Prague), 208 ms (Asia/Kolkata); 90 d 18 ms, 50 ms, 211 ms; three groups 30 d 3 ms, 6 ms, 49 ms; CSV 90 d 20 ms, 41–88 ms, 202 ms. Every key active every hour of 90 days (648 k events): 90 d 47 ms (UTC), 136 ms (Europe/Prague), CSV 40 ms and 122 ms. The 30-day report at 300 keys is asserted under 300 ms (`TestKeyUsageReportMeetsItsLatencyBudgetAtTargetScale`, median 12 ms on 8 days of data). Fractional zones read 7 slice rows per key and day and sum their raw split hours per key in SQL, which cut Asia/Kolkata from 313 ms to 208 ms.
 - Web: the scope picker renders at most 100 matches (type to narrow); the keys table hides idle keys behind a toggle, filters by text, collapses groups and shows 20 rows per group before "Show all"; quick periods stay relative in the URL (`period=30d`), custom ones are `from`/`to`. Traffic details wait for the report and filter `/api/reports` by its resolved key ids (at most 50), or read it unfiltered for every key.
 - `reports-summary-cards`, `daily-detail-table`, `cost-per-day-chart` and `tokens-per-day-chart` are no longer used by Reports but stay while `features/key-reports` imports them; PR 3a removes them with the old key report.
+
+## Production-copy measurements (go-v1.4.0)
+
+Measured 2026-10-29 with the release binary on a `VACUUM INTO` copy of the production database (815 k events, 1.46 M reservations, 28 keys, 6 groups, 9 accounts; the busiest key has 92.5 k events in 7 days and 291 k in 30), server and client in an isolated network namespace at low CPU and I/O priority; the production service was not touched and the copy was deleted. Warm medians of `curl` total time, with the `Server-Timing` server time:
+
+| Endpoint | Warm | Server |
+|---|---:|---:|
+| `GET /api/overview` | 95 ms | 91 ms |
+| `GET /api/request-logs` 24 h / whole history | 26 / 7.9 ms | — |
+| `GET /api/request-logs/options` 24 h / whole history | 25 / 4.4 ms | — |
+| `GET /api/api-keys/{busiest}/page` 7 / 30 / 90 d | 116 / 179 / 208 ms | 104 / 174 / 200 ms |
+| `GET /api/key-reports/page` 7 / 30 d | 130 / 200 ms | 127 / 196 ms |
+| `GET /api/api-keys/{id}/requests` / errors only | 12 / 33 ms | 7.5 / 32 ms |
+| `GET /api/reports/keys` all keys 7 / 30 / 90 d | 10 / 82 / 101 ms | 7 / 80 / 96 ms |
+| `GET /api/reports/keys/export.csv` 90 d | 111 ms | 107 ms |
+
+- Every main page endpoint answers within the 300 ms budget of R49 on production data; whole page loads (parallel requests as the browser issues them) take 172 ms (overview), 96 ms (requests), 187 ms (busiest key page) and 93 ms (reports) warm.
+- With the page cache dropped and the startup verifier finished, the key page takes 0.25–0.87 s, the owner page 0.47–0.79 s, the overview 0.16–0.23 s and a 30-day report 0.15 s. A cold read issued while the startup verifier is still reading raw events took up to 8.6 s; this contention lasts only for the first seconds after a start.
+- No rollup rebuild or mismatch occurred; R9 of `usage-rollups.md` (request-log options under 300 ms) is met at 4.4 ms.
 
 ## Decision log
 
@@ -1301,3 +1320,4 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - 2026-10-29: PR 3 is split into PR 3a (key page, OpenSpec change `key-page`) and PR 3b (reports for key users, OpenSpec change `key-usage-reports`): they share no files apart from routing and locales, so they are built and reviewed in parallel. Following Q6, R22 now includes total-latency p50 and p95.
 - 2026-10-29: PR 3a reads the key page in one analytics snapshot through one store method (`KeyPageUsage`) instead of three, so the period, its error codes, the limit pace and the first page of recent requests are consistent; percentiles use the PR 1 interpolated `histQuantile` on both read paths.
 - 2026-10-29 (PR 3b): Reports sum only the resolved current keys, so the summary, the tables and the CSV always agree; the export reuses the report's snapshot read instead of a separate streaming reader and writes after the snapshot closes, bounded by keys × days; the daily series carry a top-level series list with compact points.
+- 2026-10-29: The production-copy run with go-v1.4.0 confirmed R49 for the overview, requests, key and owner pages and reports; the cold read during the startup verifier is recorded as an observation, not a requirement change. The OpenSpec changes `overview-groups`, `request-log-pending-index`, `key-page` and `key-usage-reports` are archived and synced into `go-runtime` and `frontend-architecture`.
