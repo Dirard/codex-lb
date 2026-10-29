@@ -20,7 +20,7 @@ env:
 
 jobs:
   go:
-    name: Go (vet, lint, test, race, vuln)
+    name: Go (vet, lint, test, vuln)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,9 +40,33 @@ jobs:
       - name: golangci-lint
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@"${GOLANGCI_LINT_VERSION}" run ./...
       - run: go test ./...
-      - run: go test -race -timeout 30m ./...
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@"${GOVULNCHECK_VERSION}" ./...
+
+  # The race detector slows the transpiled SQLite engine about 40-fold, so
+  # one runner needed about 20 minutes; four shards split the tests between
+  # them (scripts/race-shard.sh runs each test in exactly one shard).
+  race:
+    name: Go race (shard ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build dashboard assets
+        run: |
+          npm --prefix web run install:deps
+          npm --prefix web run build
+      - run: scripts/race-shard.sh ${{ matrix.shard }} 4
 
   web:
     name: Dashboard (lint, typecheck, test, build)
