@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { formatKeyLimitValue } from "@/features/api-keys/components/limit-rules-utils";
-import { ApiKeyLimitSummary, ApiKeyStatusBadge, LimitUsageBar } from "@/features/apis/components/api-key-limit-usage";
+import { ApiKeyLimitSummary, ApiKeyStatusBadge, LimitUsageBar } from "@/features/api-keys/components/api-key-limit-usage";
 import { cn } from "@/lib/utils";
 import { formatPercentNullable, formatResetRelative, parseDate } from "@/utils/formatters";
 import type { KeyReport } from "./api";
