@@ -15,5 +15,5 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Gates: Go build, vet, lint, tests, race; web lint, typecheck, tests, build; OpenSpec strict validation.
+- [x] 4.1 Gates: Go build, vet, lint, tests, race; web lint, typecheck, tests, build; OpenSpec strict validation.
 - [x] 4.2 Contract test of `GET /api/accounts` against the built binary; `BenchmarkDashboardPages` for the accounts list at 100 accounts.

@@ -35,11 +35,15 @@ The Accounts list SHALL show two subscription countdowns beside each account whe
 The Settings page SHALL include sections for: routing settings (sticky threads,
 reset priority, prompt-cache affinity TTL, weekly pace controls, limit warm-up
 controls, and Fast Mode prohibition), password management
-(setup/change/remove), TOTP management (setup/disable), API key auth toggle,
-API key management (table, create, edit, delete, regenerate), and
-sticky-session administration. API key create/edit controls that expose
-reasoning effort choices MUST include upstream-supported extended efforts such
-as `max` and `ultra`.
+(setup/change/remove), TOTP management (setup/disable), API-key access (the API
+key authentication toggle and the upstream-quota privacy toggle), and
+sticky-session administration. API key management lives on the Keys and key
+pages and account-group management on the Groups page; the Settings page SHALL
+NOT render the API key table or the account-group list. The Appearance section
+SHALL offer theme, time format, date format and account rows and SHALL NOT
+offer a dashboard refresh rate or an account burn-projection toggle. API key
+create and edit dialogs that expose reasoning effort choices MUST include
+upstream-supported extended efforts such as `max` and `ultra`.
 
 Advanced sections — routing settings, model sources, firewall, and
 sticky-session administration — SHALL render inside an Advanced settings group
@@ -49,15 +53,16 @@ and fully functional. While the group is collapsed, its sections SHALL NOT
 mount, and the sections that self-fetch on mount — model sources, firewall, and
 sticky-session administration — SHALL NOT issue their data requests; those
 requests fire when the group is expanded. Core sections (appearance, import,
-password management, session, TOTP, and API key management) SHALL remain
-visible without expanding the group. The Settings page SHALL NOT render upstream
-proxy administration, quota phase planner or guest-access controls, which the
-Go runtime does not provide.
+password management, session, TOTP, and API-key access) SHALL remain visible
+without expanding the group. The Settings page SHALL NOT render upstream proxy
+administration, quota phase planner or guest-access controls, which the Go
+runtime does not provide.
 
 #### Scenario: Advanced settings collapsed by default
 
 - **WHEN** a user opens the Settings page
-- **THEN** appearance, import, and API key management sections are visible
+- **THEN** appearance, import, and API-key access sections are visible
+- **AND** neither the API key table nor the account-group list is rendered
 - **AND** the advanced sections (routing, model sources, firewall, sticky sessions) are not mounted
 - **AND** the self-fetching sections (model sources, firewall, sticky sessions) have not issued their data requests
 
@@ -111,11 +116,11 @@ Go runtime does not provide.
 
 ### Requirement: Accounts page
 
-The Accounts page SHALL display a two-column layout: left panel with searchable account list, import button, and add account button; right panel with selected account details including usage, token info, and actions (pause/resume/delete/re-authenticate). The Accounts page SHALL also let operators view and update whether an account is authorized for upstream cybersecurity work without losing existing account actions such as pause, resume, re-authenticate, export, and delete.
+The Accounts page SHALL display every account in one table (`AccountsTable`) under a toolbar with search, status and group filters, sort and Add account, and SHALL open the selected account's details, including usage, token info, groups, settings and actions (pause/resume/delete/re-authenticate), in a detail sheet (`AccountDetailSheet`). The Accounts page SHALL also let operators view and update whether an account is authorized for upstream cybersecurity work without losing existing account actions such as pause, resume, re-authenticate, export, and delete.
 
-The layout SHALL fit mobile, tablet, and desktop dashboard widths without horizontal page overflow caused by fixed-width account controls.
+The layout SHALL fit mobile, tablet, and desktop dashboard widths without horizontal page overflow: the table SHALL scroll horizontally inside its own container and the detail sheet SHALL fit the viewport width.
 
-The Accounts page SHALL keep the add account button outside the scrollable account list so it remains reachable without scrolling through existing accounts, and SHALL keep long account lists in a bounded internal scroll region on desktop so account rows do not push the page layout past the selected-account detail panel.
+The Accounts page SHALL keep the toolbar, including Add account, outside the table rows so it remains reachable without scrolling through existing accounts.
 
 Account status displays and filters SHALL distinguish `reauth_required` accounts from `deactivated` accounts: `reauth_required` means the local credential/session must be refreshed by operator re-authentication, while `deactivated` means the upstream account is disabled, suspended, deleted, or explicitly deactivated.
 
@@ -134,7 +139,7 @@ Account status displays and filters SHALL distinguish `reauth_required` accounts
 
 - **WHEN** the account list contains multiple accounts with the same email
 - **AND** at least one account has workspace metadata
-- **THEN** the list and detail views show workspace identity or compact account id context sufficient to distinguish the credential slots
+- **THEN** the table rows and the detail sheet show workspace identity or compact account id context sufficient to distinguish the credential slots
 
 #### Scenario: Same-login workspace slots are preserved
 
@@ -150,29 +155,29 @@ Account status displays and filters SHALL distinguish `reauth_required` accounts
 #### Scenario: Responsive account management layout
 
 - **WHEN** the Accounts page is rendered at a mobile-width viewport
-- **THEN** the account list and selected account detail stack vertically
-- **AND** account list filters, quota rows, proxy controls, routing policy controls, token status, and action buttons fit within the viewport without horizontal document overflow
+- **THEN** the toolbar controls wrap within the viewport, the table scrolls horizontally inside its container and the detail sheet spans the viewport width
+- **AND** quota rows, routing policy controls, token status, and action buttons fit within the viewport without horizontal document overflow
 
 #### Scenario: Add account remains outside account list scrolling
 
-- **WHEN** the Accounts page renders the account list controls
-- **THEN** the add account button is not a child of the scrollable account list
+- **WHEN** the Accounts page renders the toolbar
+- **THEN** the Add account button is not a child of the table
 - **AND** the button remains available without scrolling through existing accounts
 
 #### Scenario: Long account list scrolls inside the left panel
 
-- **WHEN** the Accounts page renders more account rows than fit in the visible left panel
-- **THEN** the account rows scroll inside the account list region
-- **AND** the add account action remains visible outside that scroll region
+- **WHEN** the Accounts page renders more account rows than fit in the viewport
+- **THEN** every row stays reachable by scrolling, the table scrolls horizontally only inside its own container
+- **AND** the toolbar with Add account is rendered above the rows, outside the table
 
 #### Scenario: Re-authentication-required account is labeled separately
 
 - **WHEN** an account summary has `status = "reauth_required"`
-- **THEN** the account list and account detail status badge show `Re-auth required`
+- **THEN** the table row and the detail sheet status badge show `Re-auth required`
 - **AND** the account can be found with the status filter for `reauth_required`
-- **AND** the account detail exposes the re-authenticate action
-- **AND** the account detail does not expose pause or resume actions that could bypass re-authentication
-- **AND** the account list and account detail do not expose routing-policy controls that imply the account is selectable while operator recovery is required
+- **AND** the row and the detail sheet expose the re-authenticate action
+- **AND** neither exposes pause or resume actions that could bypass re-authentication
+- **AND** neither exposes routing-policy controls that imply the account is selectable while operator recovery is required
 
 ### Requirement: Request logs display account plan tier
 When a request log entry is associated with an account, the dashboard request-log API response MUST expose the persisted request-log `planType` snapshot, and the recent-requests table MUST render the plan tier in a visible request-log column or badge.
@@ -190,42 +195,27 @@ When a request log entry is associated with an account, the dashboard request-lo
 
 ### Requirement: Accounts list surfaces quota reset timing
 
-The Accounts page account list SHALL render a compact 5h quota row and a weekly quota row for accounts that have both quota windows, and SHALL include the time remaining until reset for each rendered row when a reset timestamp is available. Weekly-only accounts SHALL omit the 5h row. Account cards SHALL also surface whether the account is opted in to limit warm-up.
+The accounts table SHALL render a 5h column and a weekly column, and a monthly column when any listed account has a monthly window; each cell SHALL show the remaining percentage and the time remaining until reset when a reset timestamp is available, and an absent window SHALL render as `—`. Each row SHALL also surface whether the account is opted in to limit warm-up.
 
 #### Scenario: Regular account shows both quota rows
-- **WHEN** the account list renders an account with both primary and weekly quota windows
-- **THEN** the list item shows both 5h and weekly quota rows
-- **AND** each rendered row shows its reset countdown
+- **WHEN** the table renders an account with both primary and weekly quota windows
+- **THEN** the row shows both the 5h and the weekly remaining
+- **AND** each shows its reset countdown
 
 #### Scenario: Weekly-only account omits the 5h row
-- **WHEN** the account list renders an account whose primary window is absent
-- **THEN** the list item does not render a 5h quota row
-- **AND** the weekly quota row still renders
+- **WHEN** the table renders an account whose primary window is absent
+- **THEN** the row's 5h cell shows `—`
+- **AND** the weekly cell still shows the remaining and the reset
 
 #### Scenario: Limit warm-up opt-in is visible
-- **WHEN** the account list renders an account with limit warm-up opt-in enabled
-- **THEN** the account card shows the opt-in state
-
-### Requirement: Accounts list respects compact row appearance preference
-The Accounts page account list SHALL honor a locally stored appearance preference that selects which compact quota rows are shown: 5h, weekly, or both. The default preference SHALL be Both. When the selected row is unavailable for a given account, the list MAY fall back to the available row so the account still shows quota information.
-
-#### Scenario: Default preference shows both rows
-- **WHEN** the appearance preference is unset
-- **THEN** the account list shows both 5h and weekly rows for accounts that have both quota windows
-
-#### Scenario: 5h preference shows only the 5h row
-- **WHEN** the appearance preference is set to 5H
-- **THEN** the account list shows the 5h row and hides the weekly row for accounts that have both quota windows
-
-#### Scenario: Weekly preference shows only the weekly row
-- **WHEN** the appearance preference is set to W
-- **THEN** the account list shows the weekly row and hides the 5h row for accounts that have both quota windows
+- **WHEN** the table renders an account with limit warm-up opt-in enabled
+- **THEN** the row shows the opt-in state
 
 ### Requirement: Accounts list orders by next reset
-The Accounts page account list SHALL order accounts by the earliest upcoming quota reset timestamp among the rendered quota windows. Accounts without any reset timestamp SHALL sort after accounts with a reset timestamp. When reset timestamps are equal or unavailable, the list MAY fall back to a stable text-based order.
+The accounts table's "Next reset" sort SHALL order accounts by the earliest upcoming quota reset timestamp among their 5h, weekly and monthly windows. Accounts without any upcoming reset timestamp SHALL sort after accounts with one. When reset timestamps are equal or unavailable, the table SHALL fall back to a stable order by label and account id.
 
 #### Scenario: Earlier reset sorts first
-- **WHEN** two accounts are shown in the account list and one account has an earlier quota reset time than the other
+- **WHEN** the operator sorts by next reset and one account has an earlier quota reset time than the other
 - **THEN** the earlier-reset account appears before the later-reset account
 
 ### Requirement: Dashboard request-log filtering supports API keys
@@ -552,44 +542,33 @@ selected value using the settings API field `preferEarlierResetWindow`.
 
 ### Requirement: Accounts list supports explicit sort modes
 
-The Accounts page account list SHALL expose sort modes for reset time
-soonest-first, reset time latest-first, account name ascending, and account name
-descending. The default sort mode SHALL remain reset time soonest-first. The
-same selected sort mode SHALL apply to both the rendered account list and the
-page-level selected-account fallback.
+The accounts table SHALL expose sort modes for status severity, reset time soonest-first, reset time latest-first, 5h remaining (lowest first), weekly remaining (lowest first), most reset credits, account name ascending, and account name descending. The default sort mode SHALL be status severity, which orders re-login required, deactivated, quota exceeded, rate limited, paused and then active accounts, each status by reset time soonest-first. Accounts without a value for the selected measure SHALL sort after accounts with one. The selected sort mode SHALL apply only to the rendered rows; it SHALL NOT change which account the detail sheet shows.
 
 #### Scenario: Reset soonest remains the default
 
-- **WHEN** the account list renders without an explicit sort mode
-- **THEN** accounts with the earliest upcoming visible quota reset sort first
+- **WHEN** the table renders without an explicit sort mode
+- **THEN** accounts needing re-login come first and active accounts last
+- **AND** accounts of the same status with the earliest upcoming quota reset sort first
 
 #### Scenario: Reset latest sorts finite resets descending
 
 - **WHEN** a user selects reset time latest-first
-- **THEN** accounts with later upcoming visible quota resets sort before
-  accounts with earlier upcoming visible quota resets
-- **AND** accounts without an upcoming visible reset timestamp sort after
+- **THEN** accounts with later upcoming quota resets sort before
+  accounts with earlier upcoming quota resets
+- **AND** accounts without an upcoming reset timestamp sort after
   accounts with finite upcoming reset timestamps
+
+#### Scenario: Remaining sorts lowest first
+
+- **WHEN** a user selects 5h remaining or weekly remaining
+- **THEN** accounts with less remaining in that window sort first
+- **AND** accounts without that window sort last
 
 #### Scenario: Name sort modes order by account label
 
 - **WHEN** a user selects account name ascending or descending
-- **THEN** the account list orders accounts by display name, email, or account
+- **THEN** the table orders accounts by alias, display name, email, or account
   identifier in the selected direction
-
-### Requirement: API key overview SHALL show lifetime usage aggregates
-
-The dashboard API key overview SHALL present usage totals using the API key list
-`usageSummary` values as lifetime aggregates (all non-warmup request-log history),
-unless the backend contract is changed to provide a bounded window explicitly.
-
-#### Scenario: Overview usage labels reflect lifetime scope
-
-- **WHEN** the API key overview renders `usageSummary` values for request count,
-  token count, and cost
-- **THEN** the section labels SHALL read as lifetime usage (for example:
-  "Lifetime Requests", "Lifetime Cost", "Lifetime Cost by API Key", "Lifetime Tokens
-  by API Key"), and SHALL NOT be labeled as 7-day totals.
 
 ### Requirement: Dashboard request-log details expose user-agent metadata
 The dashboard request-log API response MUST expose the persisted request-log `useragent` and `useragentGroup` values when present. The Request Details dialog MUST render the full `useragent` value in a `User Agent` field below the `Transport`, `Time`, and `Error Code` row, and MUST render `—` when no full user-agent value is stored.
@@ -660,19 +639,14 @@ Hovering a donut slice SHALL highlight the matching legend row, and hovering a l
 
 ### Requirement: Account list presents a single add-account entry point with a chooser dialog
 
-The account list SHALL present account creation through a single dashed-border placeholder control
-rendered at the bottom of the list, instead of separate always-visible "Import" and "Add Account"
-buttons. Activating the placeholder SHALL open a modal chooser dialog offering two options: adding
-an account via OAuth and importing an exported `auth.json` file. Selecting an option SHALL close the
-chooser and open the corresponding existing flow (the OAuth dialog or the import dialog) via the
-existing handlers, without changing those flows' behavior.
+The accounts toolbar SHALL present account creation through a single "Add account" control instead of separate always-visible "Import" and "Add Account" buttons. Activating it SHALL open a modal chooser dialog offering two options: adding an account via OAuth and importing an exported `auth.json` file. Selecting an option SHALL close the chooser and open the corresponding existing flow (the OAuth dialog or the import dialog) via the existing handlers, without changing those flows' behavior. When there are no accounts, the empty table SHALL offer the same control.
 
 #### Scenario: Add-account placeholder opens the chooser
 
-- **WHEN** an operator views the account list
-- **THEN** a single "Add account" placeholder control is shown at the bottom of the list
+- **WHEN** an operator views the Accounts page
+- **THEN** a single "Add account" control is shown in the toolbar
 - **AND** no separate always-visible "Import" or "Add Account" buttons are present
-- **WHEN** the operator activates the placeholder
+- **WHEN** the operator activates the control
 - **THEN** a chooser dialog opens offering an "Add account" (OAuth) option and an "Import" option
 
 #### Scenario: Choosing an option opens its existing flow
@@ -682,18 +656,6 @@ existing handlers, without changing those flows' behavior.
 - **THEN** the chooser closes and the existing OAuth sign-in dialog opens
 - **WHEN** the operator instead selects the "Import" option
 - **THEN** the chooser closes and the existing `auth.json` import dialog opens
-
-### Requirement: Account list status filter shares the help row
-
-The account list search input SHALL span the full width of the list controls, and the account
-status filter SHALL be positioned on the same row as the "Need help?" toggle rather than beside the
-search input.
-
-#### Scenario: Status filter renders on the help row
-
-- **WHEN** an operator views the account list
-- **THEN** the search input occupies the full width of the controls row
-- **AND** the account status filter control is rendered on the same row as the "Need help?" toggle
 
 ### Requirement: Account alias is edited inline from the detail header
 
@@ -828,7 +790,7 @@ The dashboard SHALL load translations through `i18next` + `react-i18next`, suppo
 
 ### Requirement: Settings page renders in the active locale
 
-The Settings page and its constituent sections (`Appearance`, `Routing`, `Import`, `Session`, `Password`, `TOTP`) SHALL render all user-visible strings — page title and subtitle, section headings and descriptions, switch and select labels, button labels, dialog titles and descriptions, validation messages, warning banners, and toast messages — through the active i18n locale. Selecting `zh-CN` MUST translate the entire surface above to Simplified Chinese, with the explicit exceptions of the embedded `ApiKeysSection`, `FirewallSection`, `QuotaPlannerSection`, `StickySessionsSection`, and `UpstreamProxySettings` rendered inside Settings, which belong to other capabilities and remain English until their own migrations.
+The Settings page and its constituent sections (`Appearance`, `Routing`, `Import`, `Session`, `Password`, `TOTP`, `API-key access`) SHALL render all user-visible strings — page title and subtitle, section headings and descriptions, switch and select labels, button labels, dialog titles and descriptions, validation messages, warning banners, and toast messages — through the active i18n locale. Selecting `zh-CN` MUST translate the entire surface above to Simplified Chinese, with the explicit exceptions of the embedded `FirewallSection`, `QuotaPlannerSection`, `StickySessionsSection`, and `UpstreamProxySettings` rendered inside Settings, which belong to other capabilities and remain English until their own migrations.
 
 #### Scenario: Switching to Simplified Chinese translates the Settings page
 
@@ -1060,45 +1022,31 @@ including extended GPT-5.6 efforts such as `max` and `ultra`.
 
 ### Requirement: Accounts list uses available tall-viewport space
 
-The Accounts page MUST size its scrollable account rows from the available
-viewport height without imposing a smaller fixed height ceiling. The bound MUST
-leave the page controls and fixed status bar visible, so account rows cannot
-extend below the viewport even when the selected-account detail panel makes the
-page taller. Optional controls MUST consume space from that bound according to
-their rendered height. The search, filter, sort, help, and Add account controls
-MUST remain outside the rows scroll region, and a list longer than the available
-region MUST continue to scroll internally. When the controls and rows require
-less height than the selected account details, the left card MUST remain
-content-sized instead of stretching an empty bordered area to the bottom of the
-details column.
+The Accounts page MUST let the accounts table grow with its rows instead of bounding it to a fixed internal height, so a long account list uses the whole viewport and scrolls with the page. The toolbar with search, filters, sort, help and Add account MUST stay above the rows. The account rows MUST remain reachable above the fixed status bar.
 
 #### Scenario: Tall desktop viewport expands the rows region
 
 - **WHEN** the Accounts page renders a long account list in a 1200px-tall desktop viewport
-- **THEN** the account rows region is taller than 32rem
-- **AND** the region uses the otherwise-empty space beneath the list controls
-- **AND** the final visible account row region ends above the fixed status bar
+- **THEN** the table is not limited to a fixed height smaller than the viewport
+- **AND** the final row can be scrolled above the fixed status bar
 
 #### Scenario: Expanded help panel consumes rows space
 
-- **WHEN** a user expands Windows OAuth Help above a long account list in a 1200px-tall desktop viewport
-- **THEN** the help panel remains visible outside the rows scroll region
-- **AND** the rows region shrinks by the rendered help-panel height
-- **AND** the rows region still ends above the fixed status bar
-- **AND** the final account remains reachable through internal scrolling
+- **WHEN** a user expands Windows OAuth Help above a long account list
+- **THEN** the help panel renders between the toolbar and the table, outside the rows
+- **AND** the final account remains reachable by scrolling the page
 
 #### Scenario: Shorter account list does not stretch its card
 
-- **WHEN** all account rows fit within the viewport-aware region
-- **AND** the selected-account details are taller than the list controls and rows
-- **THEN** the left card ends after the account rows and its normal bottom padding
-- **AND** it does not render a large empty bordered area beneath the final account
+- **WHEN** all account rows fit within the viewport
+- **THEN** the table ends after the final row and its normal bottom padding
+- **AND** it does not render an empty bordered area beneath the final account
 
 #### Scenario: Account pool still exceeds the available height
 
-- **WHEN** the account rows require more space than the viewport-aware region provides
-- **THEN** the rows remain internally scrollable through the final account
-- **AND** the Add account action remains visible outside the scroll region
+- **WHEN** the account rows require more space than the viewport provides
+- **THEN** the rows remain reachable through the final account by scrolling the page
+- **AND** the Add account action remains in the toolbar above the rows
 
 ### Requirement: Account management page supports account import and OAuth add flows
 
@@ -1221,11 +1169,11 @@ The `/reports` daily usage chart SHALL use equal left and right horizontal plot 
 - **THEN** the daily usage chart renders with equal left and right horizontal padding around the plotted area
 
 ### Requirement: API keys settings expose quota privacy toggle
-The Settings page SHALL include a toggle in the API Keys section that controls `hide_upstream_quota_from_api_keys`.
+The Settings page SHALL include a toggle in the API-key access section that controls `hide_upstream_quota_from_api_keys`.
 
 #### Scenario: Toggle is visible with the API keys controls
 
-- **WHEN** the Settings page renders the API Keys section
+- **WHEN** the Settings page renders the API-key access section
 - **THEN** the quota privacy toggle SHALL be shown alongside the API key auth toggle
 
 #### Scenario: Toggle persists through settings save
@@ -1323,28 +1271,12 @@ The Accounts page per-account action bar SHALL render a `Reset (N)` button next 
 - **WHEN** the operator opens the reset-credit confirmation dialog and credit details include an expiry timestamp
 - **THEN** the dialog renders the credit expiry in local time using `YYYY-MM-DD HH:MM:SS`
 
-### Requirement: AccountListItem displays a reset-credits count badge
-
-The Accounts page `AccountListItem` SHALL render a count badge pinned to the right-upper radius of the item whenever the account reports `available_reset_credits > 0`. The badge SHALL display the integer count, capped visually at `"99+"` when the count exceeds 99. The badge SHALL be absent when `available_reset_credits` is `0`.
-
-#### Scenario: Badge shows the available count
-- **WHEN** an `AccountListItem` renders for an account with `available_reset_credits: 3`
-- **THEN** a count badge pinned to the item's right-upper radius displays `3`
-
-#### Scenario: Badge caps at 99+
-- **WHEN** an `AccountListItem` renders for an account with `available_reset_credits: 120`
-- **THEN** the count badge displays `99+`
-
-#### Scenario: Badge absent when zero
-- **WHEN** an `AccountListItem` renders for an account with `available_reset_credits: 0`
-- **THEN** no count badge is rendered
-
 ### Requirement: Accounts page can sort by available reset credits
 
-The Accounts page sort selector SHALL offer a "Most reset credits" option and SHALL use it as the default Accounts page ordering. That ordering SHALL sort accounts by `available_reset_credits` descending. Ties SHALL be broken by `reset_credit_nearest_expires_at` ascending (soonest expiring first), and accounts with no expiry SHALL sort after accounts that have one.
+The accounts table sort selector SHALL offer a "Most reset credits" option. That ordering SHALL sort accounts by `available_reset_credits` descending. Ties SHALL be broken by `reset_credit_nearest_expires_at` ascending (soonest expiring first), and accounts with no expiry SHALL sort after accounts that have one.
 
 #### Scenario: More available credits sorts first
-- **WHEN** the operator opens the Accounts page with the default sort mode
+- **WHEN** the operator selects "Most reset credits"
 - **AND** account A has `available_reset_credits: 4` and account B has `available_reset_credits: 1`
 - **THEN** account A appears before account B
 
