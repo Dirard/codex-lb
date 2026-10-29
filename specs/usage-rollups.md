@@ -4,7 +4,7 @@
 
 ## Title and scope
 
-First slice of the dashboard redesign: make every analytics read independent of the number of stored events. Hour-bucket rollups, maintained by a background folder and update/delete triggers, serve the dashboard overview, admin and key reports, key usage and trends, request-log options and totals, and conversations, with unchanged API shapes. The detailed technical design is [`openspec/changes/usage-rollups/design.md`](../openspec/changes/usage-rollups/design.md); this spec plans the slice and records its requirements. Page redesign (overview by groups, key page, reports for key users, keys/groups/accounts management) follows in later slices on top of these rollups.
+First slice of the dashboard redesign: make every analytics read independent of the number of stored events. Hour-bucket rollups, maintained by a background folder and update/delete triggers, serve the dashboard overview, admin and key reports, key usage and trends, request-log options and totals, and conversations, with unchanged API shapes. The detailed technical design is [`openspec/changes/archive/2026-10-29-usage-rollups/design.md`](../openspec/changes/archive/2026-10-29-usage-rollups/design.md); this spec plans the slice and records its requirements. Page redesign (overview by groups, key page, reports for key users, keys/groups/accounts management) follows in later slices on top of these rollups.
 
 ## Planning anchor
 
@@ -13,7 +13,7 @@ First slice of the dashboard redesign: make every analytics read independent of 
 - Measured baseline on a production copy (`.local/review/pages-latency.md`): overview 5.2 s (7d) / 14.6 s (30d), reports 2.9–8.6 s, request-log options 7.4–15.8 s, key report 0.8–1.3 s.
 - Non-local: SQLite adapter, application background service, runtime wiring, OpenSpec `go-runtime`.
 - Impacted specs in `specs/`: `storage-growth-backups.md` (retention folding into `legacy_*` stays as is; rollups mirror only retained events). Action: none.
-- Impacted OpenSpec capabilities: `go-runtime` — action `amend` through change `openspec/changes/usage-rollups/`.
+- Impacted OpenSpec capabilities: `go-runtime` — amended through change `usage-rollups`, archived as `openspec/changes/archive/2026-10-29-usage-rollups/`.
 
 ## Connected groups or observed existing logic
 
@@ -70,13 +70,13 @@ On a production copy the seven-day overview, a thirty-day report and request-log
 
 ## Implementation checklist
 
-1. [ ] OpenSpec change `usage-rollups` with design; strict validation.
+1. [x] OpenSpec change `usage-rollups` with design; strict validation.
 2. [x] Histogram codec; raw path uses histogram medians and integer costs (R6).
 3. [x] Migration 42, triggers and state; floor tests (R1, R3).
 4. [x] Folder, rebuild, verifier and service wiring; fold, crash, late-event, rowid-reuse and two-store tests (R2, R4; R8 table check, its read-path comparisons land with item 5).
 5. [x] Window planner, sources and rollup readers for every endpoint; randomized equivalence tests (R5–R7).
-6. [ ] Benchmarks and production-copy latency run (R9).
-7. [ ] Gates, PR, CI, release.
+6. [ ] Benchmarks and production-copy latency run (R9): overview and reports pass on the production copy; request-log options (903 ms there before `request-log-pending-index`, 13.9 ms in its benchmark) are re-measured on the production copy with the PR 3 pages.
+7. [x] Gates, PR, CI, release.
 
 ## Open questions
 
@@ -88,3 +88,4 @@ None blocking; Q1–Q7 of the design are answered during implementation or recor
 - 2026-10-28: Capture by a cursor-advancing folder plus update/delete triggers instead of updating rollups in settlement: an older worker inserts during an update overlap without rollup code, and triggers in the schema run in every version's transactions.
 - 2026-10-28: No rollup switch setting: the raw fallback and the verifier cover failures without a new operator setting.
 - 2026-10-28: Conversation reads use the raw path while removals of conversation events are pending, instead of showing first and last up to one fold interval stale (stricter than D5): the fallback lasts about one fold interval after retention or account deletion and keeps every reader exact.
+- 2026-10-29: Released in go-v1.3.0. On a production copy the seven-day overview answered in 221 ms and a thirty-day report in 140 ms; request-log options took 903 ms there because of 74 k pending reservations and 13.9 ms in the benchmark of `request-log-pending-index`, so R9 for options awaits the next production-copy run. The OpenSpec change is archived and its delta synced into `go-runtime`.
