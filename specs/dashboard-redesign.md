@@ -898,6 +898,8 @@ Events And Endpoints:
 Types:
 KeysPage
  - shell: ShellStatus
+ - generatedAt: time
+ - timezone: string
  - total: int
  - offset: int
  - limit: int
@@ -913,8 +915,8 @@ KeyRow
  - lastUsedAt: time|null
  - createdAt: time
  - spendTodayUsd: number
- - spend7dUsd: number
- - spend30dUsd: number
+ - spend7dUsd: number|null # null while the rollups are unusable
+ - spend30dUsd: number|null # null while the rollups are unusable
  - maxLimit: LimitState|null
  - limitsSummary: list of type, window, modelFilter and max
 
@@ -939,25 +941,30 @@ Requirements:
 The keys table SHALL poll only its current page, every 60 s while visible, and SHALL keep the selection across polls and pages.
 
 Files And Functions:
- - planned: web/src/features/keys/components/keys-page.tsx#KeysPage
- - planned: web/src/features/keys/components/keys-table.tsx#KeysTable
- - planned: web/src/features/keys/components/keys-filters.tsx#KeysFilters
- - planned: web/src/features/keys/components/bulk-actions-bar.tsx#BulkActionsBar
- - planned: web/src/features/keys/hooks/use-keys-list.ts#useKeysList - URL-backed query state
+ - existing: web/src/features/keys/components/keys-page.tsx#KeysPage
+ - existing: web/src/features/keys/components/keys-table.tsx#KeysTable
+ - existing: web/src/features/keys/components/keys-filters.tsx#KeysFilters
+ - existing: web/src/features/keys/components/bulk-actions-bar.tsx#BulkActionsBar
+ - existing: web/src/features/keys/hooks/use-keys-list.ts#useKeysList - URL-backed query state
  - existing: web/src/features/api-keys/components/limit-rules-editor.tsx, api-key-create-dialog.tsx, api-key-edit-dialog.tsx - reused
- - existing: web/src/features/apis/components/apis-page.tsx - removed
- - planned: internal/application/keys_list.go#KeysListService.List
- - planned: internal/adapters/httpapi/keys_list.go#listKeysPage, #listKeyIDs
+ - existing: web/src/features/api-keys/components/api-key-edit-loader.tsx#ApiKeyEditLoader - edit dialog of one key, shared with the key page
+ - removed: web/src/features/apis/components/apis-page.tsx
+ - existing: internal/application/keys_list.go#KeysListService.List
+ - existing: internal/adapters/sqlite/keys_list.go#Store.KeyList - keys, limits, groups and per-key day costs in one analytics snapshot
+ - existing: internal/adapters/httpapi/keys_list.go#registerKeysRoutes - GET /api/keys, GET /api/keys/ids, POST /api/keys/bulk
 
 Tests:
 internal/application/keys_list_test.go
- - description: every filter and sort with ties, inactive and expiry boundaries, internal and deleted keys excluded
+ - description: every filter and sort with ties, inactive and expiry boundaries, missing values last, paging totals, ids capped at 1 000
+   requirements: R33, R34
+internal/adapters/sqlite/keys_list_test.go
+ - description: statement count equal for 30 and 300 keys; costs equal the raw evaluation; deleted and internal keys excluded; raw fallback reads today only
    requirements: R33, R34
 internal/adapters/httpapi/keys_list_test.go
- - description: statement count equal for 30 and 300 keys; paging totals
+ - description: route parameters, paging totals, gzip, Server-Timing and administrator authentication
    requirements: R33
 web/src/__integration__/keys-flow.test.tsx
- - description: filters in the URL, selection kept across a poll and a page change
+ - description: filters in the URL, overview links, selection kept across a poll and a page change
    requirements: R35
 
 ### 6.1 Bulk key actions
@@ -978,14 +985,18 @@ Requirements:
 Bulk actions SHALL require a confirmation naming the action and the number of keys, and SHALL refresh the keys list, the directory and the overview afterwards.
 
 Files And Functions:
- - planned: internal/application/keys_bulk.go#KeysBulkService.Apply
- - planned: internal/adapters/httpapi/keys_bulk.go#bulkKeys
- - existing: internal/adapters/sqlite/keys.go#SaveAPIKey - reused per key
+ - existing: internal/application/keys_bulk.go#KeysBulkService.Apply
+ - existing: internal/adapters/httpapi/keys_list.go#keysBulkRequest - POST /api/keys/bulk body
+ - existing: internal/adapters/sqlite/keys_bulk.go#Store.SetAPIKeysActive, #Store.MoveAPIKeyToGroup, #Store.SetAPIKeyLimits - per-job writes with the limit synchronisation of `SaveAPIKey`
+ - existing: internal/adapters/sqlite/keys.go#SaveAPIKey - its `groupRulesTx` and `syncKeyLimitsTx` are reused
 
 Tests:
 internal/application/keys_bulk_test.go
- - description: partial failure in the middle of a move keeps earlier keys moved and reports the failed and later keys correctly; `set_limits` on a grouped key fails with `key_in_group`
+ - description: partial failure in the middle of a move keeps earlier keys moved and reports the failed and later keys correctly; `set_limits` on a grouped key fails with `key_in_group`; jobs of 25; cancellation
    requirements: R36, R37, R38
+internal/adapters/sqlite/keys_bulk_test.go
+ - description: a bulk move and bulk limits leave the same limits and scope as saving the key; unknown, deleted and internal keys are not found
+   requirements: R36, R38
 web/src/features/keys/components/bulk-actions-bar.test.tsx
  - description: confirmation text, per-key failures shown, list, directory and overview invalidated
    requirements: R39
@@ -1220,9 +1231,9 @@ After PR 3a and 3b:
 
 PR 4a — keys page (use cases 6 and 6.1):
 
-21. [ ] OpenSpec change `keys-page`: `go-runtime` delta (R33–R39) and the `frontend-architecture` deltas of use case 6; strict validation.
-22. [ ] Application and HTTP: `KeysListService` (batch reads reusing the overview key rows and key day slices, filter, sort and page in memory), `KeysBulkService`, `GET /api/keys`, `GET /api/keys/ids`, `POST /api/keys/bulk`; statement-count, boundary and partial-failure tests (R33, R34, R36–R38).
-23. [ ] Web: `features/keys` (`KeysPage`, `KeysTable`, `KeysFilters`, `BulkActionsBar`, URL-backed `useKeysList`) at `/keys`, the APIs page and `ApiKeysOverview` removed, locales and MSW mocks (R35, R39).
+21. [x] OpenSpec change `keys-page`: `go-runtime` delta (R33–R39) and the `frontend-architecture` deltas of use case 6; strict validation.
+22. [x] Application and HTTP: `KeysListService` (batch reads reusing the overview key rows and key day slices, filter, sort and page in memory), `KeysBulkService`, `GET /api/keys`, `GET /api/keys/ids`, `POST /api/keys/bulk`; statement-count, boundary and partial-failure tests (R33, R34, R36–R38).
+23. [x] Web: `features/keys` (`KeysPage`, `KeysTable`, `KeysFilters`, `BulkActionsBar`, URL-backed `useKeysList`) at `/keys`, the APIs page and `ApiKeysOverview` removed, locales and MSW mocks (R35, R39).
 24. [ ] Contract tests, `BenchmarkDashboardPages` for the keys list; gates, PR, CI (R46, R49).
 
 PR 4b — groups page and Settings (use case 7):
