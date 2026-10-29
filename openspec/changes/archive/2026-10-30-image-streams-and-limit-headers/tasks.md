@@ -8,4 +8,4 @@
 ## 2. Verification
 
 - [x] 2.1 Route tests: streamed generation relayed and settled once; streaming request answered with JSON; stream without a completed image; final 429 carries reset headers; Responses image-limit 429 keeps the account active and is not replayed, while a plain quota 429 still marks the account.
-- [ ] 2.2 Gates and strict OpenSpec validation.
+- [x] 2.2 Gates and strict OpenSpec validation.

@@ -261,7 +261,7 @@ Tests:
 12. [x] Reset headers on final image-route refusals (R13).
 13. [x] Streamed image responses: validation, provider read, SSE relay, settlement (R14, R15).
 14. [x] Responses image-limit classification, settlement and client envelope (R16).
-15. [ ] Tests, gates, release notes, archive the change.
+15. [x] Tests, gates, release notes (`go-v1.7.0`), archive the change.
 
 Deferred:
 - GPT Image 2.5 Sunburst and Flare with real `model`, `quality` (up to `max`), `size` (up to 3840 px) and transparent backgrounds need an OpenAI API key source with an images capability. This includes a per-key or per-group image model, because Codex always sends `gpt-image-2`. The subscription endpoint ignores these fields.
@@ -285,3 +285,4 @@ None blocking.
 - 2026-10-29: Validation, run locally because GitHub Actions was unavailable: `make check` (vet, golangci-lint 0 issues, test, race, govulncheck, openspec), `make web-check` (1093 tests), `make web-deps build`, `make test-web-contract` (17 tests). A smoke run of the built binary answered 401 `invalid_api_key` on all four image routes without a key (404 before). Credential redaction now returns bodies without the credential or any `\u` escape unchanged, which also keeps the upstream image body byte-identical.
 - 2026-10-30: CanonKeeper asked, and the owner confirmed in this session, for streaming on the image routes, reset headers on image-limit refusals and account-neutral image-limit refusals on Responses. A direct probe (Pro account) showed `stream: true` on generations answers `text/event-stream` with `keepalive` events about every 15 s and one `image_generation.completed` event (image, `usage`, `quality`, `size`, `generation_id`); `partial_images: 2` produced no draft frames; an edit with `stream: true` answered JSON. Relaying the upstream answer as it is keeps clients on the subscription's own contract.
 - 2026-10-30: Image limits on Responses are recognized only from the `X-Codex-Active-Limit` header of a 429, because that header is the one signal the subscription uses to name the image window (`imagegen_premium` on every image response observed). Production had no quota marks in the preceding 48 h, so the change is preventive.
+- 2026-10-30: Validation for use cases 4–5, run locally (GitHub Actions unavailable): `make check` (vet, golangci-lint 0 issues, test, race, govulncheck, openspec), `make web-deps build`, `make test-web-contract`; the dashboard is unchanged. With the Responses classification disabled, the image-limit route test fails on the old behavior (503 `no_available_accounts`, account marked), so the test guards the fix.
