@@ -4,7 +4,7 @@ Reservations whose usage is unknown — an interrupted worker, or a request whos
 
 ## What Changes
 
-- The active worker's maintenance pass releases, without charging, reservations that have been flagged for reconciliation for longer than one hour, in batches of 500 within a five-second budget per pass, through the ordinary release settlement: limit deltas are refunded only while their window is current, no usage event is recorded, and settled-reservation pruning later removes the rows.
+- The active worker's maintenance pass releases, without charging, reservations that have been flagged for reconciliation for longer than one hour, in batches of 100 (one short write job each) within a five-second budget per pass, through the ordinary release settlement: limit deltas are refunded only while their window is current, no usage event is recorded, and settled-reservation pruning later removes the rows.
 - The offline `reconcile-usage` command still settles a flagged reservation within that hour.
 
 ## Capabilities

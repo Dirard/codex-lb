@@ -21,8 +21,10 @@ const (
 // unreconciledGrace (owner decision): their requests are over and nobody
 // reconciles them, while they keep inflating pending request logs.
 const (
-	unreconciledGrace  = time.Hour
-	unreconciledBatch  = 500
+	unreconciledGrace = time.Hour
+	// One batch holds the write lock for tens of milliseconds (about 8 ms per
+	// 100 reservations on a desktop), so settlements are not delayed behind it.
+	unreconciledBatch  = 100
 	unreconciledBudget = 5 * time.Second
 )
 
