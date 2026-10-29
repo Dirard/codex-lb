@@ -92,6 +92,8 @@ const EXPECTED_ENDPOINTS = [
 	"POST /api/account-groups/",
 	"PUT /api/account-groups/:groupId",
 	"DELETE /api/account-groups/:groupId",
+	"POST /api/account-groups/:groupId/reset-usage",
+	"GET /api/groups/summary",
 	"GET /api/model-sources/",
 	"POST /api/model-sources/",
 	"PATCH /api/model-sources/:sourceId",

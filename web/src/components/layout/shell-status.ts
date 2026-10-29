@@ -31,7 +31,7 @@ export const SHELL_STATUS_QUERY_KEY = ["shell", "status"] as const;
 export const SHELL_STATUS_POLL_MS = 60_000;
 
 /** Routes whose page poll carries the shell status. */
-const PAGES_CARRYING_SHELL_STATUS = ["/overview"];
+const PAGES_CARRYING_SHELL_STATUS = ["/overview", "/groups"];
 
 /** `/keys/<id>`, whose poll runs only while its period includes today. */
 const KEY_PAGE_PATH = /^\/keys\/[^/]+$/;

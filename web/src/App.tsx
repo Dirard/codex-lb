@@ -41,6 +41,7 @@ const SettingsPage = lazy(() =>
   import("@/features/settings/components/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
 const KeyPage = lazy(() => import("@/features/key-page/components/key-page").then((m) => ({ default: m.KeyPage })));
+const GroupsPage = lazy(() => import("@/features/groups/components/groups-page").then((m) => ({ default: m.GroupsPage })));
 
 /** `/keys/:id`: the administrator key page; a new key remounts the page. */
 function AdminKeyPage() {
@@ -60,14 +61,6 @@ function ApisRedirect() {
   const { search } = useLocation();
   const selected = new URLSearchParams(search).get("selected");
   return <Navigate to={selected ? `/keys/${encodeURIComponent(selected)}` : `/keys${search}`} replace />;
-}
-
-/** Groups are managed in Settings until the Groups page exists. */
-function GroupsRedirect() {
-  const [params] = useSearchParams();
-  const selected = params.get("selected");
-  const query = selected ? `?group=${encodeURIComponent(selected)}` : "";
-  return <Navigate to={`/settings${query}#account-groups`} replace />;
 }
 
 function AppLayout() {
@@ -118,7 +111,7 @@ export default function App() {
             <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/requests" element={<RequestsPage />} />
-            <Route path="/groups" element={<GroupsRedirect />} />
+            <Route path="/groups" element={<GroupsPage />} />
             <Route path="/keys" element={<KeysRoute />} />
             <Route path="/keys/:id" element={<AdminKeyPage />} />
             <Route path="/reports" element={<ReportsPage />} />

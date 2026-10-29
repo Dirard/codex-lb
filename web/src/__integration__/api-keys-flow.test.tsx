@@ -2,8 +2,21 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import App from "@/App";
+import { ApiKeysSection } from "@/features/api-keys/components/api-keys-section";
 import { renderWithProviders } from "@/test/utils";
+
+// Settings no longer hosts the key section (R41); its flows are exercised on
+// the section itself until the Keys page replaces it.
+function renderApiKeysSection() {
+  return renderWithProviders(
+    <ApiKeysSection
+      apiKeyAuthEnabled
+      hideUpstreamQuotaFromApiKeys={false}
+      onApiKeyAuthEnabledChange={() => {}}
+      onHideUpstreamQuotaFromApiKeysChange={() => {}}
+    />,
+  );
+}
 
 function getParentRow(cell: HTMLElement): HTMLElement {
   const row = cell.closest("tr");
@@ -22,8 +35,7 @@ describe("api keys flow integration", () => {
     const createdName = "Integration Key";
     const updatedName = "Integration Key Updated";
 
-    window.history.pushState({}, "", "/settings");
-    renderWithProviders(<App />);
+    renderApiKeysSection();
 
     const createButton = await screen.findByRole("button", { name: "Create key" });
     expect(createButton).toBeInTheDocument();
@@ -70,8 +82,7 @@ describe("api keys flow integration", () => {
   it("creates an api key with assigned accounts", async () => {
     const user = userEvent.setup();
 
-    window.history.pushState({}, "", "/settings");
-    renderWithProviders(<App />);
+    renderApiKeysSection();
 
     await user.click(await screen.findByRole("button", { name: "Create key" }));
     await user.type(screen.getByLabelText("Name"), "Scoped Integration Key");
@@ -97,8 +108,7 @@ describe("api keys flow integration", () => {
   });
 
   it("displays the current api key list on settings", async () => {
-    window.history.pushState({}, "", "/settings");
-    renderWithProviders(<App />);
+    renderApiKeysSection();
 
     expect(await screen.findByRole("columnheader", { name: "Name" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Prefix" })).toBeInTheDocument();
@@ -127,8 +137,7 @@ describe("api keys flow integration", () => {
   it("shows usage bars when editing a key with limits", async () => {
     const user = userEvent.setup({ delay: null });
 
-    window.history.pushState({}, "", "/settings");
-    renderWithProviders(<App />);
+    renderApiKeysSection();
 
     expect(await screen.findByText("Default key")).toBeInTheDocument();
     const defaultKeyRow = getParentRow(screen.getByText("Default key"));
