@@ -272,6 +272,7 @@ func (p *websocketSessions) acquire(ctx context.Context, target Target, previous
 				if readErr == nil {
 					result, failure = rejectedHTTPResult(response.StatusCode, payload, target.Capabilities.Protocol)
 				}
+				classifyImageLimit(response.StatusCode, response.Header, &result, failure)
 				var classified *Error
 				if errors.As(failure, &classified) {
 					protocolRejection := classified.Code == "http_426" || classified.Code == "upgrade_required" || classified.Code == "http_403"

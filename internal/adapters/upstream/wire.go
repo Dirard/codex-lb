@@ -5,9 +5,12 @@ package upstream
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"codex-lb/internal/domain"
 )
 
 const (
@@ -180,6 +183,9 @@ const (
 	ErrorCodeInvalidStream         = "invalid_stream"
 	ErrorCodeInvalidToolCall       = "invalid_tool_call"
 	ErrorCodeMissingUsage          = "missing_usage"
+	// ErrorCodeImageGenerationLimit is a 429 refused by the subscription's image
+	// window (X-Codex-Active-Limit names an image limit), not by account quota.
+	ErrorCodeImageGenerationLimit = "image_generation_limit"
 )
 
 type Error struct {
@@ -191,7 +197,9 @@ type Error struct {
 	// Set only for a proven local rejection before response.create, or a
 	// complete HTTP validation rejection with no output/billing.
 	RejectedBeforeExecution bool
-	cause                   error
+	// LimitHeaders are the upstream reset headers of an image-limit refusal.
+	LimitHeaders map[string][]string
+	cause        error
 }
 
 func (e *Error) Unwrap() error { return e.cause }
@@ -525,4 +533,17 @@ type chatStreamToolCall struct {
 type chatStreamToolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// classifyImageLimit turns a 429 refused by the image window into
+// image_generation_limit so it is never taken for account quota exhaustion,
+// and keeps the headers that say when the window resets.
+func classifyImageLimit(status int, header http.Header, result *Result, failure error) {
+	var classified *Error
+	if status != http.StatusTooManyRequests || !errors.As(failure, &classified) || !domain.ImageLimitID(header.Get("X-Codex-Active-Limit")) {
+		return
+	}
+	classified.Code = ErrorCodeImageGenerationLimit
+	classified.LimitHeaders = domain.ImageLimitHeaders(header)
+	result.ErrorCode = ErrorCodeImageGenerationLimit
 }

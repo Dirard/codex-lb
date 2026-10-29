@@ -87,6 +87,9 @@ type ProviderFailure struct {
 	Dispatched              bool
 	WebSocketHTTPFallback   bool
 	RejectedBeforeExecution bool
+	// LimitHeaders are upstream reset headers for an image-limit refusal; the
+	// HTTP adapter passes them to the client.
+	LimitHeaders map[string][]string
 }
 
 func (e *ProviderFailure) Error() string { return e.Code }

@@ -398,7 +398,7 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		}
 		uncharged := !result.UsageKnown && !result.UsageReported || result.UsageKnown && result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0
 		quota := quotaFailure(result, callErr)
-		safeZero := !output.visible && !result.OutputObserved && uncharged && (quota || missingPreviousResponse(result, callErr))
+		safeZero := !output.visible && !result.OutputObserved && uncharged && (quota || imageLimitRefusal(result, callErr) || missingPreviousResponse(result, callErr))
 		plan, settleErr := p.settlement(id, options, account, request, price, result, callErr, safeZero, started, attemptAt, queueMS, output.firstEventMS, output.firstTokenMS)
 		settled := !plan.RetainUncertain
 		if settleErr == nil && capabilityErr == nil && (quota || settled && callErr == nil && !result.Failed) {
@@ -518,6 +518,18 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 			return result, replayUnavailable()
 		}
 	}
+}
+
+// imageLimitRefusal is a refusal by the subscription's separate image window.
+// It is settled uncharged like a quota refusal but neither marks the account
+// nor moves the request: the account's own quota is untouched.
+func imageLimitRefusal(result ResponseResult, err error) bool {
+	code := result.ErrorCode
+	var failure *ProviderFailure
+	if errors.As(err, &failure) {
+		code = failure.Code
+	}
+	return code == ImageGenerationLimitCode
 }
 
 func missingPreviousResponse(result ResponseResult, err error) bool {

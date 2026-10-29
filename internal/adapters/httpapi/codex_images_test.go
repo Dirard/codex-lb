@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,14 +36,16 @@ const (
 )
 
 type imageCall struct {
-	path, account, auth, contentType string
-	body                             []byte
+	path, account, auth, contentType, accept string
+	body                                     []byte
 }
 
 type imageStub struct {
 	mu      sync.Mutex
 	calls   []imageCall
 	respond func(call imageCall, index int) (int, string)
+	// headers, when set, adds response headers to every answer.
+	headers map[string]string
 }
 
 func (s *imageStub) snapshot() []imageCall {
@@ -67,13 +70,22 @@ func newImageFixture(t *testing.T, accounts int, respond func(call imageCall, in
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		call := imageCall{path: r.URL.Path, account: r.Header.Get("ChatGPT-Account-ID"), auth: r.Header.Get("Authorization"),
-			contentType: r.Header.Get("Content-Type"), body: body}
+			contentType: r.Header.Get("Content-Type"), accept: r.Header.Get("Accept"), body: body}
 		stub.mu.Lock()
 		index := len(stub.calls)
 		stub.calls = append(stub.calls, call)
 		stub.mu.Unlock()
 		status, payload := stub.respond(call, index)
-		w.Header().Set("Content-Type", "application/json")
+		contentType := "application/json"
+		if strings.HasPrefix(payload, "event:") || strings.HasPrefix(payload, "data:") {
+			contentType = "text/event-stream"
+		}
+		w.Header().Set("Content-Type", contentType)
+		stub.mu.Lock()
+		for name, value := range stub.headers {
+			w.Header().Set(name, value)
+		}
+		stub.mu.Unlock()
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, payload)
 	}))
@@ -310,7 +322,7 @@ func TestImageRequestsAreValidatedBeforeDispatch(t *testing.T) {
 		{"blank prompt", "/backend-api/codex/images/generations", `{"prompt":"  "}`, "prompt"},
 		{"text model", "/v1/images/generations", `{"prompt":"x","model":"gpt-6-sol"}`, "model"},
 		{"unpriced image model", "/v1/images/generations", `{"prompt":"x","model":"gpt-image-0"}`, "model"},
-		{"stream", "/v1/images/generations", `{"prompt":"x","stream":true}`, "stream"},
+		{"non-boolean stream", "/v1/images/generations", `{"prompt":"x","stream":"yes"}`, "stream"},
 		{"n zero", "/v1/images/generations", `{"prompt":"x","n":0}`, "n"},
 		{"fractional n", "/v1/images/generations", `{"prompt":"x","n":1.5}`, "n"},
 		{"edit without images", "/backend-api/codex/images/edits", `{"prompt":"x"}`, "images"},
@@ -524,5 +536,157 @@ func TestImageDiagnosticsOmitImagePayloads(t *testing.T) {
 	request := string(recorded[0].Request)
 	if strings.Contains(request, "c2VjcmV0") || !strings.Contains(request, "keep this prompt") || !strings.Contains(request, `"images_omitted":1`) {
 		t.Fatalf("diagnostic request: %s", request)
+	}
+}
+
+const imageStreamOK = "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n" +
+	"event: image_generation.completed\ndata: {\"type\":\"image_generation.completed\",\"sequence_number\":0,\"b64_json\":\"aGVsbG8=\",\"created_at\":1793308156," +
+	"\"generation_id\":\"gen-1\",\"background\":\"opaque\",\"quality\":\"low\",\"size\":\"1254x1254\",\"output_format\":\"png\"," +
+	"\"usage\":{\"input_tokens\":21,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":21},\"output_tokens\":515,\"output_tokens_details\":{\"image_tokens\":515,\"text_tokens\":0},\"total_tokens\":536}}\n\n"
+
+func TestImageStreamIsRelayedAndSettledOnce(t *testing.T) {
+	f := newImageFixture(t, 1, func(imageCall, int) (int, string) { return 200, imageStreamOK })
+	w := f.postJSON(t, "/backend-api/codex/images/generations", `{"prompt":"x","model":"gpt-image-2","stream":true,"partial_images":2}`)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "text/event-stream" || w.Body.String() != imageStreamOK {
+		t.Fatalf("image stream was not relayed unchanged: %d %q %q", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+	calls := f.stub.snapshot()
+	if len(calls) != 1 || calls[0].accept != "text/event-stream" || !strings.Contains(string(calls[0].body), `"partial_images":2`) {
+		t.Fatalf("streaming request was not forwarded as a stream: %+v", calls)
+	}
+	totals, err := f.store.UsageTotals(context.Background(), "wire-key", "")
+	if err != nil || totals.Usage.InputTokens != 21 || totals.Usage.OutputTokens != 515 || totals.Usage.CostMicrodollars != imageOKCost || f.pending(t) != 0 {
+		t.Fatalf("stream was not settled from the completed event: %+v %v", totals, err)
+	}
+	if logs := f.logs(t); len(logs) != 1 || logs[0].RequestKind != "image_generation" || logs[0].Status != "success" {
+		t.Fatalf("stream request log: %+v", logs)
+	}
+}
+
+func TestImageStreamingEditAnsweredWithJSONStaysJSON(t *testing.T) {
+	f := newImageFixture(t, 1, func(imageCall, int) (int, string) { return 200, imageOK })
+	w := f.postJSON(t, "/backend-api/codex/images/edits", `{"prompt":"x","stream":true,"images":[{"image_url":"data:image/png;base64,Zm9v"}]}`)
+	if w.Code != 200 || w.Body.String() != imageOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("JSON answer to a streaming edit: %d %q %s", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+	if f.stub.snapshot()[0].accept != "text/event-stream" || f.pending(t) != 0 {
+		t.Fatal("streaming edit was not asked as a stream or left a reservation")
+	}
+}
+
+func TestImageStreamWithoutImageEndsWithErrorAndKeepsReservation(t *testing.T) {
+	f := newImageFixture(t, 1, func(imageCall, int) (int, string) {
+		return 200, "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n"
+	})
+	w := f.postJSON(t, "/v1/images/generations", `{"prompt":"x","stream":true}`)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.HasPrefix(body, "event: keepalive\n") || !strings.Contains(body, "event: error\ndata: ") || !strings.Contains(body, "invalid_upstream_response") {
+		t.Fatalf("stream without an image: %d %q", w.Code, body)
+	}
+	if f.pending(t) != 1 {
+		t.Fatal("a stream without a completed image did not keep its reservation for reconciliation")
+	}
+}
+
+func TestFinalImageLimitRefusalCarriesResetHeaders(t *testing.T) {
+	f := newImageFixture(t, 2, func(imageCall, int) (int, string) { return 429, imageLimit })
+	f.stub.headers = map[string]string{
+		"Retry-After": "3600", "X-Codex-Active-Limit": "image_gen", "X-Image-Gen-Primary-Reset-At": "1793390082",
+		"X-Codex-Primary-Reset-At": "1793390082", "X-Codex-Plan-Type": "pro", "X-Codex-Credits-Balance": "7",
+	}
+	w := f.postJSON(t, "/backend-api/codex/images/generations", `{"prompt":"x"}`)
+	if w.Code != 429 || w.Body.String() != imageLimit {
+		t.Fatalf("final refusal: %d %s", w.Code, w.Body.String())
+	}
+	for _, name := range []string{"Retry-After", "X-Codex-Active-Limit", "X-Image-Gen-Primary-Reset-At", "X-Codex-Primary-Reset-At"} {
+		if w.Header().Get(name) == "" {
+			t.Fatalf("reset header %s was dropped: %v", name, w.Header())
+		}
+	}
+	if w.Header().Get("X-Codex-Plan-Type") != "" || w.Header().Get("X-Codex-Credits-Balance") != "" {
+		t.Fatalf("account plan or credit headers reached the client: %v", w.Header())
+	}
+}
+
+func TestResponsesImageLimitRefusalKeepsAccountUsable(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		activeLimit string
+	}{{"image limit", "imagegen_premium"}, {"account quota", ""}} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int64
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if test.activeLimit != "" {
+					w.Header().Set("X-Codex-Active-Limit", test.activeLimit)
+					w.Header().Set("X-Image-Gen-Primary-Reset-At", "1793390082")
+				}
+				w.Header().Set("Retry-After", "3600")
+				w.Header().Set("X-Codex-Plan-Type", "pro")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = io.WriteString(w, imageLimit)
+			}))
+			defer upstream.Close()
+			var adapter *provider.Adapter
+			server, store, _ := wireFixtureWithProxy(t, wireProvider(func(ctx context.Context, target application.ResponseTarget, body json.RawMessage, emit func(application.ResponseEvent) error) (application.ResponseResult, error) {
+				return adapter.Respond(ctx, target, body, emit)
+			}))
+			adapter = provider.New(store, fixedTokenSource{}, nil, provider.Config{HTTPClient: upstream.Client(), ChatGPTBaseURL: upstream.URL})
+			defer func() { _ = adapter.Close() }()
+			ctx := context.Background()
+			settings, _ := store.LoadSettings(ctx)
+			settings.HTTPTransportPolicy = "always_http"
+			if err := store.SaveSettings(ctx, settings); err != nil {
+				t.Fatal(err)
+			}
+			other, _ := store.GetAccount(ctx, "wire-account")
+			other.ID, other.Email = "other-account", "other@example.invalid"
+			if err := store.SaveAccount(ctx, other); err != nil {
+				t.Fatal(err)
+			}
+			credential, _ := store.GetAccountCredential(ctx, "wire-account")
+			credential.AccountID = other.ID
+			if err := store.SaveAccountCredential(ctx, credential); err != nil {
+				t.Fatal(err)
+			}
+			request, _ := http.NewRequest(http.MethodPost, server.URL+"/backend-api/codex/responses",
+				strings.NewReader(`{"model":"gpt-6-sol","input":"draw a boat","stream":true,"tools":[{"type":"image_generation"}]}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer synthetic-key")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			statuses := map[string]domain.AccountStatus{}
+			for _, id := range []string{"wire-account", "other-account"} {
+				account, err := store.GetAccount(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				statuses[id] = account.Status
+			}
+			pending, _ := store.ListReservationsNeedingReconciliation(ctx, "", 10)
+			if test.activeLimit == "" {
+				if calls.Load() != 2 || statuses["wire-account"] == domain.AccountActive && statuses["other-account"] == domain.AccountActive {
+					t.Fatalf("account quota refusal no longer marks and moves: calls=%d %v", calls.Load(), statuses)
+				}
+				return
+			}
+			var envelope struct {
+				Error struct{ Type, Code string } `json:"error"`
+			}
+			_ = json.Unmarshal(body, &envelope)
+			if response.StatusCode != 429 || envelope.Error.Type != "usage_limit_reached" || envelope.Error.Code != "usage_limit_reached" ||
+				response.Header.Get("Retry-After") != "3600" || response.Header.Get("X-Codex-Active-Limit") != "imagegen_premium" ||
+				response.Header.Get("X-Image-Gen-Primary-Reset-At") == "" || response.Header.Get("X-Codex-Plan-Type") != "" {
+				t.Fatalf("image-limit refusal response: %d %v %s", response.StatusCode, response.Header, body)
+			}
+			if calls.Load() != 1 || statuses["wire-account"] != domain.AccountActive || statuses["other-account"] != domain.AccountActive || len(pending) != 0 {
+				t.Fatalf("image-limit refusal marked or moved the account: calls=%d %v pending=%d", calls.Load(), statuses, len(pending))
+			}
+		})
 	}
 }
