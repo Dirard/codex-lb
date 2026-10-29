@@ -8,5 +8,5 @@
 
 - [x] 2.1 Equivalence with the previous implementation (`reports_logs_pending_reference_test.go`) for every filter, offset and keyset walks, with no, few and many recorded reservations; query-plan test; migration test beside a schema 42 writer.
 - [x] 2.2 `BenchmarkRequestLogPending`: 74 k pending among 1.6 M reservations and 742 k events, before and after, warm and cold, and the index build.
-- [ ] 2.3 Latency run on a copy of production data.
+- [x] 2.3 Latency run on a copy of production data (2026-10-29, go-v1.4.0: options 4.4 ms, first page 7.9 ms warm).
 - [x] 2.4 Gates: build, vet, lint, tests, race.

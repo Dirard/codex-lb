@@ -75,7 +75,7 @@ On a production copy the seven-day overview, a thirty-day report and request-log
 3. [x] Migration 42, triggers and state; floor tests (R1, R3).
 4. [x] Folder, rebuild, verifier and service wiring; fold, crash, late-event, rowid-reuse and two-store tests (R2, R4; R8 table check, its read-path comparisons land with item 5).
 5. [x] Window planner, sources and rollup readers for every endpoint; randomized equivalence tests (R5–R7).
-6. [ ] Benchmarks and production-copy latency run (R9): overview and reports pass on the production copy; request-log options (903 ms there before `request-log-pending-index`, 13.9 ms in its benchmark) are re-measured on the production copy with the PR 3 pages.
+6. [x] Benchmarks and production-copy latency run (R9): on the production copy the overview, reports and request-log options pass; options took 903 ms there before `request-log-pending-index` and 4.4 ms warm with go-v1.4.0.
 7. [x] Gates, PR, CI, release.
 
 ## Open questions
@@ -89,3 +89,4 @@ None blocking; Q1–Q7 of the design are answered during implementation or recor
 - 2026-10-28: No rollup switch setting: the raw fallback and the verifier cover failures without a new operator setting.
 - 2026-10-28: Conversation reads use the raw path while removals of conversation events are pending, instead of showing first and last up to one fold interval stale (stricter than D5): the fallback lasts about one fold interval after retention or account deletion and keeps every reader exact.
 - 2026-10-29: Released in go-v1.3.0. On a production copy the seven-day overview answered in 221 ms and a thirty-day report in 140 ms; request-log options took 903 ms there because of 74 k pending reservations and 13.9 ms in the benchmark of `request-log-pending-index`, so R9 for options awaits the next production-copy run. The OpenSpec change is archived and its delta synced into `go-runtime`.
+- 2026-10-29: R9 verified on a production copy with go-v1.4.0 (815 k events, 30 k pending reservations): request-log options over the whole history 4.4 ms and the first log page 7.9 ms warm; the overview 95 ms.

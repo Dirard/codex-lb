@@ -22,5 +22,5 @@
 ## 5. Verification
 
 - [x] 5.1 Gates: Go build, vet, lint, tests, race; web lint, typecheck, tests, build; OpenSpec strict validation.
-- [ ] 5.2 Contract tests for the new endpoints (done); production-copy latency run (needs operator approval).
+- [x] 5.2 Contract tests for the new endpoints; production-copy latency run (2026-10-29, go-v1.4.0: overview 95 ms warm).
 - [x] 5.3 Release notes listing the deprecation of `GET /api/dashboard/overview` and `GET /api/dashboard/projections`.
