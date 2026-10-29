@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { LimitUsageBar } from "@/features/apis/components/api-key-limit-usage";
+import { LimitUsageBar } from "@/features/api-keys/components/api-key-limit-usage";
 import { KeyReportGroupKeys } from "@/features/key-reports/key-report-limits";
 import { clockOrDateLabel, dateTimeLabel, limitValue, sharePercent } from "@/features/key-page/key-page-format";
 import { CurrentBadge, SectionCard } from "@/features/key-page/components/section-card";

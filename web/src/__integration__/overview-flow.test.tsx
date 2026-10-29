@@ -24,12 +24,12 @@ describe("overview flow", () => {
     expect(window.location.search).toBe(search);
   });
 
-  it("opens the group settings for the Groups entry", async () => {
-    window.history.pushState({}, "", "/groups?selected=grp_1");
+  it("opens the Groups page for the Groups entry and old group settings links", async () => {
+    window.history.pushState({}, "", "/settings?group=grp_1#account-groups");
     renderWithProviders(<App />);
-    await waitFor(() => expect(window.location.pathname).toBe("/settings"));
-    expect(window.location.search).toBe("?group=grp_1");
-    expect(window.location.hash).toBe("#account-groups");
+    await waitFor(() => expect(window.location.pathname).toBe("/groups"));
+    expect(window.location.search).toBe("?selected=grp_1");
+    expect(await screen.findByRole("heading", { name: "Groups", level: 1 })).toBeInTheDocument();
   });
 
   it("renders the overview with one periodic request and no account or readiness polls (R1)", async () => {

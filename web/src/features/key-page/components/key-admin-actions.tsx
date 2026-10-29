@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Link2, Pencil } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -25,8 +25,9 @@ import {
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { resetAccountGroupUsage } from "@/features/account-groups/api";
-import { deleteApiKey, getApiKey, regenerateApiKey, updateApiKey } from "@/features/api-keys/api";
+import { deleteApiKey, regenerateApiKey, updateApiKey } from "@/features/api-keys/api";
 import { ApiKeyCreatedDialog } from "@/features/api-keys/components/api-key-created-dialog";
+import { ApiKeyEditLoader } from "@/features/api-keys/components/api-key-edit-loader";
 import type { ApiKeyUpdateRequest } from "@/features/api-keys/schemas";
 import { invalidateKeyViews, KEY_PAGE_QUERY_KEY } from "@/features/key-page/api";
 import type { KeyIdentity } from "@/features/key-page/components/key-page-header";
@@ -35,44 +36,9 @@ import type { KeyPagePeriod } from "@/features/key-page/period";
 import { useDirectory } from "@/features/search/hooks/use-directory";
 import { copyToClipboard } from "@/utils/clipboard";
 
-const ApiKeyEditDialog = lazy(() =>
-  import("@/features/api-keys/components/api-key-edit-dialog").then((m) => ({ default: m.ApiKeyEditDialog })),
-);
-
 const UNGROUPED = "__ungrouped__";
 
 type Confirmation = "disable" | "regenerate" | "reset" | "delete";
-
-/** The key's edit dialog, loaded through GET /api/api-keys/{id} when opened. */
-function KeyEditDialog({ keyId, onClose }: { keyId: string; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const { t } = useTranslation();
-  const keyQuery = useQuery({ queryKey: ["api-keys", "detail", keyId], queryFn: () => getApiKey(keyId) });
-  const save = useMutation({
-    mutationFn: (payload: ApiKeyUpdateRequest) => updateApiKey(keyId, payload),
-    onSuccess: () => {
-      toast.success(t("apiKeys.toasts.updated"));
-      void invalidateKeyViews(queryClient);
-    },
-    onError: (error: Error) => toast.error(error.message || t("apiKeys.toasts.updateFailed")),
-  });
-  return (
-    <Suspense fallback={null}>
-      <ApiKeyEditDialog
-        open
-        busy={save.isPending || keyQuery.isPending}
-        apiKey={keyQuery.data ?? null}
-        onOpenChange={(open) => {
-          if (!open) onClose();
-        }}
-        onSubmit={async (payload) => {
-          await save.mutateAsync(payload);
-          onClose();
-        }}
-      />
-    </Suspense>
-  );
-}
 
 /** Moves the key into a group of the directory, or out of its group. */
 function MoveToGroupDialog({
@@ -282,7 +248,9 @@ export function KeyAdminActions({
           setConfirm(null);
         }}
       />
-      {editing ? <KeyEditDialog keyId={keyId} onClose={() => setEditing(false)} /> : null}
+      {editing ? (
+        <ApiKeyEditLoader keyId={keyId} onClose={() => setEditing(false)} onSaved={() => void invalidateKeyViews(queryClient)} />
+      ) : null}
       {moving ? (
         <MoveToGroupDialog
           groupId={groupId}

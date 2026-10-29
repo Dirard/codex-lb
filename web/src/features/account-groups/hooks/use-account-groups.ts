@@ -23,14 +23,21 @@ function invalidateGroupQueries(queryClient: ReturnType<typeof useQueryClient>) 
 }
 
 export function useAccountGroups() {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-
   const { data, error, isFetching, isLoading, isPending, isSuccess, refetch } = useQuery({
     queryKey: ["account-groups", "list"],
     queryFn: listAccountGroups,
   });
   const groupsQuery = { data, error, isFetching, isLoading, isPending, isSuccess, refetch };
+  return { groupsQuery, ...useAccountGroupMutations() };
+}
+
+/**
+ * The group mutations without the group list: the Groups page reads its
+ * groups from the summary and must not request `/api/account-groups/`.
+ */
+export function useAccountGroupMutations() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
 
   const createMutation = useMutation({
     mutationFn: (payload: AccountGroupCreateRequest) => createAccountGroup(payload),
@@ -78,7 +85,6 @@ export function useAccountGroups() {
   });
 
   return {
-    groupsQuery,
     createMutation,
     updateMutation,
     deleteMutation,
@@ -97,6 +103,7 @@ export function useUpdateAccountGroups() {
       toast.success(t("accountGroups.toasts.membershipsUpdated", { defaultValue: "Account groups updated" }));
       await queryClient.invalidateQueries({ queryKey: ["account-groups", "list"] });
       await queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
+      void invalidateEntityViews(queryClient);
     },
     onError: (error: Error) => {
       toast.error(error.message || t("accountGroups.toasts.membershipsUpdateFailed", { defaultValue: "Could not update account groups" }));

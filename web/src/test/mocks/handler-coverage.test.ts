@@ -93,6 +93,8 @@ const EXPECTED_ENDPOINTS = [
 	"POST /api/account-groups/",
 	"PUT /api/account-groups/:groupId",
 	"DELETE /api/account-groups/:groupId",
+	"POST /api/account-groups/:groupId/reset-usage",
+	"GET /api/groups/summary",
 	"GET /api/model-sources/",
 	"POST /api/model-sources/",
 	"PATCH /api/model-sources/:sourceId",
@@ -111,6 +113,10 @@ const EXPECTED_ENDPOINTS = [
 	"GET /api/api-keys/:keyId/requests",
 	"GET /api/key-reports/page",
 	"GET /api/key-reports/requests",
+	// keys page
+	"GET /api/keys",
+	"GET /api/keys/ids",
+	"POST /api/keys/bulk",
 	// automations
 	"GET /api/automations",
 	"GET /api/automations/options",

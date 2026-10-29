@@ -1,13 +1,11 @@
 import { Suspense, lazy, useState } from "react";
 import { Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useLocation } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 
 import { AlertMessage } from "@/components/alert-message";
 import { LoadingOverlay } from "@/components/layout/loading-overlay";
 import { Button } from "@/components/ui/button";
-import { AccountGroupsSection } from "@/features/account-groups/components/account-groups-section";
-import { ApiKeysSection } from "@/features/api-keys/components/api-keys-section";
 import { useAccounts } from "@/features/accounts/hooks/use-accounts";
 import { FirewallSection } from "@/features/firewall/components/firewall-section";
 import { ModelSourcesSettings } from "@/features/model-sources/components/model-sources-settings";
@@ -17,6 +15,7 @@ import { RuntimeUpdateSettings } from "@/features/runtime/runtime-update-setting
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import { shouldExpandAdvancedSettings } from "@/features/settings/advanced-settings-deeplink";
 import { AdvancedSettingsGroup } from "@/features/settings/components/advanced-settings-group";
+import { ApiKeyAccessSettings } from "@/features/settings/components/api-key-access-settings";
 import { AppearanceSettings } from "@/features/settings/components/appearance-settings";
 import { BackupSettings } from "@/features/settings/components/backup-settings";
 import { CodexClientSettings } from "@/features/settings/components/codex-client-settings";
@@ -43,6 +42,16 @@ const FIREWALL_LAYOUT_QUERY_KEYS = [
 ] as const;
 
 export function SettingsPage() {
+  const location = useLocation();
+  // Group management moved to the Groups page; old links keep working (R41).
+  if (location.hash === "#account-groups") {
+    const group = new URLSearchParams(location.search).get("group");
+    return <Navigate to={group ? `/groups?selected=${encodeURIComponent(group)}` : "/groups"} replace />;
+  }
+  return <SettingsContent />;
+}
+
+function SettingsContent() {
   const { t } = useTranslation();
   const location = useLocation();
   const expandAdvanced = shouldExpandAdvancedSettings(location.search, location.hash);
@@ -139,7 +148,7 @@ export function SettingsPage() {
               </Suspense>
             ) : null}
 
-            <ApiKeysSection
+            <ApiKeyAccessSettings
               apiKeyAuthEnabled={settings.apiKeyAuthEnabled}
               hideUpstreamQuotaFromApiKeys={settings.hideUpstreamQuotaFromApiKeys}
               disabled={controlsDisabled}
@@ -151,7 +160,6 @@ export function SettingsPage() {
               }
             />
 
-            <AccountGroupsSection disabled={controlsDisabled} />
             <ModelPricesSettings disabled={controlsDisabled} />
 
             <AdvancedSettingsGroup

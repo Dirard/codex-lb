@@ -36,11 +36,12 @@ const AccountsPage = lazy(() =>
 const AutomationsPage = lazy(() =>
   import("@/features/automations/components/automations-page").then((m) => ({ default: m.AutomationsPage })),
 );
-const ApisPage = lazy(() => import("@/features/apis/components/apis-page").then((m) => ({ default: m.ApisPage })));
+const KeysPage = lazy(() => import("@/features/keys/components/keys-page").then((m) => ({ default: m.KeysPage })));
 const SettingsPage = lazy(() =>
   import("@/features/settings/components/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
 const KeyPage = lazy(() => import("@/features/key-page/components/key-page").then((m) => ({ default: m.KeyPage })));
+const GroupsPage = lazy(() => import("@/features/groups/components/groups-page").then((m) => ({ default: m.GroupsPage })));
 
 /** `/keys/:id`: the administrator key page; a new key remounts the page. */
 function AdminKeyPage() {
@@ -48,11 +49,11 @@ function AdminKeyPage() {
   return <KeyPage key={id} mode="admin" keyId={id} />;
 }
 
-/** Key links with `?selected=<id>` open the key page; the list keeps its other filters. */
+/** Key links with `?selected=<id>` open the key page; otherwise the Keys page with the filters of the URL. */
 function KeysRoute() {
   const [params] = useSearchParams();
   const selected = params.get("selected");
-  return selected ? <Navigate to={`/keys/${encodeURIComponent(selected)}`} replace /> : <ApisPage />;
+  return selected ? <Navigate to={`/keys/${encodeURIComponent(selected)}`} replace /> : <KeysPage />;
 }
 
 /** `/apis` became `/keys`; a selection opens the key page, filters in the query survive. */
@@ -60,14 +61,6 @@ function ApisRedirect() {
   const { search } = useLocation();
   const selected = new URLSearchParams(search).get("selected");
   return <Navigate to={selected ? `/keys/${encodeURIComponent(selected)}` : `/keys${search}`} replace />;
-}
-
-/** Groups are managed in Settings until the Groups page exists. */
-function GroupsRedirect() {
-  const [params] = useSearchParams();
-  const selected = params.get("selected");
-  const query = selected ? `?group=${encodeURIComponent(selected)}` : "";
-  return <Navigate to={`/settings${query}#account-groups`} replace />;
 }
 
 function AppLayout() {
@@ -118,7 +111,7 @@ export default function App() {
             <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/requests" element={<RequestsPage />} />
-            <Route path="/groups" element={<GroupsRedirect />} />
+            <Route path="/groups" element={<GroupsPage />} />
             <Route path="/keys" element={<KeysRoute />} />
             <Route path="/keys/:id" element={<AdminKeyPage />} />
             <Route path="/reports" element={<ReportsPage />} />

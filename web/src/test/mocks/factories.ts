@@ -22,11 +22,11 @@ import { AccountGroupSchema } from "@/features/account-groups/schemas";
 import type {
 	ApiKeyTrendsResponse,
 	ApiKeyUsage7DayResponse,
-} from "@/features/apis/schemas";
+} from "@/test/mocks/api-key-trend-schemas";
 import {
 	ApiKeyTrendsResponseSchema,
 	ApiKeyUsage7DayResponseSchema,
-} from "@/features/apis/schemas";
+} from "@/test/mocks/api-key-trend-schemas";
 import type { ModelSource } from "@/features/model-sources/schemas";
 import { ModelSourceSchema } from "@/features/model-sources/schemas";
 import type { AuthSession } from "@/features/auth/schemas";

@@ -13,7 +13,7 @@ const useSettingsMock = vi.fn();
 const useAccountsMock = vi.fn();
 const routingSettingsMock = vi.fn();
 const importSettingsMock = vi.fn();
-const apiKeysSectionMock = vi.fn();
+const apiKeyAccessSettingsMock = vi.fn();
 const firewallSectionMock = vi.fn();
 const stickySessionsSectionMock = vi.fn();
 const modelSourcesSettingsMock = vi.fn();
@@ -64,10 +64,10 @@ vi.mock("@/features/settings/components/data-retention-settings", () => ({
   },
 }));
 
-vi.mock("@/features/api-keys/components/api-keys-section", () => ({
-  ApiKeysSection: (props: unknown) => {
-    apiKeysSectionMock(props);
-    return <div>API Keys Section</div>;
+vi.mock("@/features/settings/components/api-key-access-settings", () => ({
+  ApiKeyAccessSettings: (props: unknown) => {
+    apiKeyAccessSettingsMock(props);
+    return <div>API Key Access Settings</div>;
   },
 }));
 
@@ -136,7 +136,7 @@ describe("SettingsPage", () => {
     });
     routingSettingsMock.mockReset();
     importSettingsMock.mockReset();
-    apiKeysSectionMock.mockReset();
+    apiKeyAccessSettingsMock.mockReset();
     firewallSectionMock.mockReset();
     stickySessionsSectionMock.mockReset();
     modelSourcesSettingsMock.mockReset();
@@ -186,7 +186,13 @@ describe("SettingsPage", () => {
     // Core sections stay visible without any interaction.
     expect(screen.getByText("Appearance Settings")).toBeInTheDocument();
     expect(screen.getByText("Import Settings")).toBeInTheDocument();
-    expect(screen.getByText("API Keys Section")).toBeInTheDocument();
+    expect(screen.getByText("API Key Access Settings")).toBeInTheDocument();
+    expect(apiKeyAccessSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyAuthEnabled: settings.apiKeyAuthEnabled, hideUpstreamQuotaFromApiKeys: settings.hideUpstreamQuotaFromApiKeys }),
+    );
+    // Keys and groups are managed on their own pages (R41).
+    expect(screen.queryByRole("button", { name: "Create key" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Account groups")).not.toBeInTheDocument();
   });
 
   it("mounts every advanced section after one expand interaction", async () => {
@@ -333,7 +339,7 @@ describe("SettingsPage", () => {
 
     expect(screen.getByText("refresh failed")).toBeInTheDocument();
     expect(screen.getByText("Import Settings")).toBeInTheDocument();
-    expect(screen.getByText("API Keys Section")).toBeInTheDocument();
+    expect(screen.getByText("API Key Access Settings")).toBeInTheDocument();
     expect(screen.queryByTestId("settings-skeleton")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });

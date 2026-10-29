@@ -44,6 +44,7 @@ import {
   type RequestLogEntry,
 } from "@/test/mocks/factories";
 import { createDirectory, createOverview, createShellStatus } from "@/test/mocks/overview-factories";
+import { createGroupsSummary } from "@/test/mocks/groups-summary-factories";
 import { isValidPeriod, localDateISO, shiftISODate, type KeyPagePeriod } from "@/features/key-page/period";
 import {
   createKeyPage,
@@ -51,6 +52,7 @@ import {
   createOwnerKeyPage,
   pageKeyRequests,
 } from "@/test/mocks/key-page-factories";
+import { applyKeyBulk, createKeyIds, createKeysPage, type KeyBulkBody } from "@/test/mocks/keys-factories";
 import {
   buildKeyUsageReport,
   createReportsResponse,
@@ -2039,6 +2041,19 @@ export const handlers = [
     return HttpResponse.json(updated);
   }),
 
+  // Groups page: the summary of the mock state and the group period reset.
+  http.get("/api/groups/summary", () => {
+    syncGroupKeyCounts();
+    return HttpResponse.json(createGroupsSummary(state.accounts, state.apiKeys, state.accountGroups));
+  }),
+
+  http.post("/api/account-groups/:groupId/reset-usage", ({ params }) => {
+    if (!state.accountGroups.some((group) => group.id === String(params.groupId))) {
+      return HttpResponse.json({ error: { code: "not_found", message: "Account group not found" } }, { status: 404 });
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   http.delete("/api/account-groups/:groupId", ({ params }) => {
     const groupId = String(params.groupId);
     const existing = state.accountGroups.find((group) => group.id === groupId);
@@ -2263,6 +2278,34 @@ export const handlers = [
       return HttpResponse.json({ error: { code: "not_found", message: "API key not found" } }, { status: 404 });
     }
     return HttpResponse.json(pageKeyRequests(createKeyRequestRows(60, keyId), keyRequestsQuery(new URL(request.url)), "admin"));
+  }),
+
+  // Keys page: the keys list, its matching ids and bulk key actions.
+  http.get("/api/keys", ({ request }) => {
+    const page = createKeysPage(new URL(request.url), state.apiKeys, state.accountGroups);
+    if ("error" in page) {
+      return HttpResponse.json({ error: { code: page.error, message: "Invalid keys filter" } }, { status: 400 });
+    }
+    return HttpResponse.json(page);
+  }),
+
+  http.get("/api/keys/ids", ({ request }) => {
+    const ids = createKeyIds(new URL(request.url), state.apiKeys, state.accountGroups);
+    if ("error" in ids) {
+      return HttpResponse.json({ error: { code: ids.error, message: "Invalid keys filter" } }, { status: 400 });
+    }
+    return HttpResponse.json(ids);
+  }),
+
+  http.post("/api/keys/bulk", async ({ request }) => {
+    const body = (await request.json()) as KeyBulkBody;
+    const applied = applyKeyBulk(body, state.apiKeys, state.accountGroups, (key) => createApiKey(key));
+    if ("error" in applied) {
+      return HttpResponse.json({ error: { code: applied.error, message: "Invalid bulk key request" } }, { status: 400 });
+    }
+    state.apiKeys = applied.keys;
+    syncGroupKeyCounts();
+    return HttpResponse.json({ results: applied.results });
   }),
 
   http.get("/api/key-reports/page", ({ request }) => {
