@@ -71,3 +71,41 @@ export function formatReportBucketDate(
   }
   return formatTimeLong(`${year}-${month}-${day}T00:00:00`, displayFormat).date;
 }
+
+/** The longest custom period of the Reports page, in local days. */
+export const MAX_REPORT_PERIOD_DAYS = 730;
+
+/** True for a real calendar date written as YYYY-MM-DD. */
+export function isISODate(value: string | null | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/** The calendar date `days` after (or before, when negative) an ISO date. */
+export function addDaysISO(date: string, days: number): string {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/** The number of calendar days from start to end, both included. */
+export function inclusiveDayCount(startDate: string, endDate: string): number {
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T00:00:00Z`);
+  return Math.round((end - start) / 86_400_000) + 1;
+}
+
+/** Every calendar date from start to end, both included; empty when inverted. */
+export function eachISODate(startDate: string, endDate: string): string[] {
+  if (!isISODate(startDate) || !isISODate(endDate) || startDate > endDate) {
+    return [];
+  }
+  const dates: string[] = [];
+  for (let current = startDate; current <= endDate; current = addDaysISO(current, 1)) {
+    dates.push(current);
+  }
+  return dates;
+}

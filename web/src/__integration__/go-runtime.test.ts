@@ -15,7 +15,8 @@ import { ApiKeyCreateResponseSchema, ApiKeyListSchema, ApiKeySchema, ModelsRespo
 import { DashboardSettingsSchema } from "@/features/settings/schemas";
 import { buildSettingsUpdateRequest } from "@/features/settings/payload";
 import { ConversationsResponseSchema, DashboardOverviewSchema, DashboardProjectionsSchema, DashboardStatusSchema, RequestLogsResponseSchema } from "@/features/dashboard/schemas";
-import { ReportsResponseSchema } from "@/features/reports/schemas";
+import { KeyUsageReportSchema, ReportsResponseSchema } from "@/features/reports/schemas";
+import { KEY_USAGE_CSV_HEADER } from "@/test/mocks/key-usage-report-factories";
 import { ModelSourceSchema, ModelSourcesResponseSchema } from "@/features/model-sources/schemas";
 import { ModelPriceDeleteSchema, ModelPriceSaveSchema, ModelPricesSchema } from "@/features/model-prices/model-price";
 import { ConversationArchiveFileSchema, ConversationArchiveRecordsResponseSchema } from "@/features/conversation-archive/schemas";
@@ -130,6 +131,23 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     RequestLogsResponseSchema.parse(await request("/api/request-logs?timeframe=30d"));
     ConversationsResponseSchema.parse(await request("/api/conversations?timeframe=1h"));
     ConversationsResponseSchema.parse(await request("/api/conversations?timeframe=24h"));
+  });
+
+  it("serves the key usage report and its CSV export to an administrator", async () => {
+    const report = KeyUsageReportSchema.parse(await request("/api/reports/keys?timezone=Europe/Prague"));
+    expect(report.period).toMatchObject({ timezone: "Europe/Prague", days: 7 });
+    expect(report.selection).toMatchObject({ allKeys: true, groupIds: [], keyIds: [], ungrouped: false });
+    expect(report.daily).toHaveLength(7);
+    const anonymous = await fetch(base + "/api/reports/keys", { signal: AbortSignal.timeout(4_000) });
+    expect(anonymous.status).toBe(401);
+    const csv = await fetch(base + "/api/reports/keys/export.csv?timezone=Europe/Prague", {
+      headers: { Cookie: cookie },
+      signal: AbortSignal.timeout(4_000),
+    });
+    expect(csv.status).toBe(200);
+    expect(csv.headers.get("content-type")).toMatch(/^text\/csv/);
+    expect(csv.headers.get("content-disposition")).toMatch(/^attachment/);
+    expect((await csv.text()).split(/\r?\n/)[0]).toBe(KEY_USAGE_CSV_HEADER);
   });
 
   it("serves the overview pages only to an administrator, with Server-Timing", async () => {
