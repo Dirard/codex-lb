@@ -537,7 +537,7 @@ Sections in screen order; "admin" marks parts that only the administrator sees.
 4. Period KPIs with the previous-period comparison: requests, input/output/cached tokens and cache share, cost, errors and error rate, cancelled, TTFT p50 and p95.
 5. Usage by day and model: cost per local day stacked by the top 5 models plus other (toggle requests or tokens); by-model table with model, effort, requests, tokens, cost, share, TTFT p50.
 6. Errors by code: code, count, share, last seen; error rate per day; link "show these requests".
-7. Latency per day: TTFT p50 and p95, queue p95, tokens per second p50.
+7. Latency per day: TTFT p50 and p95, total latency p50 and p95, queue p95, tokens per second p50.
 8. User agents: group, requests, cost, share.
 9. Recent requests: the last 50 with time, model and effort, status, error code, input/output/cached tokens, cost, TTFT, total latency, transport and user-agent group; admin adds account, client IP, conversation and the details dialog; "errors only" toggle; "load more".
 10. Key properties (current): allowed models, enforced model and effort, allowed efforts, traffic class, service tier, usage sections, expiry; admin adds the assigned accounts and model sources, the owner sees only their counts.
@@ -628,6 +628,8 @@ KeyPeriodSummary
  - cancelled: int
  - ttftP50Ms: number|null
  - ttftP95Ms: number|null
+ - totalP50Ms: number|null
+ - totalP95Ms: number|null
  - previous: requests, tokens and costUsd of the previous period|null
 KeyDay
  - date: date
@@ -635,6 +637,8 @@ KeyDay
  - errors: int
  - ttftP50Ms: number|null
  - ttftP95Ms: number|null
+ - totalP50Ms: number|null
+ - totalP95Ms: number|null
  - queueP95Ms: number|null
  - tpsP50: number|null
 
@@ -661,7 +665,7 @@ The administrator and owner key pages SHALL be one React component in `web/src/f
 Each limit SHALL show current, maximum and reset time, and the projected exhaustion time when the last 3 h pace reaches the maximum before the reset; expired windows SHALL show zero usage and the advanced reset.
 
   R22:
-TTFT p50 and p95, queue p95 and tokens per second p50 SHALL come from the rollup histograms within the PR 1 error bound; total latency SHALL NOT be shown as a percentile until a total-latency histogram exists (Q6).
+TTFT p50 and p95, total latency p50 and p95, queue p95 and tokens per second p50 SHALL come from the rollup histograms within the PR 1 error bound (Q6).
 
   R23:
 Recent requests SHALL be read newest first through `idx_usage_events_key_time` with a keyset cursor and at most 100 rows per call; errors-only SHALL read at most 5 000 rows per call.
@@ -1164,27 +1168,39 @@ PR 2 — overview, alerts and attention keys:
 7. [ ] Contract tests for the new endpoints and the unchanged public key-usage endpoints and `BenchmarkDashboardPages` for the overview are done; the production-copy latency run is open (needs operator approval) (R46, R49).
 8. [ ] Use case 4 of `specs/dashboard-delivery.md` is marked outdated and the local gates pass; PR, CI and the release notes listing the deprecation of `/api/dashboard/overview` and `/api/dashboard/projections` are open.
 
-PR 3 — key page and reports:
+PR 3a — key page (use cases 4 and 4.1):
 
-9. [ ] OpenSpec change `redesign-key-page-reports`: `go-runtime` delta (R19–R32) extending the key-report requirements, and the `frontend-architecture` deltas of use cases 4 and 5; strict validation.
-10. [ ] Rollup additions agreed with the PR 1 owner: `histQuantile` and `idx_usage_rollup_error_key`, in PR 1 or as additive migration 43 (Q7) (R22).
-11. [ ] SQLite: `KeyPeriodUsage`, `KeyErrorCodes`, `KeyLimitPace`, `KeyUsageReport`, `StreamKeyDailyRows`; equivalence tests (R20–R23, R30, R31).
-12. [ ] Application and HTTP: `KeyPageService` with admin and owner scopes, `KeyUsageReportService`; admin and owner routes with parameter validation, owner projection and compression; security tests (R20, R25–R28, R30, R31, R48).
-13. [ ] Web: `features/key-page` shared by `/keys/:id` and owner mode, `AuthGate` keeping `from`/`to`, Reports rebuilt (`ScopePicker`, `PerKeyTable`, `GroupReportTable`, `KeyDailyChart`, CSV, `TrafficDetails`), `APIs` renamed `Keys` (R19, R24, R29, R32).
-14. [ ] Integration and contract tests, benchmarks, production-copy run; gates, PR, CI, release notes listing the deprecated key endpoints (R47, R49).
+9. [ ] OpenSpec change `key-page`: `go-runtime` delta (R19–R29) extending the key-report requirements, and the `frontend-architecture` deltas of use case 4; strict validation.
+10. [x] Rollup additions: `histQuantile`, the total-latency histogram and `idx_usage_rollup_error_key` landed in PR 1 (Q6, Q7) (R22).
+11. [ ] SQLite: `KeyPeriodUsage`, `KeyErrorCodes`, `KeyLimitPace`; raw-equivalence tests across zones and fold states (R20–R23).
+12. [ ] Application and HTTP: `KeyPageService` with admin and owner scopes; `GET /api/api-keys/{id}/page`, `GET /api/api-keys/{id}/requests`, `GET /api/key-reports/page`, `GET /api/key-reports/requests` with parameter validation, owner projection, compression and `Server-Timing`; security tests (R20, R23, R25–R28, R50).
+13. [ ] Web: `features/key-page` shared by `/keys/:id` and owner mode, `AuthGate` keeping `from`/`to`, key links switched from `/keys?selected=<id>` to `/keys/:id`, locales and MSW mocks (R19, R24, R29).
+14. [ ] Contract tests, `BenchmarkDashboardPages` for the key page; gates, PR, CI (R46, R49).
+
+PR 3b — reports for API-key users (use case 5):
+
+15. [ ] OpenSpec change `key-usage-reports`: `go-runtime` delta (R30–R32) and the `frontend-architecture` deltas of use case 5; strict validation.
+16. [ ] SQLite: `KeyUsageReport`, `StreamKeyDailyRows`; raw-equivalence tests with legacy rows, moved keys, the ungrouped selection and Europe/Prague days (R30, R31).
+17. [ ] Application and HTTP: `KeyUsageReportService`, `GET /api/reports/keys`, `GET /api/reports/keys/export.csv` with gzip and `Server-Timing`; CSV-sum and statement-count tests (R30, R31, R50).
+18. [ ] Web: Reports rebuilt (`ScopePicker`, `PerKeyTable`, `GroupReportTable`, `KeyDailyChart`, CSV, `TrafficDetails`), owner links per R29, locales and MSW mocks (R32).
+19. [ ] Contract tests, `BenchmarkDashboardPages` for the report; gates, PR, CI (R46, R49).
+
+After PR 3a and 3b:
+
+20. [ ] Production-copy latency run of the new pages (operator approval), release notes listing the deprecated key endpoints (R47, R49).
 
 PR 4 — keys, groups and accounts management:
 
-15. [ ] OpenSpec change `redesign-key-group-account-management`: `go-runtime` delta (R33–R45) and the `frontend-architecture` deltas of use cases 6–8; strict validation.
-16. [ ] SQLite: `ListAccountViews` batch reads; keys list readers reuse `ListKeyRows` and `KeyDailySpend` (R33, R43).
-17. [ ] Application and HTTP: `KeysListService`, `KeysBulkService`, `GroupsSummaryService`, `/api/keys`, `/api/keys/ids`, `/api/keys/bulk`, `/api/groups/summary`, batch-built `/api/accounts` (R33, R34, R36–R38, R40, R43).
-18. [ ] Web: Keys page, Groups page, Accounts table and sheet, Settings without key and group sections, final navigation order (R35, R39, R41, R42, R44, R45).
-19. [ ] Tests for partial bulk failure, selection across polls, no provider call on account open; benchmarks and production-copy run (R36, R37, R42, R49).
-20. [ ] Gates, PR, CI, release notes listing the deprecation of `GET /api/api-keys/`; archive the three OpenSpec changes after verification and sync their deltas.
+21. [ ] OpenSpec change `redesign-key-group-account-management`: `go-runtime` delta (R33–R45) and the `frontend-architecture` deltas of use cases 6–8; strict validation.
+22. [ ] SQLite: `ListAccountViews` batch reads; keys list readers reuse `ListKeyRows` and `KeyDailySpend` (R33, R43).
+23. [ ] Application and HTTP: `KeysListService`, `KeysBulkService`, `GroupsSummaryService`, `/api/keys`, `/api/keys/ids`, `/api/keys/bulk`, `/api/groups/summary`, batch-built `/api/accounts` (R33, R34, R36–R38, R40, R43).
+24. [ ] Web: Keys page, Groups page, Accounts table and sheet, Settings without key and group sections, final navigation order (R35, R39, R41, R42, R44, R45).
+25. [ ] Tests for partial bulk failure, selection across polls, no provider call on account open; benchmarks and production-copy run (R36, R37, R42, R49).
+26. [ ] Gates, PR, CI, release notes listing the deprecation of `GET /api/api-keys/`; archive the three OpenSpec changes after verification and sync their deltas.
 
 Follow-up release:
 
-21. [ ] Remove the endpoints deprecated in PR 2–4 with their tests and mocks; update contract tests and release notes (R47).
+27. [ ] Remove the endpoints deprecated in PR 2–4 with their tests and mocks; update contract tests and release notes (R47).
 
 ## Open questions
 
@@ -1228,3 +1244,4 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - 2026-10-28: The request log and conversations move to a Requests page with one period picker defaulting to 24 hours instead of staying on the overview.
 - 2026-10-28: Spec actions: `usage-rollups.md` reused (two additions requested, Q7); `dashboard-delivery.md` use case 4 marked outdated by PR 2; `go-runtime` amended by three OpenSpec changes; `frontend-architecture` receives only REMOVED and location-only MODIFIED deltas.
 - 2026-10-28 (owner): Q1–Q5 and Q8–Q10 take the defaults above. Q6: the total-latency histogram is added to rollup layout 1 in PR 1 (no rebuild later). Q7: `idx_usage_rollup_error_key` and `histQuantile` are part of PR 1.
+- 2026-10-29: PR 3 is split into PR 3a (key page, OpenSpec change `key-page`) and PR 3b (reports for key users, OpenSpec change `key-usage-reports`): they share no files apart from routing and locales, so they are built and reviewed in parallel. Following Q6, R22 now includes total-latency p50 and p95.
