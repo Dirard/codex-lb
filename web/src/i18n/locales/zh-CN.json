@@ -61,6 +61,8 @@
   "settings.backups.loadFailed": "无法加载备份。",
   "accounts.detail.groupsLabel": "分组",
   "accounts.detail.groupsSelected": "已选择 {{count}} 个分组",
+  "accounts.detail.groupsSelected_one": "已选择 {{count}} 个分组",
+  "accounts.detail.groupsSelected_other": "已选择 {{count}} 个分组",
   "accounts.detail.noGroupsSelected": "未选择分组",
   "accounts.detail.groupsLoading": "正在加载分组…",
   "accounts.detail.noAccountGroups": "暂无账户分组",

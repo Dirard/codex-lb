@@ -61,6 +61,8 @@
   "settings.backups.loadFailed": "백업을 불러올 수 없습니다.",
   "accounts.detail.groupsLabel": "그룹",
   "accounts.detail.groupsSelected": "{{count}}개 그룹 선택됨",
+  "accounts.detail.groupsSelected_one": "{{count}}개 그룹 선택됨",
+  "accounts.detail.groupsSelected_other": "{{count}}개 그룹 선택됨",
   "accounts.detail.noGroupsSelected": "선택된 그룹 없음",
   "accounts.detail.groupsLoading": "그룹 불러오는 중…",
   "accounts.detail.noAccountGroups": "아직 계정 그룹이 없습니다",

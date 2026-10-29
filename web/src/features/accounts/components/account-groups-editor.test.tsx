@@ -39,7 +39,7 @@ describe("AccountGroupsEditor", () => {
     renderWithProviders(<AccountGroupsEditor accountId={accountID} currentGroupIds={["group_1"]} busy={false} />);
 
     expect(await screen.findByText("Team pool")).toBeInTheDocument();
-    expect(screen.getByText("1 groups selected")).toBeInTheDocument();
+    expect(screen.getByText("1 group selected")).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Beta pool" }));
     expect(screen.getByText("2 groups selected")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save groups" }));
@@ -149,7 +149,7 @@ describe("AccountGroupsEditor", () => {
 
     // The list refetch delivers the saved membership as the current one.
     view.rerender(<AccountGroupsEditor accountId={accountID} currentGroupIds={["group_2"]} busy={false} />);
-    expect(await screen.findByText("1 groups selected")).toBeInTheDocument();
+    expect(await screen.findByText("1 group selected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save groups" })).toBeDisabled();
   });
 });

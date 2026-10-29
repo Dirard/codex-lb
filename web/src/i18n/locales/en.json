@@ -61,6 +61,8 @@
   "settings.backups.loadFailed": "Could not load backups.",
   "accounts.detail.groupsLabel": "Groups",
   "accounts.detail.groupsSelected": "{{count}} groups selected",
+  "accounts.detail.groupsSelected_one": "{{count}} group selected",
+  "accounts.detail.groupsSelected_other": "{{count}} groups selected",
   "accounts.detail.noGroupsSelected": "No groups selected",
   "accounts.detail.groupsLoading": "Loading groups…",
   "accounts.detail.noAccountGroups": "No account groups yet",
