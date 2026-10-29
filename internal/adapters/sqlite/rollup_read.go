@@ -107,6 +107,12 @@ func (r *rollupRead) images(ctx context.Context, plan rollupPlan, where string, 
 			return err
 		}
 	}
+	return r.unfoldedImages(ctx, plan, where, args, add)
+}
+
+// unfoldedImages feeds add with the events after the cursor and the journal
+// rows at instants plan reads from rollups.
+func (r *rollupRead) unfoldedImages(ctx context.Context, plan rollupPlan, where string, args []any, add func(img *rollupImage, sign int64)) error {
 	if err := r.scanImages(ctx, `SELECT 1,`+rollupImageSQL("e")+` FROM usage_events e NOT INDEXED
  WHERE e.rowid>? AND `+where, append([]any{r.state.foldedRowid}, args...), plan, add); err != nil {
 		return err
