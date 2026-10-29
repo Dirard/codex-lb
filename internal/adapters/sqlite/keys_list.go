@@ -18,8 +18,21 @@ const keyListMaxDays = 32
 // from the report reader of KeyUsageReport (key slices, folded legacy hours,
 // the journal, the unfolded tail and raw partial hours) in a fixed number of
 // statements; otherwise only today is evaluated from raw events, like the
-// overview's fallback.
+// overview's fallback. EntitiesOnly reads the groups and keys alone.
 func (s *Store) KeyList(ctx context.Context, q domain.KeyListQuery) (domain.KeyListData, error) {
+	if q.EntitiesOnly && !q.Now.IsZero() {
+		var data domain.KeyListData
+		err := s.readSnapshot(ctx, func(tx *sql.Tx) error {
+			groups, err := listGroupRefs(ctx, tx)
+			if err != nil {
+				return err
+			}
+			keys, err := listKeyRows(ctx, tx, q.Now)
+			data = domain.KeyListData{Groups: groups, Keys: keys, Costs: map[string][]float64{}}
+			return err
+		})
+		return data, err
+	}
 	n := len(q.DayStarts)
 	if n == 0 || n > keyListMaxDays || q.Now.IsZero() || !q.DayStarts[n-1].Before(q.End) || q.DayStarts[n-1].After(q.Now) {
 		return domain.KeyListData{}, fmt.Errorf("key list query: %w", ErrInvalid)

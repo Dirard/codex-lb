@@ -88,10 +88,12 @@ func (f KeyListFilter) Matches(key OverviewKey, fullest *LimitState, now time.Ti
 
 // KeyListQuery bounds the keys list's usage read in UTC: DayStarts are the
 // local midnights of the days ending today (today last), End the local
-// midnight after today; Now projects expired limit windows.
+// midnight after today; Now projects expired limit windows. EntitiesOnly
+// reads the groups and keys without usage (matching ids not sorted by spend).
 type KeyListQuery struct {
-	DayStarts []time.Time
-	End, Now  time.Time
+	DayStarts    []time.Time
+	End, Now     time.Time
+	EntitiesOnly bool
 }
 
 // KeyListData is one analytics snapshot of the keys list: the groups, the
