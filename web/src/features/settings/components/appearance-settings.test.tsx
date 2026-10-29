@@ -3,12 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { AppearanceSettings } from "@/features/settings/components/appearance-settings";
-import i18n from "@/i18n";
 import { useAccountQuotaDisplayStore } from "@/hooks/use-account-quota-display";
 import { useThemeStore } from "@/hooks/use-theme";
 import { useTimeFormatStore } from "@/hooks/use-time-format";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
-import { useDashboardPreferencesStore } from "@/hooks/use-dashboard-preferences";
 
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
@@ -36,21 +34,14 @@ describe("AppearanceSettings", () => {
     useTimeFormatStore.setState({ timeFormat: "12h" });
     useDateDisplayFormatStore.setState({ dateDisplayFormat: "default" });
     useAccountQuotaDisplayStore.setState({ quotaDisplay: "both" });
-    useDashboardPreferencesStore.setState({ refreshSeconds: 15 });
   });
 
-  it("updates the dashboard refresh cadence", async () => {
-    const user = userEvent.setup();
+  it("offers no refresh rate or burn projection, which no page reads (R41)", () => {
     render(<AppearanceSettings />);
 
-    const fiveSeconds = screen.getByRole("button", { name: "5s" });
-    const fifteenSeconds = screen.getByRole("button", { name: "15s" });
-    expect(fifteenSeconds).toHaveAttribute("aria-pressed", "true");
-
-    await user.click(fiveSeconds);
-
-    expect(fiveSeconds).toHaveAttribute("aria-pressed", "true");
-    expect(useDashboardPreferencesStore.getState().refreshSeconds).toBe(5);
+    expect(screen.queryByRole("button", { name: "5s" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Account burn projection")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("exposes selected state for the time-format toggle", async () => {
@@ -113,19 +104,4 @@ describe("AppearanceSettings", () => {
     expect(useAccountQuotaDisplayStore.getState().quotaDisplay).toBe("weekly");
   });
 
-  it("localizes the account burn projection row in zh-CN", async () => {
-    await i18n.changeLanguage("zh-CN");
-    try {
-      render(<AppearanceSettings />);
-
-      expect(screen.getByText("账户消耗预测")).toBeInTheDocument();
-      expect(screen.getByText("在仪表盘上显示账户等效预测卡片。")).toBeInTheDocument();
-      expect(screen.queryByText("Account burn projection")).not.toBeInTheDocument();
-      expect(
-        screen.queryByText("Show the account-equivalent projection card on the dashboard."),
-      ).not.toBeInTheDocument();
-    } finally {
-      await i18n.changeLanguage("en");
-    }
-  });
 });

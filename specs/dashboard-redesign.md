@@ -1008,31 +1008,61 @@ Extension/Purpose:
 Manage account groups and see each group's membership, limits, spend and projected exhaustion in one table. Delivered in PR 4.
 
 Extension/Screen:
-1. Toolbar: search, Create group. A pool row on top: whole-pool health, 5 h and weekly remaining with projections, spend today, 7 d and 30 d; optionally the pool runway card (Q2).
-2. Groups table: name; accounts (count and health bar); group limits (rule summary such as "50 USD / week · 5 M tokens / day"); keys active/total; limit fill (highest %, n ≥ 90 %); spend today, 7 d and 30 d; 5 h and weekly remaining with next reset; projected exhaustion. Every column sortable; default order as in use case 2.1.
-3. Group detail sheet (`GroupDetailSheet`): members (account multi-select with each account's status and remaining; saved as one atomic membership write); limits (`LimitRulesEditor`; saving re-syncs member keys as today); keys of the group (top 20 by 7-day spend with a link to `/keys?group=<id>`); Reset period (existing confirmation); Delete (refused while keys reference the group, as today).
+1. Toolbar: search, Create group (opens the sheet empty), refresh. A pool row on top: whole-pool health, 5 h and weekly remaining with projections, spend today, 7 d and 30 d of all reported traffic, keys active/total; beside it the pool runway card (Q2: headroom, runway, next relief, reset ticks, throttle-to and add-Pro recommendations from `GET /api/dashboard/projections`).
+2. Groups table: name; accounts (count and health bar); group limits (rule summary such as "50 USD / week · 5 M tokens / day"); keys active/total; limit fill (highest %, n ≥ 90 %); spend today, 7 d and 30 d; 5 h and weekly remaining with next reset; projected exhaustion. Every column sortable (unknown values last; a third click restores the default); default order as in use case 2.1. The ungrouped row links to `/keys?group=ungrouped` and opens no sheet.
+3. Group detail sheet (`GroupDetailSheet`, `/groups?selected=<id>`): name; members (`GroupMembersSelect`, a filterable checklist of every non-deleted account with its health and 5 h and weekly remaining from the summary); limits (`LimitRulesEditor`); one Save sends name, members and limits in one `PUT /api/account-groups/{id}` (atomic, member keys re-synced as today); keys of the group (top 20 by 7-day spend with a link to `/keys?group=<id>`); Reset period (existing confirmation); Delete (refused while keys reference the group, as today, shown in the confirmation).
 
 Events And Endpoints:
-- `GET /api/groups/summary?timezone` (new, admin, gzip) → `GroupsSummary`. The same computation as the overview group rows (use case 2.1) plus 30-day spend from the key day slices, the limit templates from `group_limits` (one query) and member account ids. Expected cost at 50 groups / 300 keys / 100 accounts: 70–150 ms.
+- `GET /api/groups/summary?timezone` (new, admin, gzip, `Server-Timing`) → `GroupsSummary`. The same computation as the overview group rows (use case 2.1, `assembleOverview`) plus 30-day spend, the limit templates from `group_limits` (one query in the entity snapshot) and member account ids. The 30 local days are the overview's 8 days plus the span of the 22 days before them, read per key in the same analytics snapshot from UTC-day key slices with hour rows at the edges (an edge longer than half a day reads its UTC-day row minus the hour rows outside), folded legacy hours, raw split hours, the tail and the journal. Expected cost at 50 groups / 300 keys / 100 accounts: 70–150 ms.
+- `GET /api/dashboard/projections` (existing, unchanged) feeds the pool runway card, requested once per visit.
 - Mutations: existing `POST /api/account-groups/`, `PUT /api/account-groups/{id}`, `DELETE /api/account-groups/{id}`, `POST /api/account-groups/{id}/reset-usage`, `PUT /api/accounts/{id}/groups`.
 
 Types:
 GroupsSummary
+ - generatedAt: time
+ - timezone: string
  - shell: ShellStatus
- - pool: GroupRow plus spend30dUsd
- - groups: list of GroupSummaryRow
+ - pool: GroupSummaryRow # every ChatGPT account and key; spend of all reported traffic; attention from whole-pool alerts; no topKeys7d
+ - groups: list of GroupSummaryRow # the overview's group rows and the ungrouped row, in its order
+ - accounts: list of GroupAccount # every non-deleted account, for the member picker
 GroupSummaryRow
- - row: GroupRow
+ - (every field of GroupRow, flattened)
+ - spend30dUsd: number|null # null while the rollups are unusable
+ - limits: list of LimitTemplate # empty for the ungrouped row and the pool
+ - accountIds: list of string # non-deleted members; empty for the ungrouped row and the pool
+ - topKeys7d: list of GroupKey # at most 20 by 7-day spend, then spend today, then name
+LimitTemplate
+ - limitType: string
+ - limitWindow: string
+ - modelFilter: string|null
+ - maxValue: int
+GroupKey
+ - id: string
+ - name: string
+ - prefix: string
+ - status: active|disabled|expired
+ - spendTodayUsd: number
+ - spend7dUsd: number|null
  - spend30dUsd: number|null
- - limits: list of type, window, modelFilter and max
- - accountIds: list of string
+ - maxLimitPercent: number|null
+ - lastUsedAt: time|null
+GroupAccount
+ - id: string
+ - label: string
+ - email: string
+ - kind: chatgpt|external
+ - status: string
+ - health: ok|low|limited|reauth|paused|off
+ - primaryRemainingPercent: number|null
+ - secondaryRemainingPercent: number|null
 
 Extension/Polling and states:
-- Poll every 60 s while visible; the open sheet keeps its draft across polls.
+- Poll every 60 s while visible (the response carries the shell status, so `/groups` has no status poll); the projections once per visit; the open sheet keeps its draft across polls.
 - Loading: table skeleton; error: retryable inline error keeping previous data; empty: "No groups yet; ungrouped keys use the whole pool" with Create group.
 
 Extension/Removed:
-- `AccountGroupsSection` in Settings and the per-account group checkboxes as the only membership editor (the account sheet keeps its editor).
+- `AccountGroupsSection` in Settings and the per-account group checkboxes as the only membership editor (the account sheet keeps its editor); `ApiKeysSection` leaves Settings, which keeps an API-key access section with the authentication and quota-privacy toggles; the appearance settings for the dashboard refresh rate and the account burn projection.
+- `frontend-architecture` deltas: MODIFIED "Settings page", "API keys settings expose quota privacy toggle" and "Settings page renders in the active locale"; `go-runtime` deltas: MODIFIED "Replaced dashboard routes redirect" (`/groups` is the page, `/settings#account-groups` redirects) and "Replaced admin endpoints are deprecated for one release" (`/api/dashboard/projections` stays for the runway card).
 
 Requirements:
 
@@ -1043,17 +1073,27 @@ The groups summary SHALL show for every group its member accounts with health, i
 Once the Groups and Keys pages exist, Settings SHALL no longer contain the key and group sections and SHALL keep the global API-key authentication and upstream-quota privacy settings.
 
 Files And Functions:
- - planned: web/src/features/groups/components/groups-page.tsx#GroupsPage
- - planned: web/src/features/groups/components/groups-table.tsx#GroupsTable
- - planned: web/src/features/groups/components/group-detail-sheet.tsx#GroupDetailSheet
- - existing: web/src/features/account-groups/components/account-group-dialog.tsx - fields reused in the sheet
- - existing: web/src/features/settings/components/settings-page.tsx - sections removed
- - planned: internal/application/groups_summary.go#GroupsSummaryService.Summary - reuses the overview group-row builder
- - planned: internal/adapters/httpapi/groups_summary.go#groupsSummary
+ - existing: web/src/features/groups/components/groups-page.tsx#GroupsPage
+ - existing: web/src/features/groups/components/groups-table.tsx#GroupsTable - sorting in web/src/features/groups/groups-sort.ts#sortGroupRows
+ - existing: web/src/features/groups/components/group-detail-sheet.tsx#GroupDetailSheet
+ - existing: web/src/features/groups/components/group-members-select.tsx#GroupMembersSelect
+ - existing: web/src/features/groups/components/pool-row.tsx#PoolRow
+ - existing: web/src/features/groups/components/pool-runway-card.tsx#PoolRunwayCard
+ - existing: web/src/features/groups/hooks/use-groups-summary.ts#useGroupsSummary, #usePoolRunway
+ - existing: web/src/features/account-groups/hooks/use-account-groups.ts#useAccountGroupMutations - mutations without the group list
+ - existing: web/src/features/settings/components/settings-page.tsx - sections removed, `#account-groups` redirect
+ - existing: web/src/features/settings/components/api-key-access-settings.tsx#ApiKeyAccessSettings
+ - existing: internal/domain/groups_summary.go - `GroupsSummary`, `GroupSummaryRow`, `LimitTemplate`, `GroupKey`, `GroupAccount`
+ - existing: internal/application/groups_summary.go#GroupsSummaryService.Summary - reuses the overview assembly (`assembleOverview`)
+ - existing: internal/adapters/sqlite/groups_summary_rollup.go#Store.GroupsSummaryEntities, #Store.GroupsSummaryUsage
+ - existing: internal/adapters/httpapi/groups_summary.go#registerGroupsSummaryRoutes
 
 Tests:
 internal/application/groups_summary_test.go
  - description: rows equal the overview rows for the same snapshot; 30-day spend; templates and members
+   requirements: R40
+internal/adapters/sqlite/groups_summary_rollup_test.go
+ - description: the span equals the raw evaluation in every fold state and zone; statement count equal for 5 and 50 groups; rows equal the overview's and 30-day spend equals the raw sum
    requirements: R40
 web/src/__integration__/groups-flow.test.tsx
  - description: edit members and limits from the sheet, reset period confirmation, Settings without key and group sections
@@ -1238,9 +1278,9 @@ PR 4a — keys page (use cases 6 and 6.1):
 
 PR 4b — groups page and Settings (use case 7):
 
-25. [ ] OpenSpec change `groups-page`: `go-runtime` delta (R40, R41) and the `frontend-architecture` deltas of use case 7 and of the Settings page; strict validation.
-26. [ ] Application and HTTP: `GroupsSummaryService` reusing the overview group-row builder, `GET /api/groups/summary`; equality with the overview rows (R40).
-27. [ ] Web: `features/groups` (`GroupsPage`, `GroupsTable`, `GroupDetailSheet`, the pool runway card of Q2) at `/groups`; Settings without the key and group sections and without the appearance settings that no page uses; locales and MSW mocks (R40, R41).
+25. [x] OpenSpec change `groups-page`: `go-runtime` delta (R40, R41) and the `frontend-architecture` deltas of use case 7 and of the Settings page; strict validation.
+26. [x] Application and HTTP: `GroupsSummaryService` reusing the overview group-row builder, `GET /api/groups/summary`; equality with the overview rows (R40).
+27. [x] Web: `features/groups` (`GroupsPage`, `GroupsTable`, `GroupDetailSheet`, the pool runway card of Q2) at `/groups`; Settings without the key and group sections and without the appearance settings that no page uses; locales and MSW mocks (R40, R41).
 28. [ ] Contract tests, `BenchmarkDashboardPages` for the groups summary; gates, PR, CI (R46, R49).
 
 PR 4c — accounts management (use case 8):
@@ -1319,6 +1359,15 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages`, 300 keys, 50 groups, 100 accounts, 1.51 M events over 30 days): keys list sorted by 30-day spend 16–18 ms (UTC), 44 ms (Europe/Prague), 222–261 ms (Asia/Kolkata, the fractional-zone cost of the report reader: the all-keys 30-day report took 226 ms in the same run); the near-limit filter sorted by fill 17, 45 and 244 ms; matching ids by name 1.3 ms. `TestKeysListMeetsItsLatencyBudgetAtTargetScale` asserts the list under 300 ms (median 8.9 ms on 8 days of data).
 - Web: `/keys` carries the shell status, so its only periodic request is `GET /api/keys`; the directory loads once for the group picker and for naming failed keys of other pages. `invalidateEntityViews` also marks the keys list stale, so key, group and account mutations on any page refresh it. Failed bulk keys stay selected and are listed with their reason; Set limits is offered for any selection and grouped keys fail with `key_in_group`; "Select all n matching" adds up to 1 000 ids to the selection. The row menu has Edit (`ApiKeyEditLoader`, now shared with the key page), Disable (confirmed), Enable, Regenerate (confirmed) and Delete (confirmed). `features/apis` is removed: `api-key-limit-usage.tsx` moved to `features/api-keys`, the schemas of the deprecated trends and 7-day usage endpoints moved to the test mocks (the endpoints stay for one release), and the unused `apis.*` and `apiKeys.overview.*` strings were dropped. Settings keeps `ApiKeysSection` until PR 4b.
 - The production-copy latency run of the keys page is open with checklist item 33.
+
+## Implementation notes (PR 4b)
+
+- Branch `feat/groups-page` from `main`; OpenSpec change `groups-page` (not archived until checklist item 33).
+- Reads: the summary reads the overview's entity snapshot plus `group_limits` in one statement (`GroupsSummaryEntities`), one analytics snapshot with the overview's usage and the 22-day span before it (`GroupsSummaryUsage`), the quota history and the shell status: 29 SQL statements in Europe/Prague and 30 in Asia/Kolkata, equal for 5 groups / 30 keys / 10 accounts and 50 / 300 / 100 (`TestGroupsSummaryStatementCountIsIndependentOfScale`). The span reads at most 21 UTC-day rows and 24 hour rows per key in every zone (`TestGroupsSummarySpanSlicePlanUsesDayRows`) and equals the raw evaluation in UTC, Europe/Prague, America/New_York, Asia/Tokyo and Asia/Kolkata in all four fold states.
+- Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages` with 1.51 M events over 30 days, 300 keys, 50 groups, 100 accounts): groups summary 64 ms (UTC), 67 ms (Europe/Prague), 182 ms (Asia/Kolkata), against the overview's 50, 52 and 143 ms in the same run; `TestGroupsSummaryMeetsItsLatencyBudgetAtTargetScale` asserts under 300 ms on 12 days of data (median 46 ms).
+- Rows: the group rows and the ungrouped row are the overview's (`assembleOverview` returns the response with the derived accounts, keys and raw alerts; `buildOverview` is unchanged). The pool row is a group row over every ChatGPT account and key whose spend and trend are the overview pool summary's (all reported traffic); its attention comes from whole-pool alerts, which include re-login accounts. Members are the non-deleted accounts of the group, external ones included; the ungrouped row and the pool carry no members and no templates. Additions over the planned types: `generatedAt`, `timezone`, `accounts` (the member picker without `/api/accounts`) and `topKeys7d` (top 20 by 7-day spend, the sheet's key list).
+- Web: one Save sends name, members and limits in one `PUT /api/account-groups/{id}`; Create group opens the same sheet empty and selects the new group. The page does not request `/api/account-groups/` (`useAccountGroupMutations` holds the mutations without the list), `/api/accounts` or `/api/dashboard/status` (`/groups` carries the shell status). The runway card reuses the `dashboard.weeklyPace.*` strings of the removed overview card. Group, key and account mutations invalidate `["groups","summary"]` through `invalidateEntityViews`.
+- Settings: `ApiKeysSection` and `AccountGroupsSection` leave Settings (the latter is deleted; `ApiKeysSection` stays in `features/api-keys` for PR 4a to remove with the APIs page, its flows now tested on the section itself); `ApiKeyAccessSettings` keeps both toggles; the refresh-rate and burn-projection appearance settings, their store fields and locale strings are removed, as nothing read them. `/settings?group=<id>#account-groups` redirects to `/groups?selected=<id>`, so the key page's group links keep working.
 
 ## Production-copy measurements (go-v1.4.0)
 

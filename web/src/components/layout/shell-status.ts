@@ -34,6 +34,7 @@ export const SHELL_STATUS_POLL_MS = 60_000;
 const PAGES_CARRYING_SHELL_STATUS = [
   "/overview",
   "/keys",
+  "/groups",
 ];
 
 /** `/keys/<id>`, whose poll runs only while its period includes today. */

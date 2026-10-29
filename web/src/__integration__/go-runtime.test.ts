@@ -26,6 +26,7 @@ import { KeyPageResponseSchema, KeyRequestsResponseSchema } from "@/features/key
 import { ShellStatusSchema } from "@/components/layout/shell-status";
 import { OverviewResponseSchema } from "@/features/overview/schemas";
 import { DirectorySchema } from "@/features/search/api";
+import { GroupsSummarySchema } from "@/features/groups/schemas";
 import { KeyBulkResponseSchema, KeyIdsSchema, KeysPageSchema } from "@/features/keys/schemas";
 
 // Exercise the dashboard's real parsers against a freshly built binary rather
@@ -277,6 +278,35 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     const detached = ApiKeySchema.parse(await request(`/api/api-keys/${key.id}`, "PATCH", { groupId: null, usageSections: "" }));
     expect(detached.limits[0].maxValue).toBe(20000);
     expect(detached.usageSections).toBe("");
+    await request(`/api/api-keys/${key.id}`, "DELETE");
+    await request(`/api/account-groups/${group.id}`, "DELETE");
+  });
+
+  it("serves the groups summary to an administrator with templates, members and keys (R40)", async () => {
+    const anonymous = await fetch(base + "/api/groups/summary", { signal: AbortSignal.timeout(4_000) });
+    expect(anonymous.status).toBe(401);
+    const unknownZone = await fetch(`${base}/api/groups/summary?timezone=Mars/Olympus`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+    expect(unknownZone.status).toBe(400);
+    const limits = [{ limitType: "cost_usd", limitWindow: "weekly", maxValue: 50_000_000 }];
+    const group = AccountGroupSchema.parse(await request("/api/account-groups/", "POST", { name: "Summary group", accountIds: [], limits }));
+    const key = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "Summary key", groupId: group.id }));
+    const signedIn = await fetch(`${base}/api/groups/summary?timezone=Europe/Prague`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.headers.get("server-timing")).toMatch(/^app;dur=\d+(\.\d)?$/);
+    const summary = GroupsSummarySchema.parse(await signedIn.json());
+    expect(summary.timezone).toBe("Europe/Prague");
+    const row = summary.groups.find((item) => item.id === group.id);
+    expect(row).toMatchObject({ name: "Summary group", accountIds: [], keys: { active: 1, total: 1 }, spend30dUsd: 0,
+      limits: [{ limitType: "cost_usd", limitWindow: "weekly", modelFilter: null, maxValue: 50_000_000 }] });
+    expect(row?.topKeys7d.map((item) => item.id)).toEqual([key.id]);
+    expect(summary.groups.some((item) => item.id === null)).toBe(true);
+    expect(summary.pool).toMatchObject({ id: null, topKeys7d: [], limits: [], accountIds: [] });
+    const overview = OverviewResponseSchema.parse(await request("/api/overview?timezone=Europe/Prague"));
+    expect(summary.groups.map((item) => item.id)).toEqual(overview.groups.map((item) => item.id));
+    // A group that a key references cannot be deleted.
+    const refused = await fetch(`${base}/api/account-groups/${group.id}`, { method: "DELETE", headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+    expect(refused.status).toBe(409);
+    await request(`/api/api-keys/${key.id}`, "PATCH", { groupId: null });
     await request(`/api/api-keys/${key.id}`, "DELETE");
     await request(`/api/account-groups/${group.id}`, "DELETE");
   });

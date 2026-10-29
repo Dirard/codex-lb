@@ -117,6 +117,21 @@ func (s *OverviewService) Overview(ctx context.Context, loc *time.Location) (dom
 // the attention keys.
 func buildOverview(now time.Time, loc *time.Location, shell domain.ShellStatus, entities domain.OverviewEntities,
 	usage domain.OverviewUsage, history []domain.AccountQuota) domain.OverviewResponse {
+	return assembleOverview(now, loc, shell, entities, usage, history).response
+}
+
+// overviewAssembly is one assembled overview with the derived accounts, keys
+// and uncollapsed alerts it was built from; the groups summary (use case 7)
+// extends its group rows.
+type overviewAssembly struct {
+	response domain.OverviewResponse
+	accounts []overviewAccount
+	keys     []overviewKey
+	alerts   []domain.Alert
+}
+
+func assembleOverview(now time.Time, loc *time.Location, shell domain.ShellStatus, entities domain.OverviewEntities,
+	usage domain.OverviewUsage, history []domain.AccountQuota) overviewAssembly {
 	series := map[string]map[string][]domain.AccountQuota{}
 	for _, row := range history {
 		if series[row.AccountID] == nil {
@@ -221,7 +236,7 @@ func buildOverview(now time.Time, loc *time.Location, shell domain.ShellStatus, 
 	sort.SliceStable(groups, func(i, j int) bool { return domain.GroupRowLess(groups[i], groups[j]) })
 	response.Groups = groups
 	response.AttentionKeys, response.AttentionKeysTotal = domain.RankAttentionKeys(attention, domain.AttentionKeysLimit)
-	return response
+	return overviewAssembly{response: response, accounts: accounts, keys: keys, alerts: raw}
 }
 
 func overviewAccountOf(entry domain.OverviewAccount, series map[string][]domain.AccountQuota, now time.Time) overviewAccount {

@@ -44,6 +44,7 @@ import {
   type RequestLogEntry,
 } from "@/test/mocks/factories";
 import { createDirectory, createOverview, createShellStatus } from "@/test/mocks/overview-factories";
+import { createGroupsSummary } from "@/test/mocks/groups-summary-factories";
 import { isValidPeriod, localDateISO, shiftISODate, type KeyPagePeriod } from "@/features/key-page/period";
 import {
   createKeyPage,
@@ -2011,6 +2012,19 @@ export const handlers = [
     );
     syncGroupKeyCounts();
     return HttpResponse.json(updated);
+  }),
+
+  // Groups page: the summary of the mock state and the group period reset.
+  http.get("/api/groups/summary", () => {
+    syncGroupKeyCounts();
+    return HttpResponse.json(createGroupsSummary(state.accounts, state.apiKeys, state.accountGroups));
+  }),
+
+  http.post("/api/account-groups/:groupId/reset-usage", ({ params }) => {
+    if (!state.accountGroups.some((group) => group.id === String(params.groupId))) {
+      return HttpResponse.json({ error: { code: "not_found", message: "Account group not found" } }, { status: 404 });
+    }
+    return new HttpResponse(null, { status: 204 });
   }),
 
   http.delete("/api/account-groups/:groupId", ({ params }) => {
