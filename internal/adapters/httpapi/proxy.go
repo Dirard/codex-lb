@@ -268,6 +268,18 @@ func proxyError(err error) (int, string, string) {
 }
 
 func writeProxyError(w http.ResponseWriter, err error) {
+	var failure *application.ProviderFailure
+	if errors.As(err, &failure) && failure.Code == application.ImageGenerationLimitCode {
+		// The subscription's image window, not the account's quota, refused:
+		// tell the client in the shape and with the reset headers it expects.
+		for name, values := range failure.LimitHeaders {
+			w.Header()[name] = append([]string(nil), values...)
+		}
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]string{
+			"type": "usage_limit_reached", "code": "usage_limit_reached", "message": "The image generation limit was reached",
+		}})
+		return
+	}
 	status, code, message := proxyError(err)
 	if status == 429 && (code == "account_response_create_cap" || code == "account_stream_cap" || code == "api_key_stream_fair_share") {
 		w.Header().Set("Retry-After", "2")

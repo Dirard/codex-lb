@@ -394,6 +394,7 @@ func wrapUpstreamFailure(err error) error {
 	failure := providerFailure(upstreamErr.Code, upstreamErr.Status, dispatched)
 	failure.WebSocketHTTPFallback = upstreamErr.WebSocketHTTPFallback
 	failure.RejectedBeforeExecution = upstreamErr.RejectedBeforeExecution
+	failure.LimitHeaders = upstreamErr.LimitHeaders
 	// Keep cancellation identity without discarding the adapter's proof that
 	// this request never reached response.create. Never retain raw error text.
 	if errors.Is(err, context.Canceled) {

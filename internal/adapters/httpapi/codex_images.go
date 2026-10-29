@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
@@ -52,8 +53,57 @@ func (h *CodexOperationsHandler) images(w http.ResponseWriter, r *http.Request, 
 		writeProxyError(w, err)
 		return
 	}
-	result, err := h.ops.ImagesWithOptions(r.Context(), h.operationOptions(r, keyID), application.CodexImageRequest{Edit: edit, Body: body})
+	stream := imageEventWriter{w: w, controller: http.NewResponseController(w)}
+	result, err := h.ops.ImagesWithOptions(r.Context(), h.operationOptions(r, keyID),
+		application.CodexImageRequest{Edit: edit, Body: body, Emit: stream.write})
+	if stream.started {
+		if err != nil {
+			// The response already started: report the failure in-band.
+			_, code, message := proxyError(err)
+			payload, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]string{"code": code, "message": message}})
+			_ = stream.write(application.CodexImageEvent{Name: "error", Data: payload})
+		}
+		return
+	}
+	if err == nil && result.Status == http.StatusTooManyRequests {
+		// A final image-limit refusal keeps the upstream reset headers so the
+		// client can tell when the limit resets.
+		for name, values := range domain.ImageLimitHeaders(result.Headers) {
+			w.Header()[name] = values
+		}
+	}
 	h.writeResult(w, result, err, false)
+}
+
+// imageEventWriter relays upstream image events as text/event-stream, keeping
+// each event name and data payload unchanged.
+type imageEventWriter struct {
+	w          http.ResponseWriter
+	controller *http.ResponseController
+	started    bool
+}
+
+func (s *imageEventWriter) write(event application.CodexImageEvent) error {
+	if !s.started {
+		s.w.Header().Set("Content-Type", "text/event-stream")
+		s.w.Header().Set("Cache-Control", "no-cache, no-store")
+		s.w.Header().Set("X-Accel-Buffering", "no")
+		s.w.WriteHeader(http.StatusOK)
+		s.started = true
+	}
+	_ = s.controller.SetWriteDeadline(time.Now().Add(downstreamWriteTimeout))
+	var frame strings.Builder
+	if event.Name != "" {
+		frame.WriteString("event: " + event.Name + "\n")
+	}
+	for _, line := range strings.Split(string(event.Data), "\n") {
+		frame.WriteString("data: " + line + "\n")
+	}
+	frame.WriteString("\n")
+	if _, err := io.WriteString(s.w, frame.String()); err != nil {
+		return err
+	}
+	return s.controller.Flush()
 }
 
 // parseImageEditForm converts an OpenAI multipart image edit into the JSON

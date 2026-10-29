@@ -16,24 +16,36 @@ import (
 const (
 	// ImageDefaultModel is the image model of a request that names none; Codex
 	// always sends it.
-	ImageDefaultModel       = "gpt-image-2"
-	imageKindGeneration     = "image_generation"
-	imageKindEdit           = "image_edit"
-	maxImagePromptChars     = 32000
-	maxImageInputs          = 16
-	maxImageModelBytes      = 128
-	maxImageCount           = 10
-	imageCooldownDuration   = 10 * time.Minute
-	maxImageAccountAttempts = 4
-	imageOutputAllowance    = 8192
-	imageInputAllowance     = 1500
+	ImageDefaultModel = "gpt-image-2"
+	// ImageGenerationLimitCode marks a refusal by the subscription's image
+	// window rather than by the account's quota.
+	ImageGenerationLimitCode = "image_generation_limit"
+	imageKindGeneration      = "image_generation"
+	imageKindEdit            = "image_edit"
+	maxImagePromptChars      = 32000
+	maxImageInputs           = 16
+	maxImageModelBytes       = 128
+	maxImageCount            = 10
+	imageCooldownDuration    = 10 * time.Minute
+	maxImageAccountAttempts  = 4
+	imageOutputAllowance     = 8192
+	imageInputAllowance      = 1500
 )
 
 // CodexImageRequest is a validated Images request forwarded unchanged to the
-// subscription images endpoint.
+// subscription images endpoint. With Stream set, an upstream event stream is
+// relayed through Emit as it arrives.
 type CodexImageRequest struct {
-	Edit bool
-	Body json.RawMessage
+	Edit   bool
+	Body   json.RawMessage
+	Stream bool
+	Emit   func(CodexImageEvent) error
+}
+
+// CodexImageEvent is one upstream server-sent event, relayed unchanged.
+type CodexImageEvent struct {
+	Name string
+	Data []byte
 }
 
 func imageRequestKind(kind string) bool { return kind == imageKindGeneration || kind == imageKindEdit }
@@ -76,11 +88,11 @@ func (s *CodexOperations) ImagesWithOptions(ctx context.Context, options CodexOp
 	if err != nil {
 		return CodexOperationResult{}, err
 	}
-	body, model, err := prepareImageRequest(request.Body, request.Edit, key)
+	body, model, stream, err := prepareImageRequest(request.Body, request.Edit, key)
 	if err != nil {
 		return CodexOperationResult{}, err
 	}
-	request.Body = body
+	request.Body, request.Stream = body, stream && request.Emit != nil
 	kind := imageKindGeneration
 	if request.Edit {
 		kind = imageKindEdit
@@ -162,24 +174,25 @@ func unionAccounts(sets ...map[string]bool) map[string]bool {
 }
 
 // prepareImageRequest validates an Images body before any reservation and
-// returns the body to forward and the effective public model. Raw values are
-// kept as sent; the body is re-encoded only when the model changes.
-func prepareImageRequest(body json.RawMessage, edit bool, key domain.APIKey) (json.RawMessage, string, error) {
+// returns the body to forward, the effective public model and whether the
+// client asked for a stream. Raw values are kept as sent; the body is
+// re-encoded only when the model changes.
+func prepareImageRequest(body json.RawMessage, edit bool, key domain.APIKey) (json.RawMessage, string, bool, error) {
 	var object map[string]json.RawMessage
 	if json.Unmarshal(body, &object) != nil || object == nil {
-		return nil, "", imageInvalid("", "Image request must be a JSON object")
+		return nil, "", false, imageInvalid("", "Image request must be a JSON object")
 	}
 	var prompt string
 	if raw, ok := object["prompt"]; !ok || json.Unmarshal(raw, &prompt) != nil || strings.TrimSpace(prompt) == "" {
-		return nil, "", imageInvalid("prompt", "A non-empty prompt is required")
+		return nil, "", false, imageInvalid("prompt", "A non-empty prompt is required")
 	}
 	if utf8.RuneCountInString(prompt) > maxImagePromptChars {
-		return nil, "", imageInvalid("prompt", "The prompt exceeds 32000 characters")
+		return nil, "", false, imageInvalid("prompt", "The prompt exceeds 32000 characters")
 	}
 	model, rewrite := ImageDefaultModel, true
 	if raw, ok := object["model"]; ok && !jsonNull(raw) {
 		if json.Unmarshal(raw, &model) != nil {
-			return nil, "", imageInvalid("model", "The image model must be a string")
+			return nil, "", false, imageInvalid("model", "The image model must be a string")
 		}
 		rewrite = false
 	}
@@ -187,56 +200,53 @@ func prepareImageRequest(body json.RawMessage, edit bool, key domain.APIKey) (js
 		model, rewrite = *key.EnforcedModel, true
 	}
 	if !isImageModel(model) {
-		return nil, "", imageInvalid("model", "Image generation requires a supported gpt-image model")
+		return nil, "", false, imageInvalid("model", "Image generation requires a supported gpt-image model")
 	}
 	if len(key.AllowedModels) != 0 && !modelAllowed(key.AllowedModels, model) {
-		return nil, "", &ProxyError{Code: "model_not_allowed", Status: 403, Message: "This key does not allow the requested image model"}
+		return nil, "", false, &ProxyError{Code: "model_not_allowed", Status: 403, Message: "This key does not allow the requested image model"}
 	}
 	if raw, ok := object["n"]; ok && !jsonNull(raw) {
 		var n float64
 		if json.Unmarshal(raw, &n) != nil || n != math.Trunc(n) || n < 1 || n > maxImageCount {
-			return nil, "", imageInvalid("n", "n must be an integer from 1 to 10")
+			return nil, "", false, imageInvalid("n", "n must be an integer from 1 to 10")
 		}
 	}
+	stream := false
 	if raw, ok := object["stream"]; ok && !jsonNull(raw) {
-		var stream bool
 		if json.Unmarshal(raw, &stream) != nil {
-			return nil, "", imageInvalid("stream", "stream must be a boolean")
-		}
-		if stream {
-			return nil, "", imageInvalid("stream", "Streaming image responses are not supported")
+			return nil, "", false, imageInvalid("stream", "stream must be a boolean")
 		}
 	}
 	if edit {
 		var images []map[string]json.RawMessage
 		if json.Unmarshal(object["images"], &images) != nil || len(images) == 0 || len(images) > maxImageInputs {
-			return nil, "", imageInvalid("images", "An edit needs 1 to 16 images")
+			return nil, "", false, imageInvalid("images", "An edit needs 1 to 16 images")
 		}
 		for _, image := range images {
 			if !imageReference(image) {
-				return nil, "", imageInvalid("images", "Each image needs an image_url or file_id")
+				return nil, "", false, imageInvalid("images", "Each image needs an image_url or file_id")
 			}
 		}
 		if raw, ok := object["mask"]; ok && !jsonNull(raw) {
 			var mask map[string]json.RawMessage
 			if json.Unmarshal(raw, &mask) != nil || !imageReference(mask) {
-				return nil, "", imageInvalid("mask", "The mask needs an image_url or file_id")
+				return nil, "", false, imageInvalid("mask", "The mask needs an image_url or file_id")
 			}
 		}
 	}
 	if !rewrite {
-		return body, model, nil
+		return body, model, stream, nil
 	}
 	encodedModel, err := json.Marshal(model)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	object["model"] = encodedModel
 	forwarded, err := json.Marshal(object)
 	if err != nil {
-		return nil, "", imageInvalid("", "Image request must be a JSON object")
+		return nil, "", false, imageInvalid("", "Image request must be a JSON object")
 	}
-	return forwarded, model, nil
+	return forwarded, model, stream, nil
 }
 
 func imageReference(object map[string]json.RawMessage) bool {

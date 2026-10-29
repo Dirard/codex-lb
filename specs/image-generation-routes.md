@@ -66,7 +66,7 @@ The runtime SHALL serve `POST /backend-api/codex/images/generations`, `POST /bac
 JSON bodies SHALL be accepted on all four routes. `/v1/images/edits` SHALL also accept multipart with `image` and `image[]` file parts (at most 16 together), at most one `mask`, at most 32 text fields of at most 256 KiB each, and file content types `image/png`, `image/jpeg` or `image/webp` (sniffed when the part header is missing). The form SHALL become JSON: each file becomes a `data:<type>;base64,…` URL in `images[].image_url`, or in `mask.image_url` for the mask; `n`, `output_compression` and `partial_images` become JSON integers and `stream` a boolean; other text fields stay strings.
 
   R3:
-Before reservation, selection or dispatch, validation SHALL reject with 400 `invalid_request_error` and the parameter name: a body that is not an object; a missing, empty or over-32000-character `prompt`; a `model` that is not a string naming a priced `gpt-image-` model; `n` outside the integers 1–10; `stream: true`; and an edit without `images`, with more than 16 entries, or with an entry lacking a non-empty `image_url` or `file_id` string. An absent `model` SHALL become `gpt-image-2` in the forwarded body.
+Before reservation, selection or dispatch, validation SHALL reject with 400 `invalid_request_error` and the parameter name: a body that is not an object; a missing, empty or over-32000-character `prompt`; a `model` that is not a string naming a priced `gpt-image-` model; `n` outside the integers 1–10; a `stream` that is not a boolean; and an edit without `images`, with more than 16 entries, or with an entry lacking a non-empty `image_url` or `file_id` string. An absent `model` SHALL become `gpt-image-2` in the forwarded body.
 
   R4:
 An enforced key model SHALL replace the image model, in the forwarded body too, only when the enforced model is itself an image model. A key with allowed models SHALL get 403 `model_not_allowed` for an image model outside them.
@@ -84,7 +84,7 @@ Files And Functions:
 
 Tests:
 internal/adapters/httpapi/codex_images_test.go
- - description: missing prompt, non-image model, unpriced image model, stream true, n=0, edit without images and a 17-image edit each get 400 with the parameter, and the upstream stub sees no call
+ - description: missing prompt, non-image model, unpriced image model, non-boolean stream, n=0, edit without images and a 17-image edit each get 400 with the parameter, and the upstream stub sees no call
    requirements: R3
  - description: allowed models without gpt-image-2 give 403 before dispatch; an enforced text model keeps the requested image model; an enforced image model replaces it in the forwarded body
    requirements: R4
@@ -164,6 +164,9 @@ An upstream 429 usage-limit refusal that arrives before any output or usage SHAL
   R12:
 Other failures, responses that carried output or usage, and file-pinned edits SHALL NOT be sent to another account.
 
+  R13:
+A final upstream 429 SHALL reach the client with the upstream `Retry-After`, `X-Codex-Active-Limit` and every `X-Image-Gen-*` header unchanged, plus the `X-Codex-Primary-*` and `X-Codex-Secondary-*` used-percent, window and reset headers when `X-Codex-Active-Limit` names an image limit; plan and credit headers are not passed.
+
 Implementation Logic:
 1. `CodexOperations.imageCooldown` is a mutex-guarded `map[accountID]until`. Expired entries are pruned on read; the map is per process.
 2. The loop marks the refusing account excluded and cooled, then calls `selectCompact(…, excluded)`. A selection error after at least one refusal returns that refusal.
@@ -178,8 +181,68 @@ internal/adapters/httpapi/codex_images_test.go
    requirements: R11
  - description: a file-pinned edit refused with 429 is returned without trying the other account; a 500 is returned without failover
    requirements: R12
- - description: when every account refuses, the last 429 body reaches the client
-   requirements: R11
+ - description: when every account refuses, the last 429 body reaches the client with Retry-After, X-Codex-Active-Limit, X-Image-Gen-* and the image window headers, but without plan or credit headers
+   requirements: R11, R13
+
+### 4. Relay a streamed generation
+
+image request with stream true --forward with Accept text/event-stream and relay upstream events--> [relayed event stream settled from the completed event, JSON answer returned as JSON, stream without an image ended by an error event]
+
+Requirements:
+
+  R14:
+A request with `stream: true` SHALL be forwarded with `Accept: text/event-stream`. An upstream `text/event-stream` answer SHALL be relayed event by event with each `event:` name and `data:` payload unchanged and flushed as it arrives, while an upstream JSON answer SHALL be returned as JSON exactly as for a non-streaming request.
+
+  R15:
+A relayed stream SHALL be settled exactly once from the `usage` of its `image_generation.completed` or `image_edit.completed` event; when the stream ends without a completed event carrying `b64_json`, the client SHALL receive a final `error` event and the reservation SHALL stay for reconciliation. Failover stays limited to refusals before the response starts.
+
+Implementation Logic:
+1. `CodexImageRequest` carries `Stream` and an `Emit` callback for raw SSE events; validation accepts a boolean `stream`.
+2. `Adapter.Images` sets `Accept: text/event-stream` for streaming requests. With an event-stream answer it reads events with a 32 MiB line bound, emits each event as received, records usage and `OutputObserved` from the completed event, and returns a result without the image body; any other answer goes through the existing JSON path.
+3. The handler writes `text/event-stream` headers on the first event, then each `event:`/`data:` pair with a 30 s write deadline and a flush. After the call it writes nothing more for a started stream except a final `error` event on failure; an unstarted stream falls back to `writeResult`.
+
+Files And Functions:
+ - existing: internal/application/codex_images.go#CodexImageRequest, #prepareImageRequest
+ - existing: internal/adapters/provider/images.go#Images - streaming read
+ - existing: internal/adapters/httpapi/codex_images.go#images - SSE relay
+
+Tests:
+internal/adapters/httpapi/codex_images_test.go
+ - description: streamed generation — the stub sends keepalive and image_generation.completed with usage; the client receives both events in order as text/event-stream and one image_generation event is settled from the usage
+   requirements: R14, R15
+ - description: a streaming edit answered with JSON returns the JSON body unchanged and settles once
+   requirements: R14
+ - description: a stream that ends after keepalive only gives the client a final error event and keeps the reservation for reconciliation
+   requirements: R15
+
+### 5. Keep the account usable when Responses hits the image limit
+
+Responses upstream 429 with an image X-Codex-Active-Limit --classify as image_generation_limit--> [429 usage_limit_reached with reset headers, account unchanged, no replay]
+
+Requirements:
+
+  R16:
+For a Responses request over HTTP or its WebSocket handshake, an upstream 429 whose `X-Codex-Active-Limit` names an image limit (an identifier containing `image`) SHALL be classified as `image_generation_limit`: no account quota mark or evidence, no replay on another account, an uncharged settlement, and a client response of 429 with `error.type` and `error.code` `usage_limit_reached` plus the reset headers of R13. Other 429 refusals keep the existing quota handling.
+
+Implementation Logic:
+1. `domain.ImageLimitID` reports whether an active-limit identifier names an image limit; `domain.ImageLimitHeader` selects the reset headers of R13.
+2. `upstream.Error` gains `LimitHeaders`; `beginStream` and the WebSocket handshake rejection set code `image_generation_limit` and copy the selected headers when the rule matches.
+3. The provider keeps the headers on `ProviderFailure.LimitHeaders`; `Proxy.Respond` treats `image_generation_limit` as a safe-zero refusal without account outcome or replay.
+4. `writeProxyError` writes the stored headers and the `usage_limit_reached` envelope for `image_generation_limit`.
+
+Files And Functions:
+ - planned: internal/domain/image_limits.go#ImageLimitID, #ImageLimitHeader
+ - existing: internal/adapters/upstream/wire.go#Error, internal/adapters/upstream/stream_http.go#beginStream, internal/adapters/upstream/websocket_sessions.go - classification
+ - existing: internal/adapters/provider/provider.go#wrapUpstreamFailure, internal/application/proxy.go#Respond, internal/application/errors - `LimitHeaders`
+ - existing: internal/adapters/httpapi/proxy.go#writeProxyError
+
+Tests:
+ - description: route test — a Responses request with the hosted image tool refused with 429 and X-Codex-Active-Limit imagegen_premium returns 429 usage_limit_reached with the reset headers, the account stays active, the second account receives nothing, and no reservation is pending
+   requirements: R16
+ - description: the same 429 without the header still marks the account quota-exhausted and moves the request
+   requirements: R16
+ - description: unit — the image-limit rule and header selection
+   requirements: R16
 
 ## Implementation checklist
 
@@ -193,10 +256,18 @@ internal/adapters/httpapi/codex_images_test.go
 8. [x] Route tests for use cases 1–3 (`internal/adapters/httpapi/codex_images_test.go`); the success-body check is covered on the route.
 9. [x] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync the delta into `openspec/specs/go-runtime/` with a context section, archive the change, release notes.
 
+10. [x] OpenSpec change `image-streams-and-limit-headers` and use cases 4–5 of this spec.
+11. [x] Domain image-limit rule and reset-header selection (R13, R16).
+12. [x] Reset headers on final image-route refusals (R13).
+13. [x] Streamed image responses: validation, provider read, SSE relay, settlement (R14, R15).
+14. [x] Responses image-limit classification, settlement and client envelope (R16).
+15. [x] Tests, gates, release notes (`go-v1.7.0`), archive the change.
+
 Deferred:
 - GPT Image 2.5 Sunburst and Flare with real `model`, `quality` (up to `max`), `size` (up to 3840 px) and transparent backgrounds need an OpenAI API key source with an images capability. This includes a per-key or per-group image model, because Codex always sends `gpt-image-2`. The subscription endpoint ignores these fields.
-- Streaming image responses (`stream: true`, `partial_images`): Codex does not use them, and the subscription endpoint's streaming contract is unverified.
-- Image-limit headers are not turned into pool-level limit headers. A final refusal carries the upstream account's own headers in its body only; the response header whitelist is unchanged.
+- Draft frames (`partial_images`): the subscription stream carries only `keepalive` and the completed image (probe 2026-10-30), so no partial events can be relayed.
+- An image limit reported inside an already started Responses stream (a failed `image_generation_call`) is not recognized; its form has not been observed.
+- Image-limit headers are not turned into pool-level limit headers: a final refusal carries the last refusing account's own reset headers.
 - The image-limit cooldown is per process and is not persisted.
 - Image input tokens of edits are re-priced at the text-input rate, because events keep one input counter.
 
@@ -212,3 +283,6 @@ None blocking.
 - 2026-10-29: Request kinds `image_generation` and `image_edit` keep image traffic distinguishable in diagnostics and reports. Settlement re-prices them from tokens like other subscription events.
 - 2026-10-29: 32 MiB route maximum, the shared `MaxRequestBodyBytes`. Codex edits carry at most five images, and a larger limit would let one image request take a large share of the body budget on small hosts.
 - 2026-10-29: Validation, run locally because GitHub Actions was unavailable: `make check` (vet, golangci-lint 0 issues, test, race, govulncheck, openspec), `make web-check` (1093 tests), `make web-deps build`, `make test-web-contract` (17 tests). A smoke run of the built binary answered 401 `invalid_api_key` on all four image routes without a key (404 before). Credential redaction now returns bodies without the credential or any `\u` escape unchanged, which also keeps the upstream image body byte-identical.
+- 2026-10-30: CanonKeeper asked, and the owner confirmed in this session, for streaming on the image routes, reset headers on image-limit refusals and account-neutral image-limit refusals on Responses. A direct probe (Pro account) showed `stream: true` on generations answers `text/event-stream` with `keepalive` events about every 15 s and one `image_generation.completed` event (image, `usage`, `quality`, `size`, `generation_id`); `partial_images: 2` produced no draft frames; an edit with `stream: true` answered JSON. Relaying the upstream answer as it is keeps clients on the subscription's own contract.
+- 2026-10-30: Image limits on Responses are recognized only from the `X-Codex-Active-Limit` header of a 429, because that header is the one signal the subscription uses to name the image window (`imagegen_premium` on every image response observed). Production had no quota marks in the preceding 48 h, so the change is preventive.
+- 2026-10-30: Validation for use cases 4–5, run locally (GitHub Actions unavailable): `make check` (vet, golangci-lint 0 issues, test, race, govulncheck, openspec), `make web-deps build`, `make test-web-contract`; the dashboard is unchanged. With the Responses classification disabled, the image-limit route test fails on the old behavior (503 `no_available_accounts`, account marked), so the test guards the fix.

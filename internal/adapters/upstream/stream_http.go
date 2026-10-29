@@ -54,6 +54,7 @@ func (a *HTTPAdapter) beginStream(ctx context.Context, target Target, endpoint s
 			return nil, Result{}, &Error{Code: ErrorCodeConnection, Message: "upstream error body exceeds bounded read limit"}
 		}
 		result, failure := rejectedHTTPResult(response.StatusCode, payload, target.Capabilities.Protocol)
+		classifyImageLimit(response.StatusCode, response.Header, &result, failure)
 		return nil, result, failure
 	}
 	contentType := strings.TrimSpace(strings.ToLower(response.Header.Get("Content-Type")))
