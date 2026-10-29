@@ -191,7 +191,7 @@ internal/adapters/httpapi/codex_images_test.go
 6. [x] `Adapter.Images` (R7, R8).
 7. [x] HTTP routes, JSON reading, multipart conversion, result writing (R1, R2).
 8. [x] Route tests for use cases 1–3 (`internal/adapters/httpapi/codex_images_test.go`); the success-body check is covered on the route.
-9. [ ] `make check`, `make web-check`; sync the delta into `openspec/specs/go-runtime/` with a context section, archive the change, release notes.
+9. [x] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync the delta into `openspec/specs/go-runtime/` with a context section, archive the change, release notes.
 
 Deferred:
 - GPT Image 2.5 Sunburst and Flare with real `model`, `quality` (up to `max`), `size` (up to 3840 px) and transparent backgrounds need an OpenAI API key source with an images capability. This includes a per-key or per-group image model, because Codex always sends `gpt-image-2`. The subscription endpoint ignores these fields.
@@ -211,3 +211,4 @@ None blocking.
 - 2026-10-29: Account-neutral outcomes. The image limit has its own window (`x-codex-active-limit: imagegen_premium`, 1440 minutes on Pro). Recording an image refusal as account quota would remove the account from text routing, and recording an image success would re-enable an account that is limited for text.
 - 2026-10-29: Request kinds `image_generation` and `image_edit` keep image traffic distinguishable in diagnostics and reports. Settlement re-prices them from tokens like other subscription events.
 - 2026-10-29: 32 MiB route maximum, the shared `MaxRequestBodyBytes`. Codex edits carry at most five images, and a larger limit would let one image request take a large share of the body budget on small hosts.
+- 2026-10-29: Validation, run locally because GitHub Actions was unavailable: `make check` (vet, golangci-lint 0 issues, test, race, govulncheck, openspec), `make web-check` (1093 tests), `make web-deps build`, `make test-web-contract` (17 tests). A smoke run of the built binary answered 401 `invalid_api_key` on all four image routes without a key (404 before). Credential redaction now returns bodies without the credential or any `\u` escape unchanged, which also keeps the upstream image body byte-identical.

@@ -9,4 +9,4 @@
 ## 2. Verification
 
 - [x] 2.1 Route tests with a loopback ChatGPT stub: generation and edit round trip with settlement, multipart conversion, validation errors before dispatch, model policy, image-limit failover without account-health change, file-pinned edit without failover.
-- [ ] 2.2 Gates and strict OpenSpec validation.
+- [x] 2.2 Gates and strict OpenSpec validation.
