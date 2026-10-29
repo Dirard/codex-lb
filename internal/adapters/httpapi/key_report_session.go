@@ -66,6 +66,7 @@ func (s *Server) registerKeyReportSession(mux *http.ServeMux) {
 			}
 			serveKeyReports(w, r, reports, key)
 		})
+		s.registerKeyPageOwnerRoutes(mux, auth, suffix)
 	}
 }
 
@@ -79,5 +80,9 @@ func keyReportToken(r *http.Request) string {
 
 func keyReportFirewallPath(r *http.Request) bool {
 	path := strings.TrimSuffix(r.URL.Path, "/")
-	return path == "/api/key-reports/reports" || path == "/api/key-reports/session" && r.Method == http.MethodPost
+	switch path {
+	case "/api/key-reports/reports", "/api/key-reports/page", "/api/key-reports/requests":
+		return true
+	}
+	return path == "/api/key-reports/session" && r.Method == http.MethodPost
 }
