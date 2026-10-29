@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -171,25 +172,14 @@ func (r *rollupRead) requestLogOptions(ctx context.Context, filter domain.Reques
 	if err != nil {
 		return options, err
 	}
-	where, args := requestLogWhere(filter)
-	rows, err := r.tx.QueryContext(ctx, pendingRequestLogSource+`SELECT e.account_id,e.api_key_id,e.model,
- e.reasoning_effort,e.status FROM pending_log_entries e WHERE `+where, args...)
+	// A pending group present in the filter counts once: facets report
+	// presence, and event counts are never negative.
+	groups, err := pendingLogGroups(ctx, r.tx, filter)
 	if err != nil {
 		return options, err
 	}
-	for rows.Next() {
-		var account, key, effort sql.NullString
-		var model, status string
-		if err := rows.Scan(&account, &key, &model, &effort, &status); err != nil {
-			rows.Close()
-			return options, err
-		}
-		facets.add(rawReportDimension(account), rawReportDimension(key), model, rawReportDimension(effort), status, 1)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return options, err
+	for _, group := range groups {
+		facets.add(rawReportDimension(group.account), rawReportDimension(group.key), group.model, "\x1f", pendingLogStatus, 1)
 	}
 	for account, n := range facets.accounts {
 		if id := decodeRollupDim(account); n > 0 && id.Valid {
@@ -204,18 +194,15 @@ func (r *rollupRead) requestLogOptions(ctx context.Context, filter domain.Reques
 				ReasoningEffort: optionalString(decodeRollupDim(option[1]))})
 		}
 	}
-	sort.Slice(options.ModelOptions, func(i, j int) bool {
-		a, b := options.ModelOptions[i], options.ModelOptions[j]
-		if a.Model != b.Model {
-			return a.Model < b.Model
-		}
-		if a.ReasoningEffort == nil || b.ReasoningEffort == nil {
-			return a.ReasoningEffort == nil && b.ReasoningEffort != nil
-		}
-		return *a.ReasoningEffort < *b.ReasoningEffort
-	})
+	slices.SortFunc(options.ModelOptions, compareRequestLogModelOptions)
 	options.ModelOptions = options.ModelOptions[:min(len(options.ModelOptions), 2000)]
-	if options.APIKeys, err = r.requestLogKeyOptions(ctx, facets.keys); err != nil {
+	keys := map[string]bool{}
+	for key, n := range facets.keys {
+		if id := decodeRollupDim(key); n > 0 && id.Valid {
+			keys[id.String] = true
+		}
+	}
+	if options.APIKeys, err = requestLogKeyOptions(ctx, r.tx, keys); err != nil {
 		return options, err
 	}
 	for status, n := range facets.statuses {
@@ -230,18 +217,12 @@ func (r *rollupRead) requestLogOptions(ctx context.Context, filter domain.Reques
 
 // requestLogKeyOptions joins the present key ids with api_keys, ordered by
 // name and id.
-func (r *rollupRead) requestLogKeyOptions(ctx context.Context, keys map[string]int64) ([]domain.RequestLogAPIKeyOption, error) {
+func requestLogKeyOptions(ctx context.Context, q analyticsQuerier, present map[string]bool) ([]domain.RequestLogAPIKeyOption, error) {
 	options := []domain.RequestLogAPIKeyOption{}
-	present := map[string]bool{}
-	for key, n := range keys {
-		if id := decodeRollupDim(key); n > 0 && id.Valid {
-			present[id.String] = true
-		}
-	}
 	if len(present) == 0 {
 		return options, nil
 	}
-	rows, err := r.tx.QueryContext(ctx, `SELECT id,name,key_prefix FROM api_keys`)
+	rows, err := q.QueryContext(ctx, `SELECT id,name,key_prefix FROM api_keys`)
 	if err != nil {
 		return nil, err
 	}
@@ -260,26 +241,19 @@ func (r *rollupRead) requestLogKeyOptions(ctx context.Context, keys map[string]i
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.Slice(options, func(i, j int) bool {
-		if options[i].Name != options[j].Name {
-			return options[i].Name < options[j].Name
-		}
-		return options[i].ID < options[j].ID
-	})
+	slices.SortFunc(options, compareRequestLogKeyOptions)
 	return options[:min(len(options), 2000)], nil
 }
 
 // requestLogTotal is the rollup reader of the request-log total (design §5):
 // the state counters without filters, the log cube with them, plus the
 // pending entries; search and conversation filters stay raw.
-func (r *rollupRead) requestLogTotal(ctx context.Context, filter domain.RequestLogFilter) (int64, error) {
+func (r *rollupRead) requestLogTotal(ctx context.Context, pending *pendingLogReader, filter domain.RequestLogFilter) (int64, error) {
 	if !requestLogCubeEligible(filter) {
 		return 0, errRollupDeclined
 	}
-	where, args := requestLogWhere(filter)
-	var total int64
-	if err := r.tx.QueryRowContext(ctx, pendingRequestLogSource+`SELECT count(*) FROM pending_log_entries e WHERE `+where,
-		args...).Scan(&total); err != nil {
+	total, err := pending.count(ctx, filter)
+	if err != nil {
 		return 0, err
 	}
 	if requestLogUnfiltered(filter) {

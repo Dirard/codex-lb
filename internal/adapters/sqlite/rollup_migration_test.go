@@ -135,8 +135,8 @@ func TestUsageRollupMigrationIsAdditiveAndFastBesideAnOlderWriter(t *testing.T) 
 	if opened > time.Second {
 		t.Fatalf("migration of %d events took %s", events, opened)
 	}
-	t.Logf("migration 41->42 with %d events opened in %s", events, opened)
-	if state := readSchemaFingerprint(t, path); state.version != 42 || state.floor != 40 {
+	t.Logf("migration 41->%d with %d events opened in %s", SchemaVersion(), events, opened)
+	if state := readSchemaFingerprint(t, path); state.version != SchemaVersion() || state.floor != 40 {
 		t.Fatalf("migrated database records %+v", state)
 	}
 	var layout, folded, foldedRows, journal, rollups, total int64

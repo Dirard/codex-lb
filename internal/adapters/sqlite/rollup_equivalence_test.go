@@ -274,10 +274,14 @@ func rollupRequestLogCases(random *rand.Rand) []rollupReadCase {
 				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.requestLogOptions(ctx, options) },
 				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return requestLogOptionsRaw(ctx, tx, options) },
 			}, rollupReadCase{
-				name:   fmt.Sprintf("request-log total %d/%d", i, bounds),
-				raw:    !requestLogCubeEligible(filter),
-				rollup: func(ctx context.Context, r *rollupRead) (any, error) { return r.requestLogTotal(ctx, filter) },
-				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) { return requestLogTotalRaw(ctx, tx, filter) },
+				name: fmt.Sprintf("request-log total %d/%d", i, bounds),
+				raw:  !requestLogCubeEligible(filter),
+				rollup: func(ctx context.Context, r *rollupRead) (any, error) {
+					return r.requestLogTotal(ctx, newPendingLogReader(r.tx), filter)
+				},
+				oracle: func(ctx context.Context, tx *sql.Tx) (any, error) {
+					return requestLogTotalRaw(ctx, tx, newPendingLogReader(tx), filter)
+				},
 			})
 		}
 	}
