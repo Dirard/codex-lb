@@ -154,6 +154,13 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
 
   it("serves the key page to the administrator and, redacted, to the key owner", async () => {
     const created = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "contract key page" }));
+    for (const route of [`/api/api-keys/${created.id}/page`, `/api/api-keys/${created.id}/requests`]) {
+      const anonymous = await fetch(base + route, { signal: AbortSignal.timeout(4_000) });
+      expect(anonymous.status, route).toBe(401);
+      const signedIn = await fetch(base + route, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+      expect(signedIn.status, route).toBe(200);
+      expect(signedIn.headers.get("server-timing"), route).toMatch(/^app;dur=\d+(\.\d)?$/);
+    }
     const admin = KeyPageResponseSchema.parse(await request(`/api/api-keys/${created.id}/page?timezone=Europe/Prague`));
     expect(admin).toMatchObject({ scope: "admin", key: { id: created.id, status: "active" }, period: { days: 7, includesToday: true } });
     expect(admin.shell).toBeDefined();
@@ -168,6 +175,9 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     const page = await owner("/api/key-reports/page?timezone=UTC");
     expect(page.status).toBe(200);
     expect(page.headers.get("cache-control")).toBe("no-store");
+    expect(page.headers.get("vary") ?? "").toContain("Cookie");
+    expect(page.headers.get("content-encoding")).toBe("gzip");
+    expect(page.headers.get("server-timing")).toMatch(/^app;dur=\d+(\.\d)?$/);
     const body = await page.json();
     expect(KeyPageResponseSchema.parse(body)).toMatchObject({ scope: "owner", key: { id: created.id } });
     for (const field of ["shell", "byAccount", "lifetime"]) expect(body).not.toHaveProperty(field);
