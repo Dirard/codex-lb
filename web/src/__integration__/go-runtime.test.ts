@@ -21,6 +21,9 @@ import { ModelPriceDeleteSchema, ModelPriceSaveSchema, ModelPricesSchema } from 
 import { ConversationArchiveFileSchema, ConversationArchiveRecordsResponseSchema } from "@/features/conversation-archive/schemas";
 import { StickySessionsDeleteResponseSchema, StickySessionsListResponseSchema } from "@/features/sticky-sessions/schemas";
 import { KeyReportsSchema } from "@/features/key-reports/api";
+import { ShellStatusSchema } from "@/components/layout/shell-status";
+import { OverviewResponseSchema } from "@/features/overview/schemas";
+import { DirectorySchema } from "@/features/search/api";
 
 // Exercise the dashboard's real parsers against a freshly built binary rather
 // than teaching mocks the same contract mistake as the server. No ChatGPT
@@ -118,6 +121,34 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     RequestLogsResponseSchema.parse(await request("/api/request-logs"));
     ConversationsResponseSchema.parse(await request("/api/conversations"));
     ReportsResponseSchema.parse(await request("/api/reports"));
+    const shell = ShellStatusSchema.parse(await request("/api/dashboard/status"));
+    expect(shell).toMatchObject({ ready: true, lastSyncAt: null, reauthRequiredAccounts: 0 });
+    const overview = OverviewResponseSchema.parse(await request("/api/overview?timezone=Europe/Prague"));
+    expect(overview.timezone).toBe("Europe/Prague");
+    expect(overview.groups.map((row) => row.id)).toEqual([null]);
+    DirectorySchema.parse(await request("/api/directory"));
+    RequestLogsResponseSchema.parse(await request("/api/request-logs?timeframe=30d"));
+    ConversationsResponseSchema.parse(await request("/api/conversations?timeframe=1h"));
+    ConversationsResponseSchema.parse(await request("/api/conversations?timeframe=24h"));
+  });
+
+  it("serves the overview pages only to an administrator, with Server-Timing", async () => {
+    for (const route of ["/api/overview", "/api/directory", "/api/dashboard/status"]) {
+      const anonymous = await fetch(base + route, { signal: AbortSignal.timeout(4_000) });
+      expect(anonymous.status, route).toBe(401);
+      const signedIn = await fetch(base + route, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+      expect(signedIn.status, route).toBe(200);
+      expect(signedIn.headers.get("server-timing"), route).toMatch(/^app;dur=\d+(\.\d)?$/);
+    }
+    const unknownZone = await fetch(`${base}/api/overview?timezone=Mars/Olympus`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4_000) });
+    expect(unknownZone.status).toBe(400);
+    const created = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "contract single key" }));
+    const one = ApiKeySchema.parse(await request(`/api/api-keys/${created.id}`));
+    expect(one.id).toBe(created.id);
+    const directory = DirectorySchema.parse(await request("/api/directory"));
+    expect(directory.keys.find((key) => key.id === created.id)).toMatchObject({ status: "active", prefix: created.keyPrefix });
+    await request(`/api/api-keys/${created.id}`, "DELETE");
+    expect(DirectorySchema.parse(await request("/api/directory")).keys.some((key) => key.id === created.id)).toBe(false);
   });
 
   it("saves real UI setting patches without materializing unrelated defaults", async () => {

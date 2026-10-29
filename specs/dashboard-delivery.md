@@ -135,6 +135,8 @@ Tests:
    requirements: R9, R10
 
 ### 4. Poll only what the visible surface needs
+
+> Outdated (2026-10-29): replaced by use case 1 of [`dashboard-redesign.md`](dashboard-redesign.md) (PR 2). The status bar no longer polls `/health/ready` or the dashboard status on its own: every page issues at most one periodic request, and the shell status travels in the page poll or in a 60 s `GET /api/dashboard/status` poll on pages without one. Projections are part of `GET /api/overview`.
 open dashboard surface --status bar reads GET /api/dashboard/status every 60 s--> cheap lastSyncAt --refetch projections only when lastSyncAt changes or 5 minutes elapse--> bounded report load
 
 Requirements:

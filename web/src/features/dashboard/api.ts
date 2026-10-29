@@ -26,14 +26,14 @@ export type RequestLogsListFilters = {
   apiKeyIds?: string[];
   statuses?: string[];
   modelOptions?: string[];
-  timeframe?: Exclude<RequestLogTimeframe, "all">;
+  timeframe?: RequestLogTimeframe;
   since?: string;
   until?: string;
   conversationId?: string;
 };
 
 export type RequestLogFacetFilters = {
-  timeframe?: Exclude<RequestLogTimeframe, "all">;
+  timeframe?: RequestLogTimeframe;
   since?: string;
   until?: string;
   accountIds?: string[];

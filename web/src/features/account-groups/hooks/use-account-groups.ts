@@ -14,10 +14,12 @@ import type {
   AccountGroupCreateRequest,
   AccountGroupUpdateRequest,
 } from "@/features/account-groups/schemas";
+import { invalidateEntityViews } from "@/lib/invalidate-entity-views";
 
 function invalidateGroupQueries(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ["account-groups", "list"] });
   void queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
+  void invalidateEntityViews(queryClient);
 }
 
 export function useAccountGroups() {

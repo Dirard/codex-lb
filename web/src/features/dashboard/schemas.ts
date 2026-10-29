@@ -17,14 +17,22 @@ export function parseOverviewTimeframe(value: string | null | undefined): Overvi
   return parsed.success ? parsed.data : DEFAULT_OVERVIEW_TIMEFRAME;
 }
 
-const ConversationTimeframeKeySchema = z.enum(["1d", "7d", "30d"]);
-export type ConversationTimeframe = z.infer<typeof ConversationTimeframeKeySchema>;
-export const DEFAULT_CONVERSATION_TIMEFRAME: ConversationTimeframe = "7d";
+/** The Requests page's one period picker, shared by the request log and the
+ * conversation list; both endpoints accept these symbolic timeframes. */
+export const REQUESTS_TIMEFRAMES = ["1h", "24h", "7d", "30d"] as const;
+const RequestsTimeframeSchema = z.enum(REQUESTS_TIMEFRAMES);
+export type RequestsTimeframe = z.infer<typeof RequestsTimeframeSchema>;
+export const DEFAULT_REQUESTS_TIMEFRAME: RequestsTimeframe = "24h";
 
-export function parseConversationTimeframe(value: string | null | undefined): ConversationTimeframe {
-  const parsed = ConversationTimeframeKeySchema.safeParse(value);
-  return parsed.success ? parsed.data : DEFAULT_CONVERSATION_TIMEFRAME;
+export function parseRequestsTimeframe(value: string | null | undefined): RequestsTimeframe {
+  const parsed = RequestsTimeframeSchema.safeParse(value);
+  return parsed.success ? parsed.data : DEFAULT_REQUESTS_TIMEFRAME;
 }
+
+const ConversationTimeframeKeySchema = RequestsTimeframeSchema;
+export type ConversationTimeframe = RequestsTimeframe;
+export const DEFAULT_CONVERSATION_TIMEFRAME: ConversationTimeframe = DEFAULT_REQUESTS_TIMEFRAME;
+export const parseConversationTimeframe = parseRequestsTimeframe;
 
 const UsageHistoryItemSchema = z.object({
   accountId: z.string(),
@@ -258,8 +266,8 @@ export const RequestLogFilterOptionsSchema = z.object({
   statuses: z.array(z.string()),
 });
 
-const RequestLogTimeframeSchema = z.enum(["all", "1h", "24h", "7d"]);
-export type RequestLogTimeframe = z.infer<typeof RequestLogTimeframeSchema>;
+const RequestLogTimeframeSchema = RequestsTimeframeSchema;
+export type RequestLogTimeframe = RequestsTimeframe;
 
 export const FilterStateSchema = z.object({
   search: z.string(),

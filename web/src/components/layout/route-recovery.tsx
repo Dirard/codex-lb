@@ -69,7 +69,7 @@ export function NotFoundPage() {
     <RecoverySurface
       actions={
         <Button asChild className="press-scale">
-          <Link data-testid="route-dashboard-link" to="/dashboard">
+          <Link data-testid="route-dashboard-link" to="/overview">
             <ArrowLeft aria-hidden="true" />
             {t("routeRecovery.goToDashboard")}
           </Link>
@@ -88,7 +88,7 @@ export function RouteLoadError() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
   const isDashboardPath =
-    decodePathname(pathname).replace(/\/+$/, "").toLowerCase() === "/dashboard";
+    decodePathname(pathname).replace(/\/+$/, "").toLowerCase() === "/overview";
   const dashboardLabel = (
     <>
       <ArrowLeft aria-hidden="true" />
@@ -111,11 +111,11 @@ export function RouteLoadError() {
           </Button>
           <Button asChild className="press-scale" variant="outline">
             {isDashboardPath ? (
-              <a data-testid="route-dashboard-link" href="/dashboard">
+              <a data-testid="route-dashboard-link" href="/overview">
                 {dashboardLabel}
               </a>
             ) : (
-              <Link data-testid="route-dashboard-link" to="/dashboard">
+              <Link data-testid="route-dashboard-link" to="/overview">
                 {dashboardLabel}
               </Link>
             )}

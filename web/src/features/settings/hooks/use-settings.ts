@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ApiError } from "@/lib/api-client";
 import { getSettings, updateSettings } from "@/features/settings/api";
 import type { SettingsUpdateRequest } from "@/features/settings/schemas";
+import { invalidateEntityViews } from "@/lib/invalidate-entity-views";
 
 export function useSettings() {
   const { t } = useTranslation();
@@ -21,6 +22,7 @@ export function useSettings() {
     onSuccess: () => {
       toast.success(t("settings.toasts.saved"));
       void queryClient.invalidateQueries({ queryKey: ["settings", "detail"] });
+      void invalidateEntityViews(queryClient);
     },
     onError: (error: Error) => {
       toast.error(error.message || t("settings.toasts.saveFailed"));

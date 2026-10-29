@@ -37,18 +37,18 @@ function SameUrlFailure(): never {
   throw new Error("Same URL route failed");
 }
 
-vi.mock("@/features/dashboard/components/dashboard-page", async (importOriginal) => {
+vi.mock("@/features/overview/components/overview-page", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/features/dashboard/components/dashboard-page")>();
-  const DashboardPage = actual.DashboardPage;
+    await importOriginal<typeof import("@/features/overview/components/overview-page")>();
+  const OverviewPage = actual.OverviewPage;
 
   return {
     ...actual,
-    DashboardPage() {
+    OverviewPage() {
       if (dashboardMockState.failed) {
-        throw new Error("Dashboard route render failed");
+        throw new Error("Overview route render failed");
       }
-      return <DashboardPage />;
+      return <OverviewPage />;
     },
   };
 });
@@ -98,7 +98,7 @@ describe("route recovery flow integration", () => {
     expect(dashboardLink).toHaveFocus();
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    await waitFor(() => expect(window.location.pathname).toBe("/overview"));
     expect(screen.queryByTestId("route-not-found")).not.toBeInTheDocument();
   });
 
@@ -118,12 +118,12 @@ describe("route recovery flow integration", () => {
     const retry = within(recovery).getByTestId("route-retry");
     const dashboardLink = within(recovery).getByTestId("route-dashboard-link");
     expect(retry).toBeEnabled();
-    expect(dashboardLink).toHaveAttribute("href", "/dashboard");
+    expect(dashboardLink).toHaveAttribute("href", "/overview");
     await user.tab();
     expect(retry).toHaveFocus();
     await user.click(dashboardLink);
 
-    await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    await waitFor(() => expect(window.location.pathname).toBe("/overview"));
     expect(screen.queryByTestId("route-load-error")).not.toBeInTheDocument();
   });
 
@@ -142,9 +142,9 @@ describe("route recovery flow integration", () => {
     expect(screen.queryByTestId("route-load-error")).not.toBeInTheDocument();
   });
 
-  it("preserves dashboard search input across healthy same-path URL updates", async () => {
+  it("preserves requests search input across healthy same-path URL updates", async () => {
     const user = userEvent.setup({ delay: null });
-    window.history.pushState({}, "", "/dashboard");
+    window.history.pushState({}, "", "/requests");
 
     renderWithProviders(<App />);
     const search = await screen.findByRole("textbox");
@@ -157,7 +157,7 @@ describe("route recovery flow integration", () => {
     expect(screen.queryByTestId("route-load-error")).not.toBeInTheDocument();
   });
 
-  it.each(["/dashboard", "/dashboard/", "/Dashboard", "/%64ashboard"])(
+  it.each(["/overview", "/overview/", "/Overview", "/%6Fverview"])(
     "offers a document reload when the failed route is %s",
     async (pathname) => {
     dashboardMockState.failed = true;
@@ -166,23 +166,23 @@ describe("route recovery flow integration", () => {
     renderWithProviders(<App />);
     const recovery = await screen.findByTestId("route-load-error");
     const dashboardLink = within(recovery).getByRole("link", {
-      name: "Go to Dashboard",
+      name: "Go to Overview",
     });
 
-    expect(dashboardLink).toHaveAttribute("href", "/dashboard");
+    expect(dashboardLink).toHaveAttribute("href", "/overview");
     expect(dashboardLink).not.toHaveAttribute("data-discover");
     },
   );
 
-  it.each(["/dashboard%2F", "/%64ashboard%2F"])(
-    "does not treat encoded segment separators as Dashboard at %s",
+  it.each(["/overview%2F", "/%6Fverview%2F"])(
+    "does not treat encoded segment separators as Overview at %s",
     async (pathname) => {
       window.history.pushState({}, "", pathname);
 
       renderWithProviders(<RouteLoadError />);
       const recovery = await screen.findByTestId("route-load-error");
       const dashboardLink = within(recovery).getByRole("link", {
-        name: "Go to Dashboard",
+        name: "Go to Overview",
       });
 
       expect(dashboardLink).toHaveAttribute("data-discover", "true");

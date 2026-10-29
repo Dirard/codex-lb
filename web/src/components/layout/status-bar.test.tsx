@@ -1,19 +1,21 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { StatusBar, type StatusBarProps } from "@/components/layout/status-bar";
 import i18n from "@/i18n";
-import {
-  createDashboardStatus,
-  createDashboardSettings,
-} from "@/test/mocks/factories";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
 import { formatTimeLong } from "@/utils/formatters";
 import { server } from "@/test/mocks/server";
+import { createShellStatus } from "@/test/mocks/overview-factories";
 
-function renderStatusBar(props: StatusBarProps = {}) {
+function mockShell(overrides: Parameters<typeof createShellStatus>[0] = {}) {
+  server.use(http.get("/api/dashboard/status", () => HttpResponse.json(createShellStatus(overrides))));
+}
+
+function renderStatusBar(props: StatusBarProps = {}, path = "/settings") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -24,31 +26,18 @@ function renderStatusBar(props: StatusBarProps = {}) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <StatusBar {...props} />
+      <MemoryRouter initialEntries={[path]}>
+        <StatusBar {...props} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-function mockSettings(
-  overrides: Parameters<typeof createDashboardSettings>[0] = {},
-) {
-  server.use(
-    http.get("/api/settings", () => HttpResponse.json(createDashboardSettings(overrides))),
-  );
-}
+const mockSettings = mockShell;
 
 describe("StatusBar", () => {
   it("shows ready service independently from stale usage", async () => {
-    server.use(
-      http.get("/health/ready", () => HttpResponse.json({ status: "ok" })),
-      http.get("/api/dashboard/status", () =>
-        HttpResponse.json(
-          createDashboardStatus({
-            lastSyncAt: new Date(Date.now() - 120_000).toISOString(),
-          }),
-        ),
-      ),
-    );
+    mockShell({ ready: true, lastSyncAt: new Date(Date.now() - 120_000).toISOString() });
 
     renderStatusBar();
 
@@ -56,38 +45,44 @@ describe("StatusBar", () => {
     expect(await screen.findByText("Stale")).toBeInTheDocument();
   });
 
-  it("reads usage sync from the status endpoint, never from the overview", async () => {
-    let overviewRequests = 0;
-    server.use(
-      http.get("/health/ready", () => HttpResponse.json({ status: "ok" })),
-      http.get("/api/dashboard/overview", () => {
-        overviewRequests += 1;
-        return HttpResponse.json({}, { status: 500 });
-      }),
-      http.get("/api/dashboard/status", () =>
-        HttpResponse.json(createDashboardStatus({ lastSyncAt: new Date().toISOString() })),
-      ),
-    );
+  it("reads the shell status, never the readiness probe, the settings or a page endpoint", async () => {
+    const requests: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      requests.push(new URL(request.url).pathname);
+    });
+    mockShell({ lastSyncAt: new Date().toISOString() });
 
     renderStatusBar();
 
     expect(await screen.findByText("Synced")).toBeInTheDocument();
-    expect(overviewRequests).toBe(0);
+    server.events.removeAllListeners("request:start");
+    expect(requests).toContain("/api/dashboard/status");
+    expect(requests).not.toContain("/health/ready");
+    expect(requests).not.toContain("/api/settings");
+    expect(requests).not.toContain("/api/dashboard/overview");
+    expect(requests).not.toContain("/api/accounts");
+  });
+
+  it("does not request the status on a page whose poll carries it", async () => {
+    let statusRequests = 0;
+    server.use(
+      http.get("/api/dashboard/status", () => {
+        statusRequests += 1;
+        return HttpResponse.json(createShellStatus());
+      }),
+    );
+
+    renderStatusBar({}, "/overview");
+
+    expect(await screen.findByText("Checking")).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(statusRequests).toBe(0);
   });
 
   it("shows fresh usage independently from an unready service", async () => {
-    server.use(
-      http.get("/health/ready", () =>
-        HttpResponse.json({ detail: "Service unavailable" }, { status: 503 }),
-      ),
-      http.get("/api/dashboard/status", () =>
-        HttpResponse.json(
-          createDashboardStatus({
-            lastSyncAt: new Date().toISOString(),
-          }),
-        ),
-      ),
-    );
+    mockShell({ ready: false, lastSyncAt: new Date().toISOString() });
 
     renderStatusBar();
 
@@ -95,14 +90,17 @@ describe("StatusBar", () => {
     expect(await screen.findByText("Synced")).toBeInTheDocument();
   });
 
+  it("shows the fold state of the usage rollups", async () => {
+    mockShell({ rollupsUsable: false });
+
+    renderStatusBar();
+
+    expect(await screen.findByText("catching up")).toBeInTheDocument();
+  });
+
   it("updates the last sync clock when the date format changes", async () => {
     const lastSyncAt = "2026-08-09T14:30:45.000Z";
-    server.use(
-      http.get("/health/ready", () => HttpResponse.json({ status: "ok" })),
-      http.get("/api/dashboard/status", () =>
-        HttpResponse.json(createDashboardStatus({ lastSyncAt })),
-      ),
-    );
+    mockShell({ lastSyncAt });
     useDateDisplayFormatStore.setState({ dateDisplayFormat: "default" });
 
     renderStatusBar();
@@ -120,34 +118,27 @@ describe("StatusBar", () => {
     expect(footer).toHaveTextContent(isoTime);
   });
 
-  it("shows checking while readiness is pending without blocking usage status", async () => {
-    let resolveReadiness!: () => void;
-    const pendingReadiness = new Promise<void>((resolve) => {
-      resolveReadiness = resolve;
+  it("shows checking while the shell status is pending", async () => {
+    let resolveStatus!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      resolveStatus = resolve;
     });
     server.use(
-      http.get("/health/ready", async () => {
-        await pendingReadiness;
-        return HttpResponse.json({ status: "ok" });
+      http.get("/api/dashboard/status", async () => {
+        await pending;
+        return HttpResponse.json(createShellStatus({ lastSyncAt: new Date().toISOString() }));
       }),
-      http.get("/api/dashboard/status", () =>
-        HttpResponse.json(
-          createDashboardStatus({
-            lastSyncAt: new Date().toISOString(),
-          }),
-        ),
-      ),
     );
 
     renderStatusBar();
 
-    expect(await screen.findByText("Synced")).toBeInTheDocument();
-    expect(screen.getByText("Checking")).toBeInTheDocument();
+    expect(await screen.findByText("Checking")).toBeInTheDocument();
 
     await act(async () => {
-      resolveReadiness();
+      resolveStatus();
     });
     expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(await screen.findByText("Synced")).toBeInTheDocument();
   });
 
   it("reports its resized height so wrapped rows remain clear of page content", () => {

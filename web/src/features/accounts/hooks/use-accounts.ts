@@ -25,12 +25,14 @@ import type {
   AccountRoutingPolicy,
   AccountUsageResetConsumeResponse,
 } from "@/features/accounts/schemas";
+import { invalidateEntityViews } from "@/lib/invalidate-entity-views";
 
 async function invalidateAccountRelatedQueries(queryClient: ReturnType<typeof useQueryClient>, accountId?: string) {
   const invalidations = [
     queryClient.invalidateQueries({ queryKey: ["accounts", "list"] }),
     queryClient.invalidateQueries({ queryKey: ["dashboard", "overview"] }),
     queryClient.invalidateQueries({ queryKey: ["dashboard", "projections"] }),
+    invalidateEntityViews(queryClient),
   ];
   if (accountId) {
     invalidations.push(queryClient.invalidateQueries({ queryKey: ["accounts", "trends", accountId] }));

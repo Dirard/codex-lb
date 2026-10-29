@@ -16,6 +16,11 @@ export function listApiKeys() {
   return get(`${API_KEYS_BASE_PATH}/`, ApiKeyListSchema);
 }
 
+/** One key, for edit dialogs opened outside the keys list. */
+export function getApiKey(keyId: string) {
+  return get(`${API_KEYS_BASE_PATH}/${encodeURIComponent(keyId)}`, ApiKeySchema);
+}
+
 export function createApiKey(payload: unknown) {
   const validated = ApiKeyCreateRequestSchema.parse(payload);
   return post(`${API_KEYS_BASE_PATH}/`, ApiKeyCreateResponseSchema, {

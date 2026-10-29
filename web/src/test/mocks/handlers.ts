@@ -43,6 +43,7 @@ import {
   type ModelSource,
   type RequestLogEntry,
 } from "@/test/mocks/factories";
+import { createDirectory, createOverview, createShellStatus } from "@/test/mocks/overview-factories";
 
 const MODEL_OPTION_DELIMITER = ":::";
 const STATUS_ORDER = ["ok", "cancelled", "rate_limit", "quota", "error"] as const;
@@ -799,7 +800,15 @@ export const handlers = [
   }),
 
   http.get("/api/dashboard/status", () => {
-    return HttpResponse.json(createDashboardStatus());
+    return HttpResponse.json(createShellStatus({ lastSyncAt: createDashboardStatus().lastSyncAt }));
+  }),
+
+  http.get("/api/overview", () => {
+    return HttpResponse.json(createOverview());
+  }),
+
+  http.get("/api/directory", () => {
+    return HttpResponse.json(createDirectory(state.accounts, state.apiKeys, state.accountGroups));
   }),
 
   http.get("/api/dashboard/projections", () => {
@@ -1965,6 +1974,14 @@ export const handlers = [
 
   http.get("/api/api-keys/", () => {
     return HttpResponse.json(state.apiKeys);
+  }),
+
+  http.get("/api/api-keys/:keyId", ({ params }) => {
+    const apiKey = findApiKey(String(params.keyId));
+    if (!apiKey) {
+      return HttpResponse.json({ error: { code: "not_found", message: "API key not found" } }, { status: 404 });
+    }
+    return HttpResponse.json(apiKey);
   }),
 
   http.post("/api/api-keys/", async ({ request }) => {

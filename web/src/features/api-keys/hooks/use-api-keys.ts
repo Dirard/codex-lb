@@ -13,6 +13,7 @@ import type {
   ApiKeyCreateRequest,
   ApiKeyUpdateRequest,
 } from "@/features/api-keys/schemas";
+import { invalidateEntityViews } from "@/lib/invalidate-entity-views";
 
 export function useApiKeys() {
   const { t } = useTranslation();
@@ -29,6 +30,7 @@ export function useApiKeys() {
     onSuccess: () => {
       toast.success(t("apiKeys.toasts.created"));
       void queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
+      void invalidateEntityViews(queryClient);
     },
     onError: (error: Error) => {
       toast.error(error.message || t("apiKeys.toasts.createFailed"));
@@ -41,6 +43,7 @@ export function useApiKeys() {
     onSuccess: () => {
       toast.success(t("apiKeys.toasts.updated"));
       void queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
+      void invalidateEntityViews(queryClient);
     },
     onError: (error: Error) => {
       toast.error(error.message || t("apiKeys.toasts.updateFailed"));
@@ -52,6 +55,7 @@ export function useApiKeys() {
     onSuccess: () => {
       toast.success(t("apiKeys.toasts.deleted"));
       void queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
+      void invalidateEntityViews(queryClient);
     },
     onError: (error: Error) => {
       toast.error(error.message || t("apiKeys.toasts.deleteFailed"));
@@ -63,6 +67,7 @@ export function useApiKeys() {
     onSuccess: () => {
       toast.success(t("apiKeys.toasts.regenerated"));
       void queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
+      void invalidateEntityViews(queryClient);
     },
     onError: (error: Error) => {
       toast.error(error.message || t("apiKeys.toasts.regenerateFailed"));

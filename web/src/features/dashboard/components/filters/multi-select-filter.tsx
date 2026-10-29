@@ -30,9 +30,11 @@ export type MultiSelectFilterProps = {
   values: string[];
   options: MultiSelectOption[];
   onChange: (values: string[]) => void;
+  /** Called when the dropdown opens or closes, for options loaded on demand. */
+  onOpenChange?: (open: boolean) => void;
 };
 
-export function MultiSelectFilter({ label, values, options, onChange }: MultiSelectFilterProps) {
+export function MultiSelectFilter({ label, values, options, onChange, onOpenChange }: MultiSelectFilterProps) {
   const { t } = useTranslation();
   const blurred = usePrivacyStore((s) => s.blurred);
   const renderedOptions = useMemo<RenderedOption[]>(() => {
@@ -77,7 +79,7 @@ export function MultiSelectFilter({ label, values, options, onChange }: MultiSel
         : `${label} (${values.length})`;
 
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <Button type="button" variant="outline" size="sm" className="min-w-[7rem] justify-between gap-1.5">
           {summary}

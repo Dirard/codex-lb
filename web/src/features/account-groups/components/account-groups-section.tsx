@@ -1,5 +1,7 @@
 import { Pencil, Plus, RotateCcw, Trash2, Users } from "lucide-react";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 
 import { AlertMessage } from "@/components/alert-message";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -46,6 +48,15 @@ export function AccountGroupsSection({ disabled = false }: AccountGroupsSectionP
   const deleteDialog = useDialogState<AccountGroup>();
   const resetDialog = useDialogState<AccountGroup>();
   const groups = groupsQuery.data ?? [];
+  // The Groups navigation entry opens this section until the Groups page
+  // exists: scroll to it once the groups are listed.
+  const { hash } = useLocation();
+  const listed = groupsQuery.isSuccess;
+  useEffect(() => {
+    if (hash === "#account-groups" && listed) {
+      document.getElementById("account-groups")?.scrollIntoView?.({ block: "start" });
+    }
+  }, [hash, listed]);
   const busy =
     disabled ||
     groupsQuery.isFetching ||
@@ -68,7 +79,7 @@ export function AccountGroupsSection({ disabled = false }: AccountGroupsSectionP
   };
 
   return (
-    <section className="space-y-4 rounded-xl border bg-card p-5">
+    <section id="account-groups" className="scroll-mt-20 space-y-4 rounded-xl border bg-card p-5">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">

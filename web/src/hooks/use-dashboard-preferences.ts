@@ -1,6 +1,16 @@
 import { create } from "zustand";
 
-import type { AccountListSort, AccountListSortKey } from "@/features/dashboard/components/account-list";
+// The dashboard account list was replaced by the overview; its stored sort
+// preference is kept readable until the Accounts table (PR 4) reuses it.
+export type AccountListSortKey =
+  | "account"
+  | "status"
+  | "plan"
+  | "quota"
+  | "subscriptionCredits"
+  | "purchasedCredits"
+  | "warmup";
+export type AccountListSort = { key: AccountListSortKey; direction: "asc" | "desc" } | null;
 
 const ACCOUNT_BURNRATE_STORAGE_KEY = "codex-lb-account-burnrate-enabled";
 const ACCOUNT_VIEW_MODE_STORAGE_KEY = "codex-lb-dashboard-account-view-mode";

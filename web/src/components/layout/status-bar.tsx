@@ -4,16 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
-import { getDashboardStatus } from "@/features/dashboard/api";
-import { getServiceReadiness } from "@/features/health/api";
+import { useShellStatus } from "@/components/layout/use-shell-status";
 import { getRuntimeVersion } from "@/features/runtime/api";
-import { getSettings } from "@/features/settings/api";
 import { useDateDisplayFormatStore } from "@/hooks/use-date-format";
-import { formatTimeLong } from "@/utils/formatters";
+import { formatAgo, formatTimeLong } from "@/utils/formatters";
 
 // The repository that publishes the releases this runtime updates from.
 const GITHUB_REPOSITORY_URL = "https://github.com/Dirard/codex-lb";
-const STATUS_REFRESH_INTERVAL_MS = 60_000;
 const USAGE_FRESHNESS_THRESHOLD_MS = 60_000;
 export const STATUS_BAR_DEFAULT_HEIGHT_PX = 40;
 
@@ -92,27 +89,11 @@ function getRoutingLabel(
 export function StatusBar({ onHeightChange }: StatusBarProps = {}) {
   const { t } = useTranslation();
   const footerRef = useRef<HTMLElement>(null);
-  const readinessQuery = useQuery({
-    queryKey: ["health", "ready"],
-    queryFn: getServiceReadiness,
-    refetchInterval: STATUS_REFRESH_INTERVAL_MS,
-    refetchIntervalInBackground: false,
-    retry: false,
-  });
-  // A dedicated lightweight read: the full overview aggregates traffic and
-  // per-account usage, which the status bar does not display.
-  const { data: lastSyncAt = null } = useQuery({
-    queryKey: ["dashboard", "status"],
-    queryFn: getDashboardStatus,
-    refetchInterval: STATUS_REFRESH_INTERVAL_MS,
-    refetchIntervalInBackground: false,
-    select: (data) => data.lastSyncAt,
-  });
-
-  const { data: settings } = useQuery({
-    queryKey: ["settings", "detail"],
-    queryFn: getSettings,
-  });
+  // The shell status comes from the page's own poll, or from a 60 s status
+  // poll on pages without one; the status bar never polls by itself.
+  const shellQuery = useShellStatus();
+  const shell = shellQuery.data;
+  const lastSyncAt = shell?.lastSyncAt ?? null;
   const { data: runtimeVersion } = useQuery({
     queryKey: ["runtime", "version"],
     queryFn: getRuntimeVersion,
@@ -121,36 +102,39 @@ export function StatusBar({ onHeightChange }: StatusBarProps = {}) {
   });
   const dateDisplayFormat = useDateDisplayFormatStore((state) => state.dateDisplayFormat);
   const lastSync = formatTimeLong(lastSyncAt, dateDisplayFormat);
-  const [isUsageSynced, setIsUsageSynced] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    function check() {
-      setIsUsageSynced(
-        lastSyncAt
-          ? Date.now() - new Date(lastSyncAt).getTime() < USAGE_FRESHNESS_THRESHOLD_MS
-          : false,
-      );
-    }
-    check();
-    const id = setInterval(check, 10_000);
+    const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
-  }, [lastSyncAt]);
-  const serviceReadiness = readinessQuery.isPending
+  }, []);
+  const isUsageSynced = lastSyncAt ? now - new Date(lastSyncAt).getTime() < USAGE_FRESHNESS_THRESHOLD_MS : false;
+  const serviceReadiness = !shell && !shellQuery.isError
     ? "checking"
-    : !readinessQuery.isError && readinessQuery.data?.status === "ok"
+    : shell?.ready && !shellQuery.isError
       ? "ready"
       : "notReady";
   const serviceStatusLabel = t(`statusBar.${serviceReadiness}`);
   const usageStatusLabel = t(isUsageSynced ? "statusBar.synced" : "statusBar.stale");
+  const foldedAt = shell?.usageFoldedAt ?? null;
+  const foldedLabel = !shell
+    ? "—"
+    : !shell.rollupsUsable
+      ? t("statusBar.foldCatchingUp")
+      : foldedAt
+        ? formatAgo(now - new Date(foldedAt).getTime())
+        : t("statusBar.foldedNever");
+  const syncedAgo = lastSyncAt ? formatAgo(now - new Date(lastSyncAt).getTime()) : null;
 
-  const routingLabel = settings
+  const strategy = shell?.routingStrategy as RoutingStrategy | undefined;
+  const routingLabel = shell && strategy && strategy in ROUTING_STRATEGY_LABEL_KEYS
     ? getRoutingLabel(
         t,
-        settings.routingStrategy,
-        settings.stickyThreadsEnabled,
-        settings.preferEarlierResetAccounts,
-        settings.preferEarlierResetWindow,
+        strategy,
+        shell.stickyThreadsEnabled,
+        shell.preferEarlierResetAccounts,
+        shell.preferEarlierResetWindow === "secondary" ? "secondary" : "primary",
       )
-    : "—";
+    : shell?.routingStrategy || "—";
   const currentVersion = runtimeVersion?.currentVersion ?? __APP_VERSION__;
   const latestVersion = runtimeVersion?.latestVersion ?? null;
   const showUpdateAvailable = runtimeVersion?.updateAvailable === true && latestVersion;
@@ -203,7 +187,15 @@ export function StatusBar({ onHeightChange }: StatusBarProps = {}) {
               }`}
             />
             <span className="font-medium">{t("statusBar.usageSynced")}</span>{" "}
-            <span>{usageStatusLabel}</span> · {lastSync.time}
+            <span>{usageStatusLabel}</span> · <span title={lastSync.date}>{lastSync.time}</span>
+            {syncedAgo ? <span className="text-muted-foreground/80">({syncedAgo})</span> : null}
+          </span>
+          <span className="inline-flex items-center gap-1.5" data-testid="status-usage-folded">
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 rounded-full ${shell && shell.rollupsUsable ? "bg-emerald-500" : "bg-amber-500"}`}
+            />
+            <span className="font-medium">{t("statusBar.usageFolded")}</span> <span>{foldedLabel}</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
             <ArrowRightLeft className="h-3 w-3" aria-hidden="true" />
