@@ -174,7 +174,7 @@ func (s *ReportsService) DashboardOverview(ctx context.Context, key string, acco
 	if err != nil {
 		return overview, err
 	}
-	overview.WeeklyCreditPace, err = s.weeklyCreditPace(ctx, rows, accountQuotas, history, now)
+	overview.WeeklyCreditPace, err = s.weeklyCreditPace(ctx, rows, accountQuotas, history, now, true)
 	return overview, err
 }
 

@@ -47,7 +47,8 @@ func (s *ReportsService) DashboardProjections(ctx context.Context, accounts Acco
 			result.DepletionSecondary = worseDepletion(result.DepletionSecondary, quotaDepletion(windows[secondary.Window], now, 10080))
 		}
 	}
-	result.WeeklyCreditPace, err = s.weeklyCreditPace(ctx, allAccounts, accountQuotas, history, now)
+	// The pool runway card shows no key attribution (Groups page).
+	result.WeeklyCreditPace, err = s.weeklyCreditPace(ctx, allAccounts, accountQuotas, history, now, false)
 	return result, err
 }
 

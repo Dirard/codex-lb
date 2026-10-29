@@ -3,9 +3,12 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
 )
 
@@ -80,5 +83,59 @@ func TestWeeklyPaceTopKeysRanksBothMetricsAndExcludesSyntheticTraffic(t *testing
 	}
 	if rows[1].APIKeyID == nil || *rows[1].APIKeyID != "tokens" {
 		t.Fatal("high-token consumer omitted")
+	}
+}
+
+// The Groups page's pool runway card shows no key attribution, which grouped
+// every raw event of the last two hours (about 20 000 in production, most of
+// GET /api/dashboard/projections): the projections leave it empty and read
+// no usage events, while the deprecated overview keeps it.
+func TestProjectionsLeaveTheKeyAttributionToTheOverview(t *testing.T) {
+	ctx := context.Background()
+	s, counter := countingStore(t)
+	now := fixedTime
+	at := millis(now)
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2)
+INSERT INTO accounts(id,kind,provider,email,plan_type,status,created_at)
+SELECT printf('acct-%d',i),'chatgpt','openai',printf('a%d@example.invalid',i),'pro','active',? FROM n`, at)
+	exec(`INSERT INTO account_quotas(account_id,window,used_percent,reset_at,window_minutes,observed_at)
+SELECT id,'primary',10,?,300,? FROM accounts UNION ALL SELECT id,'secondary',20,?,10080,? FROM accounts`,
+		at+3600000, at, at+86400000, at)
+	exec(`WITH RECURSIVE m(j) AS (SELECT 0 UNION ALL SELECT j+1 FROM m WHERE j<83)
+INSERT INTO account_quota_history(account_id,window,observed_at,used_percent,reset_at,window_minutes)
+SELECT a.id,w.w,?-j*300000,(83-j)/8*1.0,CASE w.w WHEN 'primary' THEN ?+3600000 ELSE ?+86400000 END,
+ CASE w.w WHEN 'primary' THEN 300 ELSE 10080 END
+ FROM accounts a,(SELECT 'primary' AS w UNION ALL SELECT 'secondary') w,m`, at, at, at)
+	for i, key := range []string{"busy", "busy", "other"} {
+		exec(`INSERT INTO usage_events(request_id,api_key_id,model,request_kind,status,requested_at,input_tokens,cached_input_tokens)
+ VALUES(?,?,'model','normal','success',?,100,10)`, fmt.Sprintf("attr-%d", i), key, at-int64(i+1)*600000)
+	}
+	service := application.NewReportsService(s, func() time.Time { return now })
+	overview, err := service.DashboardOverview(ctx, "7d", s)
+	if err != nil || overview.WeeklyCreditPace == nil || len(overview.WeeklyCreditPace.TopAPIKeys) != 2 {
+		t.Fatalf("overview pace %+v: %v", overview.WeeklyCreditPace, err)
+	}
+	mark := counter.count()
+	projections, err := service.DashboardProjections(ctx, s)
+	if err != nil || projections.WeeklyCreditPace == nil {
+		t.Fatalf("projections pace %+v: %v", projections.WeeklyCreditPace, err)
+	}
+	if keys := projections.WeeklyCreditPace.TopAPIKeys; keys == nil || len(keys) != 0 {
+		t.Fatalf("projections key attribution %+v, want an empty list", keys)
+	}
+	for _, query := range counter.since(mark) {
+		if strings.Contains(query, "usage_events") {
+			t.Fatalf("projections read usage events:\n%s", query)
+		}
+	}
+	overview.WeeklyCreditPace.TopAPIKeys = projections.WeeklyCreditPace.TopAPIKeys
+	if !reflect.DeepEqual(overview.WeeklyCreditPace, projections.WeeklyCreditPace) {
+		t.Fatalf("the pace differs beyond the key attribution:\n overview    %+v\n projections %+v", overview.WeeklyCreditPace, projections.WeeklyCreditPace)
 	}
 }
