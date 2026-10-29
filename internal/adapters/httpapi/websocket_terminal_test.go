@@ -44,11 +44,11 @@ func TestWebSocketTurnReportsItsFirstTerminalWrite(t *testing.T) {
 	}()
 	var notified atomic.Int32
 	turn := &websocketTurn{connection: connection, lastWrite: time.Now(), onTerminal: func() { notified.Add(1) }}
-	if err := turn.write(ctx, []byte(`{"type":"response.created"}`), false); err != nil || notified.Load() != 0 {
+	if err := turn.write([]byte(`{"type":"response.created"}`), false); err != nil || notified.Load() != 0 {
 		t.Fatalf("a non-terminal frame reported the terminal: %v, %d", err, notified.Load())
 	}
 	for range 2 {
-		if err := turn.write(ctx, []byte(`{"type":"response.completed"}`), true); err != nil {
+		if err := turn.write([]byte(`{"type":"response.completed"}`), true); err != nil {
 			t.Fatal(err)
 		}
 	}
