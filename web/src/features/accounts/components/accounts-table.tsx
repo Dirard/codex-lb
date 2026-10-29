@@ -130,7 +130,7 @@ function ResetCreditsCell({ account }: { account: AccountSummary }) {
 }
 
 function Header({ children, className }: { children?: ReactNode; className?: string }) {
-  return <th className={cn("px-3 py-2 text-left font-medium whitespace-nowrap", className)}>{children}</th>;
+  return <th className={cn("px-2 py-2 text-left font-medium whitespace-nowrap", className)}>{children}</th>;
 }
 
 /**
@@ -161,7 +161,9 @@ export function AccountsTable({
   const dateDisplayFormat = useDateDisplayFormatStore((s) => s.dateDisplayFormat);
 
   return (
-    <div className="overflow-x-auto rounded-xl border bg-card" data-testid="accounts-table">
+    // relative: the screen-reader-only progress bars are absolutely positioned
+    // and would otherwise widen the page beyond the scroll container.
+    <div className="relative overflow-x-auto rounded-xl border bg-card" data-testid="accounts-table">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -176,7 +178,7 @@ export function AccountsTable({
             <Header className="text-right">{t("accounts.table.resetCredits")}</Header>
             <Header>{t("accounts.table.warmup")}</Header>
             <Header>{t("accounts.table.priority")}</Header>
-            <Header>
+            <Header className="sticky right-0 bg-card">
               <span className="sr-only">{t("accounts.table.actions")}</span>
             </Header>
           </tr>
@@ -203,7 +205,7 @@ export function AccountsTable({
                 )}
                 onClick={() => onOpen(account.accountId)}
               >
-                <td className="max-w-[16rem] px-3 py-2">
+                <td className="max-w-[16rem] px-2 py-2">
                   <button
                     type="button"
                     className="block max-w-full truncate text-left font-medium hover:underline"
@@ -224,7 +226,7 @@ export function AccountsTable({
                     </p>
                   ) : null}
                 </td>
-                <td className="px-3 py-2 whitespace-nowrap">
+                <td className="px-2 py-2 whitespace-nowrap">
                   <span className="flex items-center gap-1">
                     {formatSlug(account.planType || "—")}
                     {account.securityWorkAuthorized ? (
@@ -235,47 +237,47 @@ export function AccountsTable({
                     <SubscriptionRemaining activeUntil={account.subscriptionActiveUntil} displayFormat={dateDisplayFormat} />
                   </span>
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-2 py-2">
                   <StatusBadge status={normalizeStatus(account.status)} />
                   {reason ? <p className="mt-0.5 max-w-[10rem] text-[11px] text-muted-foreground">{reason}</p> : null}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-2 py-2">
                   {account.groups.length === 0 ? (
                     <span className="text-muted-foreground">—</span>
                   ) : (
                     <div className="flex max-w-[12rem] flex-wrap gap-1">
                       {account.groups.map((groupId) => (
-                        <span key={groupId} className="rounded-full border px-1.5 py-0.5 text-[11px]">
+                        <span key={groupId} className="whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[11px]">
                           {groupNames.get(groupId) ?? groupId}
                         </span>
                       ))}
                     </div>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-2 py-2">
                   <QuotaCell label="5h" percent={account.usage?.primaryRemainingPercent} resetAt={account.resetAtPrimary}
                     windowMinutes={account.windowMinutesPrimary} />
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-2 py-2">
                   <QuotaCell label="weekly" percent={account.usage?.secondaryRemainingPercent} resetAt={account.resetAtSecondary}
                     windowMinutes={account.windowMinutesSecondary} />
                 </td>
                 {showMonthly ? (
-                  <td className="px-3 py-2">
+                  <td className="px-2 py-2">
                     <QuotaCell label="monthly" percent={account.usage?.monthlyRemainingPercent} resetAt={account.resetAtMonthly}
                       windowMinutes={account.windowMinutesMonthly} />
                   </td>
                 ) : null}
-                <td className="px-3 py-2 text-right">
+                <td className="px-2 py-2 text-right">
                   <CreditsCell account={account} />
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td className="px-2 py-2 text-right">
                   <ResetCreditsCell account={account} />
                 </td>
-                <td className="px-3 py-2 text-xs whitespace-nowrap">
+                <td className="px-2 py-2 text-xs whitespace-nowrap">
                   {account.limitWarmupEnabled ? t("accounts.table.on") : <span className="text-muted-foreground">{t("accounts.table.off")}</span>}
                 </td>
-                <td className="px-3 py-2" onClick={stop}>
+                <td className="px-2 py-2" onClick={stop}>
                   {recovery ? (
                     <span className="text-muted-foreground">—</span>
                   ) : (
@@ -286,7 +288,7 @@ export function AccountsTable({
                     >
                       <SelectTrigger
                         size="sm"
-                        className="h-7 w-[7.5rem] min-w-0 text-xs"
+                        className="h-7 w-[7rem] min-w-0 text-xs"
                         aria-label={t("accounts.table.priorityAria", { label })}
                       >
                         <SelectValue />
@@ -299,7 +301,7 @@ export function AccountsTable({
                     </Select>
                   )}
                 </td>
-                <td className="px-3 py-2" onClick={stop}>
+                <td className="sticky right-0 bg-card px-2 py-2" onClick={stop}>
                   <div className="flex items-center justify-end gap-1">
                     {recovery ? (
                       <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" disabled={busy}
