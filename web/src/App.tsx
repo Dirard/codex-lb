@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 
 import { AppHeader } from "@/components/layout/app-header";
 import {
@@ -40,10 +40,26 @@ const ApisPage = lazy(() => import("@/features/apis/components/apis-page").then(
 const SettingsPage = lazy(() =>
   import("@/features/settings/components/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
-/** `/apis` became `/keys`; selections and filters in the query survive. */
+const KeyPage = lazy(() => import("@/features/key-page/components/key-page").then((m) => ({ default: m.KeyPage })));
+
+/** `/keys/:id`: the administrator key page; a new key remounts the page. */
+function AdminKeyPage() {
+  const { id = "" } = useParams();
+  return <KeyPage key={id} mode="admin" keyId={id} />;
+}
+
+/** Key links with `?selected=<id>` open the key page; the list keeps its other filters. */
+function KeysRoute() {
+  const [params] = useSearchParams();
+  const selected = params.get("selected");
+  return selected ? <Navigate to={`/keys/${encodeURIComponent(selected)}`} replace /> : <ApisPage />;
+}
+
+/** `/apis` became `/keys`; a selection opens the key page, filters in the query survive. */
 function ApisRedirect() {
   const { search } = useLocation();
-  return <Navigate to={`/keys${search}`} replace />;
+  const selected = new URLSearchParams(search).get("selected");
+  return <Navigate to={selected ? `/keys/${encodeURIComponent(selected)}` : `/keys${search}`} replace />;
 }
 
 /** Groups are managed in Settings until the Groups page exists. */
@@ -103,7 +119,8 @@ export default function App() {
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/requests" element={<RequestsPage />} />
             <Route path="/groups" element={<GroupsRedirect />} />
-            <Route path="/keys" element={<ApisPage />} />
+            <Route path="/keys" element={<KeysRoute />} />
+            <Route path="/keys/:id" element={<AdminKeyPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/automations" element={<AutomationsPage />} />

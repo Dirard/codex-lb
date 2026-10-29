@@ -100,6 +100,9 @@ describe("PerKeyTable", () => {
     expect(within(first).getByRole("link", { name: "Open" })).toHaveAttribute("href", "/keys/a1");
     expect(first).toHaveTextContent("sk-a1");
     expect(first).toHaveTextContent("25%");
+    // The group is the section header, not a column repeated on every row.
+    expect(screen.queryByRole("columnheader", { name: "Group" })).not.toBeInTheDocument();
+    expect(first).not.toHaveTextContent("Group A");
 
     await user.click(screen.getByRole("button", { name: "Show 1 idle key" }));
     expect(rowNames()).toContain("Beta idle");

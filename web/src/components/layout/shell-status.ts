@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { includesToday, periodFromSearch } from "@/features/key-page/period";
 import { get } from "@/lib/api-client";
 
 /**
@@ -32,8 +33,14 @@ export const SHELL_STATUS_POLL_MS = 60_000;
 /** Routes whose page poll carries the shell status. */
 const PAGES_CARRYING_SHELL_STATUS = ["/overview"];
 
-export function pageCarriesShellStatus(pathname: string): boolean {
+/** `/keys/<id>`, whose poll runs only while its period includes today. */
+const KEY_PAGE_PATH = /^\/keys\/[^/]+$/;
+
+export function pageCarriesShellStatus(pathname: string, search = ""): boolean {
   const normalized = pathname.replace(/\/+$/, "") || "/";
+  if (KEY_PAGE_PATH.test(normalized)) {
+    return includesToday(periodFromSearch(search));
+  }
   return PAGES_CARRYING_SHELL_STATUS.includes(normalized);
 }
 

@@ -105,6 +105,11 @@ const EXPECTED_ENDPOINTS = [
 	"POST /api/api-keys/:keyId/regenerate",
 	"GET /api/api-keys/:keyId/trends",
 	"GET /api/api-keys/:keyId/usage-7d",
+	// key page
+	"GET /api/api-keys/:keyId/page",
+	"GET /api/api-keys/:keyId/requests",
+	"GET /api/key-reports/page",
+	"GET /api/key-reports/requests",
 	// automations
 	"GET /api/automations",
 	"GET /api/automations/options",

@@ -76,6 +76,18 @@ describe("AttentionKeysTable", () => {
     await waitFor(() => expect(mock.overviewRequests()).toBeGreaterThanOrEqual(2));
   });
 
+  it("opens the key page from the name and from the row menu", async () => {
+    const user = userEvent.setup();
+    mockOverview();
+    renderWithProviders(<OverviewPage />);
+
+    const row = await screen.findByTestId("overview-attention-key");
+    expect(within(row).getByRole("link", { name: "Default key" })).toHaveAttribute("href", "/keys/key_1");
+    await user.click(within(row).getByRole("button", { name: "More actions for Default key" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Open" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/keys/key_1"));
+  });
+
   it("cancelling the confirmation sends nothing", async () => {
     const user = userEvent.setup();
     const mock = mockOverview();

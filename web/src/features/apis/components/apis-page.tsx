@@ -1,25 +1,15 @@
-import { lazy, Suspense, useCallback, useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { AlertMessage } from "@/components/alert-message";
-import { ConfirmDialog } from "@/components/confirm-dialog";
 import { LoadingOverlay } from "@/components/layout/loading-overlay";
 import { Button } from "@/components/ui/button";
-import type {
-	ApiKey,
-	ApiKeyCreateRequest,
-	ApiKeyUpdateRequest,
-} from "@/features/api-keys/schemas";
+import type { ApiKeyCreateRequest } from "@/features/api-keys/schemas";
 import { ApiKeyCreatedDialog } from "@/features/api-keys/components/api-key-created-dialog";
 import { ApiKeysOverview } from "@/features/api-keys/components/api-keys-overview";
-import { ApiDetail } from "@/features/apis/components/api-detail";
 import { ApiList } from "@/features/apis/components/api-list";
 import { ApisSkeleton } from "@/features/apis/components/apis-skeleton";
-import {
-	useApiKeys,
-	useApiKeyTrends,
-	useApiKeyUsage7Day,
-} from "@/features/apis/hooks/use-apis";
+import { useApiKeys } from "@/features/apis/hooks/use-apis";
 import { useDialogState } from "@/hooks/use-dialog-state";
 import { getErrorMessageOrNull } from "@/utils/errors";
 
@@ -28,81 +18,28 @@ const ApiKeyCreateDialog = lazy(() =>
 		default: m.ApiKeyCreateDialog,
 	})),
 );
-const ApiKeyEditDialog = lazy(() =>
-	import("@/features/api-keys/components/api-key-edit-dialog").then((m) => ({
-		default: m.ApiKeyEditDialog,
-	})),
-);
 
+/**
+ * The key list until the Keys page replaces it: the overview cards, the
+ * searchable list and key creation. Selecting a key opens its key page.
+ */
 export function ApisPage() {
 	const { t } = useTranslation();
-	const [searchParams, setSearchParams] = useSearchParams();
-	const {
-		apiKeysQuery,
-		createMutation,
-		updateMutation,
-		deleteMutation,
-		regenerateMutation,
-	} = useApiKeys();
+	const navigate = useNavigate();
+	const { apiKeysQuery, createMutation } = useApiKeys();
 
 	const createDialog = useDialogState();
-	const editDialog = useDialogState<ApiKey>();
-	const deleteDialog = useDialogState<ApiKey>();
 	const createdDialog = useDialogState<string>();
 
 	const apiKeys = useMemo(() => apiKeysQuery.data ?? [], [apiKeysQuery.data]);
-	const selectedKeyId = searchParams.get("selected");
 
-	const handleSelectKey = useCallback(
-		(keyId: string) => {
-			const nextSearchParams = new URLSearchParams(searchParams);
-			nextSearchParams.set("selected", keyId);
-			setSearchParams(nextSearchParams);
-		},
-		[searchParams, setSearchParams],
-	);
-
-	const resolvedSelectedKeyId = useMemo(() => {
-		if (apiKeys.length === 0) return null;
-		if (selectedKeyId && apiKeys.some((k) => k.id === selectedKeyId))
-			return selectedKeyId;
-		return apiKeys[0].id;
-	}, [apiKeys, selectedKeyId]);
-
-	const selectedApiKey = useMemo(
-		() =>
-			resolvedSelectedKeyId
-				? (apiKeys.find((k) => k.id === resolvedSelectedKeyId) ?? null)
-				: null,
-		[apiKeys, resolvedSelectedKeyId],
-	);
-
-	const trendsQuery = useApiKeyTrends(selectedApiKey?.id ?? null);
-	const usage7DayQuery = useApiKeyUsage7Day(selectedApiKey?.id ?? null);
-
-	const mutationBusy =
-		createMutation.isPending ||
-		updateMutation.isPending ||
-		deleteMutation.isPending ||
-		regenerateMutation.isPending;
-
-	const mutationError =
-		getErrorMessageOrNull(createMutation.error) ||
-		getErrorMessageOrNull(updateMutation.error) ||
-		getErrorMessageOrNull(deleteMutation.error) ||
-		getErrorMessageOrNull(regenerateMutation.error);
+	const mutationError = getErrorMessageOrNull(createMutation.error);
 	const listError = getErrorMessageOrNull(apiKeysQuery.error);
-	const usage7DayError = getErrorMessageOrNull(usage7DayQuery.error);
 	const pageError = mutationError || (apiKeysQuery.data ? listError : null);
 
 	const handleCreate = async (payload: ApiKeyCreateRequest) => {
 		const created = await createMutation.mutateAsync(payload);
 		createdDialog.show(created.key);
-	};
-
-	const handleUpdate = async (payload: ApiKeyUpdateRequest) => {
-		if (!editDialog.data) return;
-		await updateMutation.mutateAsync({ keyId: editDialog.data.id, payload });
 	};
 
 	return (
@@ -138,46 +75,16 @@ export function ApisPage() {
 					</Button>
 				</div>
 			) : (
-				<div className="space-y-6">
-					<ApiKeysOverview apiKeys={apiKeys} />
-
-					<div className="grid gap-4 lg:grid-cols-[22rem_minmax(0,1fr)]">
-						<div className="rounded-xl border bg-card p-4">
-							<ApiList
-								apiKeys={apiKeys}
-								selectedKeyId={resolvedSelectedKeyId}
-								onSelect={handleSelectKey}
-								onOpenCreate={() => createDialog.show()}
-							/>
-						</div>
-
-						<ApiDetail
-							apiKey={selectedApiKey}
-							trends={trendsQuery.data}
-							usage7Day={usage7DayQuery.data}
-							usage7DayLoading={usage7DayQuery.isPending}
-							usage7DayError={usage7DayError}
-							busy={mutationBusy}
-							onEdit={(apiKey) => editDialog.show(apiKey)}
-							onToggleActive={(apiKey) => {
-								void updateMutation
-									.mutateAsync({
-										keyId: apiKey.id,
-										payload: { isActive: !apiKey.isActive },
-									})
-									.catch(() => null);
-							}}
-							onDelete={(apiKey) => deleteDialog.show(apiKey)}
-							onRegenerate={(apiKey) => {
-								void regenerateMutation
-									.mutateAsync(apiKey.id)
-									.then((result) => {
-										createdDialog.show(result.key);
-									})
-									.catch(() => null);
-							}}
+				<div className="grid gap-4 lg:grid-cols-[22rem_minmax(0,1fr)]">
+					<div className="rounded-xl border bg-card p-4">
+						<ApiList
+							apiKeys={apiKeys}
+							selectedKeyId={null}
+							onSelect={(keyId) => navigate(`/keys/${encodeURIComponent(keyId)}`)}
+							onOpenCreate={() => createDialog.show()}
 						/>
 					</div>
+					<ApiKeysOverview apiKeys={apiKeys} />
 				</div>
 			)}
 
@@ -188,14 +95,6 @@ export function ApisPage() {
 					onOpenChange={createDialog.onOpenChange}
 					onSubmit={handleCreate}
 				/>
-
-				<ApiKeyEditDialog
-					open={editDialog.open}
-					busy={updateMutation.isPending}
-					apiKey={editDialog.data}
-					onOpenChange={editDialog.onOpenChange}
-					onSubmit={handleUpdate}
-				/>
 			</Suspense>
 
 			<ApiKeyCreatedDialog
@@ -204,25 +103,8 @@ export function ApisPage() {
 				onOpenChange={createdDialog.onOpenChange}
 			/>
 
-			<ConfirmDialog
-				open={deleteDialog.open}
-				title={t("apiKeys.deleteDialog.title")}
-				description={t("apiKeys.deleteDialog.description")}
-				confirmLabel={t("common.actions.delete")}
-				onOpenChange={deleteDialog.onOpenChange}
-				onConfirm={() => {
-					if (!deleteDialog.data) return;
-					void deleteMutation
-						.mutateAsync(deleteDialog.data.id)
-						.catch(() => null)
-						.finally(() => {
-							deleteDialog.hide();
-						});
-				}}
-			/>
-
 			<LoadingOverlay
-				visible={!!apiKeysQuery.data && mutationBusy}
+				visible={!!apiKeysQuery.data && createMutation.isPending}
 				label={t("apiKeys.page.updating")}
 			/>
 		</div>

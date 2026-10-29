@@ -15,5 +15,5 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Gates: Go vet, lint, tests, race, vulnerability check; web lint, typecheck, tests, build; OpenSpec strict validation.
-- [ ] 4.2 Contract tests for the new endpoints; `BenchmarkDashboardPages` with the report at 300 keys and 50 groups for 30 and 90 days and the 90-day CSV.
+- [x] 4.1 Gates: Go vet, lint, tests, race, vulnerability check; web lint, typecheck, tests, build; OpenSpec strict validation.
+- [x] 4.2 Contract tests for the new endpoints; `BenchmarkDashboardPages` with the report at 300 keys and 50 groups for 30 and 90 days and the 90-day CSV.

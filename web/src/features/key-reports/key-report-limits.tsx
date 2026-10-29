@@ -84,26 +84,43 @@ export function KeyReportLimits({ limits, group }: Pick<KeyReport, "limits" | "g
           </section>
         </> : null}
       </div>
-      {group ? <details className="rounded-xl border bg-card">
-        <summary className="cursor-pointer rounded-xl px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          {t("keyReports.groupLimits", { name: group.name })}
-          <span className="ml-2 text-xs tabular-nums text-muted-foreground">({group.keys.length})</span>
-        </summary>
-        <ul className="grid gap-3 border-t p-4 sm:grid-cols-2 lg:grid-cols-3">
-          {group.keys.map((key) => (
-            <li key={key.id} className="min-w-0 space-y-2 rounded-lg border p-3">
-              <div className="flex items-center gap-2.5">
-                <p className="min-w-0 flex-1 truncate text-sm font-medium" title={key.name}>
-                  {key.name}{key.isCurrent ? " (" + t("keyReports.currentKey") + ")" : ""}
-                </p>
-                <ApiKeyStatusBadge apiKey={key} />
-              </div>
-              {key.limits.length > 0 ? <ApiKeyLimitSummary limits={key.limits} />
-                : <p className="text-xs text-muted-foreground">{t("apis.keyInfo.noLimitsConfigured")}</p>}
-            </li>
-          ))}
-        </ul>
-      </details> : null}
+      {group ? <KeyReportGroupKeys name={group.name} keys={group.keys} /> : null}
     </div>
+  );
+}
+
+type GroupKey = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  expiresAt: string | null;
+  isCurrent: boolean;
+  limits: Parameters<typeof ApiKeyLimitSummary>[0]["limits"];
+};
+
+/** The collapsed same-group mini-list: each key's status and fullest limit, without any action. */
+export function KeyReportGroupKeys({ name, keys }: { name: string; keys: GroupKey[] }) {
+  const { t } = useTranslation();
+  return (
+    <details className="rounded-xl border bg-card">
+      <summary className="cursor-pointer rounded-xl px-4 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        {t("keyReports.groupLimits", { name })}
+        <span className="ml-2 text-xs tabular-nums text-muted-foreground">({keys.length})</span>
+      </summary>
+      <ul className="grid gap-3 border-t p-4 sm:grid-cols-2 lg:grid-cols-3">
+        {keys.map((key) => (
+          <li key={key.id} className="min-w-0 space-y-2 rounded-lg border p-3">
+            <div className="flex items-center gap-2.5">
+              <p className="min-w-0 flex-1 truncate text-sm font-medium" title={key.name}>
+                {key.name}{key.isCurrent ? " (" + t("keyReports.currentKey") + ")" : ""}
+              </p>
+              <ApiKeyStatusBadge apiKey={key} />
+            </div>
+            {key.limits.length > 0 ? <ApiKeyLimitSummary limits={key.limits} />
+              : <p className="text-xs text-muted-foreground">{t("apis.keyInfo.noLimitsConfigured")}</p>}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

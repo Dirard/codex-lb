@@ -74,7 +74,7 @@ describe("GlobalSearch", () => {
     expect(within(keys).getByRole("option", { name: /Alpha build bot/ })).toBeInTheDocument();
     await user.keyboard("{Enter}");
 
-    expect(screen.getByTestId("location")).toHaveTextContent("/keys?selected=key_alpha");
+    expect(screen.getByTestId("location")).toHaveTextContent("/keys/key_alpha");
   });
 
   it("finds accounts by e-mail and opens a request by id", async () => {

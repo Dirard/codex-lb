@@ -140,9 +140,6 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	}
 	defer tx.Rollback()
 	events, args := requestLogEventSource(filter)
-	joins := ` FROM log_entries e LEFT JOIN accounts a ON a.id=e.account_id
- LEFT JOIN api_keys k ON k.id=e.api_key_id
- LEFT JOIN legacy_model_sources ms ON ms.id=e.model_source_id`
 	// The total describes the whole filtered result, not the rows after a cursor.
 	unbounded := filter
 	unbounded.Before = nil
@@ -167,6 +164,40 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	if err != nil {
 		return response, err
 	}
+	var more bool
+	response.Requests, response.NextCursor, more, err = readRequestLogPage(ctx, tx, filter, events, args, pending, pageArgs)
+	if err != nil {
+		return response, err
+	}
+	response.HasMore = int64(filter.Offset+len(response.Requests)) < response.Total
+	if filter.Before != nil {
+		response.HasMore = more
+	}
+	if filter.ConversationID != "" {
+		// Pending entries have neither a conversation nor a cost.
+		var costMicro int64
+		countEvents, countArgs := requestLogEventSource(unbounded)
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce(sum(e.cost_microdollars),0)`+countEvents, countArgs...).Scan(&costMicro); err != nil {
+			return response, err
+		}
+		response.Conversation = &struct {
+			RequestCount      int64   `json:"requestCount"`
+			AggregatedCostUSD float64 `json:"aggregatedCostUsd"`
+		}{response.Total, float64(costMicro) / 1e6}
+	}
+	return response, nil
+}
+
+// readRequestLogPage reads one page of the request log: the identifiers of
+// the events of the FROM clause events (alias e) merged with the pending
+// entries of the pending CTE, then their rows in the descending
+// (requested_at, request_id) order. One extra row tells whether a keyset
+// continuation exists; next is its cursor.
+func readRequestLogPage(ctx context.Context, tx *sql.Tx, filter domain.RequestLogFilter, events string, args []any,
+	pending string, pageArgs []any) ([]domain.RequestLogEntry, *string, bool, error) {
+	joins := ` FROM log_entries e LEFT JOIN accounts a ON a.id=e.account_id
+ LEFT JOIN api_keys k ON k.id=e.api_key_id
+ LEFT JOIN legacy_model_sources ms ON ms.id=e.model_source_id`
 	query := `SELECT e.requested_at,e.account_id,nullif(coalesce(e.plan_type,a.plan_type),''),
  k.name,e.api_key_id,coalesce(e.legacy_request_id,e.request_id),e.request_kind,e.model,
  e.source,e.model_source_id,ms.kind,e.transport,e.useragent,e.useragent_group,
@@ -178,8 +209,9 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 	pageArgs = append(append(pageArgs, args...), filter.Limit+1, filter.Offset)
 	rows, err := tx.QueryContext(ctx, requestLogPageSource(events, pending)+query, pageArgs...)
 	if err != nil {
-		return response, err
+		return nil, nil, false, err
 	}
+	requests := []domain.RequestLogEntry{}
 	more := false
 	var last domain.RequestLogCursor
 	for rows.Next() {
@@ -196,7 +228,7 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 			&ip, &conversation, &tier, &item.Status, &errorCode, &input, &output, &reasoning,
 			&reasoningKnown, &cached, &effort, &cost, &total, &first, &queue, &internalID); err != nil {
 			rows.Close()
-			return response, err
+			return nil, nil, false, err
 		}
 		item.RequestedAt = fromMillis(requested)
 		item.AccountID = optionalString(account)
@@ -237,39 +269,24 @@ func (s *Store) ListRequestLogs(ctx context.Context, filter domain.RequestLogFil
 		if first.Valid && first.Int64 > 0 {
 			item.LatencyFirstTokenMS = &first.Int64
 		}
-		if len(response.Requests) == filter.Limit {
+		if len(requests) == filter.Limit {
 			more = true
 			break
 		}
-		response.Requests = append(response.Requests, item)
+		requests = append(requests, item)
 		last = domain.RequestLogCursor{RequestedAt: fromMillis(requested), RequestID: internalID}
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return response, err
+		return nil, nil, false, err
 	}
-	response.HasMore = int64(filter.Offset+len(response.Requests)) < response.Total
-	if filter.Before != nil {
-		response.HasMore = more
-	}
+	var next *string
 	if more {
 		cursor := last.String()
-		response.NextCursor = &cursor
+		next = &cursor
 	}
-	if filter.ConversationID != "" {
-		// Pending entries have neither a conversation nor a cost.
-		var costMicro int64
-		countEvents, countArgs := requestLogEventSource(unbounded)
-		if err := tx.QueryRowContext(ctx, `SELECT coalesce(sum(e.cost_microdollars),0)`+countEvents, countArgs...).Scan(&costMicro); err != nil {
-			return response, err
-		}
-		response.Conversation = &struct {
-			RequestCount      int64   `json:"requestCount"`
-			AggregatedCostUSD float64 `json:"aggregatedCostUsd"`
-		}{response.Total, float64(costMicro) / 1e6}
-	}
-	return response, nil
+	return requests, next, more, nil
 }
 
 func logNullableInt(value sql.NullInt64) *int64 {

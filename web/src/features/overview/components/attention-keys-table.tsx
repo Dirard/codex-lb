@@ -73,7 +73,7 @@ export function AttentionKeysTable({
               {keys.map((key) => (
                 <tr key={key.id} data-testid="overview-attention-key" className="border-b last:border-0">
                   <td className="px-3 py-2">
-                    <Link className="font-medium hover:underline" to={`/keys?selected=${encodeURIComponent(key.id)}`}>
+                    <Link className="font-medium hover:underline" to={`/keys/${encodeURIComponent(key.id)}`}>
                       {key.name}
                     </Link>
                     <span className="block font-mono text-[11px] text-muted-foreground">{key.prefix}</span>

@@ -14,9 +14,9 @@ export function looksLikeRequestId(query: string): boolean {
   return REQUEST_ID_PATTERN.test(query.trim());
 }
 
-/** Routes of search results until the dedicated Keys and Groups pages exist. */
+/** Routes of search results: keys open their key page; groups until the Groups page exists. */
 export const searchRoutes = {
-  key: (id: string) => `/keys?selected=${encodeURIComponent(id)}`,
+  key: (id: string) => `/keys/${encodeURIComponent(id)}`,
   group: (id: string) => `/groups?selected=${encodeURIComponent(id)}`,
   account: (id: string) => `/accounts?selected=${encodeURIComponent(id)}`,
   request: (id: string) => `/requests?request_id=${encodeURIComponent(id)}`,

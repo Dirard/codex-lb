@@ -9,8 +9,6 @@ import { ApisPage } from "./apis-page";
 
 const hookMocks = vi.hoisted(() => ({
 	useApiKeys: vi.fn(),
-	useApiKeyTrends: vi.fn(),
-	useApiKeyUsage7Day: vi.fn(),
 }));
 
 vi.mock("@/features/apis/hooks/use-apis", () => hookMocks);
@@ -50,8 +48,6 @@ function createQueryMock<T>(data: T | undefined): QueryMock<T> {
 function renderApisPage({
 	apiKeys = [createApiKey()],
 	apiKeysQuery = createQueryMock(apiKeys),
-	trendsQuery = createQueryMock(null),
-	usage7DayQuery = createQueryMock(null),
 	createMutation = createMutationMock(),
 	updateMutation = createMutationMock(),
 	deleteMutation = createMutationMock(),
@@ -59,8 +55,6 @@ function renderApisPage({
 }: {
 	apiKeys?: ReturnType<typeof createApiKey>[];
 	apiKeysQuery?: QueryMock<ReturnType<typeof createApiKey>[]>;
-	trendsQuery?: QueryMock<null>;
-	usage7DayQuery?: QueryMock<null>;
 	createMutation?: MutationMock;
 	updateMutation?: MutationMock;
 	deleteMutation?: MutationMock;
@@ -73,8 +67,6 @@ function renderApisPage({
 		deleteMutation,
 		regenerateMutation,
 	});
-	hookMocks.useApiKeyTrends.mockReturnValue(trendsQuery);
-	hookMocks.useApiKeyUsage7Day.mockReturnValue(usage7DayQuery);
 
 	return renderWithProviders(<ApisPage />);
 }
@@ -105,27 +97,15 @@ describe("ApisPage", () => {
 		expect(screen.getByLabelText("Name")).toHaveValue("Broken key");
 	});
 
-	it("keeps the edit dialog open when update fails", async () => {
+	it("opens the key page when a key is selected, without a detail pane", async () => {
 		const user = userEvent.setup();
-		const updateMutation = createMutationMock();
-		updateMutation.mutateAsync.mockRejectedValue(new Error("boom update"));
+		renderApisPage({ apiKeys: [createApiKey(), createApiKey({ id: "key_2", name: "Secondary key" })] });
 
-		renderApisPage({ updateMutation });
+		expect(screen.queryByTestId("api-key-info")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Actions" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: /Secondary key/ }));
 
-		await user.click(screen.getByRole("button", { name: "Actions" }));
-		await user.click(screen.getByRole("menuitem", { name: "Edit" }));
-
-		const dialog = await screen.findByRole("dialog", { name: "Edit API key" });
-		const nameInput = within(dialog).getByLabelText("Name");
-		await user.clear(nameInput);
-		await user.type(nameInput, "Renamed key");
-		await user.click(within(dialog).getByRole("button", { name: "Save" }));
-
-		await waitFor(() => {
-			expect(updateMutation.mutateAsync).toHaveBeenCalledTimes(1);
-		});
-		expect(screen.getByRole("dialog", { name: "Edit API key" })).toBeInTheDocument();
-		expect(screen.getByLabelText("Name")).toHaveValue("Renamed key");
+		await waitFor(() => expect(window.location.pathname).toBe("/keys/key_2"));
 	});
 
 	it("shows a retry state when the initial API key query fails", async () => {

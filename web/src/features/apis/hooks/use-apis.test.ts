@@ -3,12 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-	createApiKey,
-	createApiKeyCreateResponse,
-	createApiKeyTrends,
-	createApiKeyUsage7Day,
-} from "@/test/mocks/factories";
+import { createApiKey, createApiKeyCreateResponse } from "@/test/mocks/factories";
 
 const apiKeysApiMocks = vi.hoisted(() => ({
 	listApiKeys: vi.fn(),
@@ -20,19 +15,12 @@ const apiKeysApiMocks = vi.hoisted(() => ({
 	API_KEYS_BASE_PATH: "/api/api-keys",
 }));
 
-const apisApiMocks = vi.hoisted(() => ({
-	getApiKeyTrends: vi.fn(),
-	getApiKeyUsage7Day: vi.fn(),
-}));
-
 const apiMocks = {
 	listApiKeys: apiKeysApiMocks.listApiKeys,
 	createApiKey: apiKeysApiMocks.createApiKey,
 	updateApiKey: apiKeysApiMocks.updateApiKey,
 	deleteApiKey: apiKeysApiMocks.deleteApiKey,
 	regenerateApiKey: apiKeysApiMocks.regenerateApiKey,
-	getApiKeyTrends: apisApiMocks.getApiKeyTrends,
-	getApiKeyUsage7Day: apisApiMocks.getApiKeyUsage7Day,
 };
 
 const toastMocks = vi.hoisted(() => ({
@@ -41,7 +29,6 @@ const toastMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/features/api-keys/api", () => apiKeysApiMocks);
-vi.mock("@/features/apis/api", () => apisApiMocks);
 vi.mock("sonner", () => ({ toast: toastMocks }));
 
 function createTestQueryClient(): QueryClient {
@@ -132,49 +119,5 @@ describe("useApiKeys", () => {
 		expect(toastMocks.error).toHaveBeenCalledWith("boom update");
 		expect(toastMocks.error).toHaveBeenCalledWith("boom delete");
 		expect(toastMocks.error).toHaveBeenCalledWith("boom regenerate");
-	});
-});
-
-describe("detail queries", () => {
-	it("fetches trend data only when a key is selected", async () => {
-		const queryClient = createTestQueryClient();
-		const response = createApiKeyTrends({ keyId: "key_1" });
-		apiMocks.getApiKeyTrends.mockResolvedValue(response);
-
-		const { useApiKeyTrends } = await import("@/features/apis/hooks/use-apis");
-		const { result, rerender } = renderHook(({ keyId }) => useApiKeyTrends(keyId), {
-			initialProps: { keyId: null as string | null },
-			wrapper: createWrapper(queryClient),
-		});
-
-		expect(result.current.fetchStatus).toBe("idle");
-		expect(apiMocks.getApiKeyTrends).not.toHaveBeenCalled();
-
-		rerender({ keyId: "key_1" });
-		await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-		expect(result.current.data).toEqual(response);
-		expect(apiMocks.getApiKeyTrends).toHaveBeenCalledWith("key_1");
-	});
-
-	it("fetches 7 day usage only when a key is selected", async () => {
-		const queryClient = createTestQueryClient();
-		const response = createApiKeyUsage7Day({ keyId: "key_1" });
-		apiMocks.getApiKeyUsage7Day.mockResolvedValue(response);
-
-		const { useApiKeyUsage7Day } = await import("@/features/apis/hooks/use-apis");
-		const { result, rerender } = renderHook(({ keyId }) => useApiKeyUsage7Day(keyId), {
-			initialProps: { keyId: null as string | null },
-			wrapper: createWrapper(queryClient),
-		});
-
-		expect(result.current.fetchStatus).toBe("idle");
-		expect(apiMocks.getApiKeyUsage7Day).not.toHaveBeenCalled();
-
-		rerender({ keyId: "key_1" });
-		await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-		expect(result.current.data).toEqual(response);
-		expect(apiMocks.getApiKeyUsage7Day).toHaveBeenCalledWith("key_1");
 	});
 });

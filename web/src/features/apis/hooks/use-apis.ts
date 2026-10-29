@@ -13,7 +13,6 @@ import type {
   ApiKeyCreateRequest,
   ApiKeyUpdateRequest,
 } from "@/features/api-keys/schemas";
-import { getApiKeyTrends, getApiKeyUsage7Day } from "@/features/apis/api";
 
 export function useApiKeys() {
   const { t } = useTranslation();
@@ -84,26 +83,4 @@ export function useApiKeys() {
     deleteMutation,
     regenerateMutation,
   };
-}
-
-export function useApiKeyTrends(keyId: string | null) {
-  return useQuery({
-    queryKey: ["api-keys", "trends", keyId],
-    queryFn: () => getApiKeyTrends(keyId!),
-    enabled: !!keyId,
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-    refetchIntervalInBackground: false,
-  });
-}
-
-export function useApiKeyUsage7Day(keyId: string | null) {
-  return useQuery({
-    queryKey: ["api-keys", "usage-7d", keyId],
-    queryFn: () => getApiKeyUsage7Day(keyId!),
-    enabled: !!keyId,
-    staleTime: 2 * 60_000,
-    refetchInterval: 2 * 60_000,
-    refetchIntervalInBackground: false,
-  });
 }

@@ -11,6 +11,7 @@ import { LoginForm } from "@/features/auth/components/login-form";
 import { KeyLoginForm } from "@/features/auth/components/key-login-form";
 import { TotpDialog } from "@/features/auth/components/totp-dialog";
 import { useAuthStore } from "@/features/auth/hooks/use-auth";
+import { searchNamesPeriod } from "@/features/key-page/period";
 import { getKeyReportSession } from "@/features/key-reports/api";
 
 const KeyReportsPage = lazy(() =>
@@ -19,7 +20,10 @@ const KeyReportsPage = lazy(() =>
 
 export function AuthGate({ children }: PropsWithChildren) {
   const { t } = useTranslation();
-  const [loginMethod, setLoginMethod] = useState<"admin" | "key">("admin");
+  // An owner link names a period (R29): offer the key sign-in first. Signing
+  // in never navigates, so `from` and `to` stay for the owner page to read.
+  const [loginMethod, setLoginMethod] = useState<"admin" | "key">(() =>
+    searchNamesPeriod(window.location.search) ? "key" : "admin");
   const [keySession, setKeySession] = useState(false);
   const [keyLoginBusy, setKeyLoginBusy] = useState(false);
   const [restoration, setRestoration] = useState<"loading" | "ready" | "error">("loading");

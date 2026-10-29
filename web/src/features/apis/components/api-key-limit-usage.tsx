@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
-import { formatKeyLimitValue } from "@/features/api-keys/components/limit-rules-utils";
 import type { ApiKey } from "@/features/api-keys/schemas";
 import { cn } from "@/lib/utils";
 import { formatPercentNullable } from "@/utils/formatters";
@@ -32,7 +31,7 @@ export function LimitUsageBar({ percent, label }: { percent: number; label: stri
 }
 
 // The key list summarizes the most consumed of this key's independent limits.
-export function ApiKeyLimitSummary({ limits }: { limits: ApiKey["limits"] }) {
+export function ApiKeyLimitSummary({ limits }: { limits: Pick<ApiKey["limits"][number], "maxValue" | "currentValue">[] }) {
   const { t } = useTranslation();
   if (limits.length === 0) return null;
   const percent = limits.reduce((highest, limit) => limit.maxValue > 0
@@ -47,21 +46,4 @@ export function ApiKeyLimitSummary({ limits }: { limits: ApiKey["limits"] }) {
       <LimitUsageBar percent={percent} label={label} />
     </div>
   );
-}
-
-export function ApiKeyLimitDetails({ limits }: { limits: ApiKey["limits"] }) {
-  const { t } = useTranslation();
-  return <>{limits.map((limit) => {
-    const percent = limit.maxValue > 0 ? limit.currentValue / limit.maxValue * 100 : 0;
-    const label = `${t(`apis.keyInfo.limitTypes.${limit.limitType}`)} (${limit.limitWindow}, ${limit.modelFilter || t("common.options.allLower")})`;
-    return (
-      <div key={limit.id} className="space-y-1 pl-2">
-        <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
-          <span className="text-muted-foreground">{label}</span>
-          <span className="font-medium">{formatKeyLimitValue(limit.currentValue, limit.limitType)} / {formatKeyLimitValue(limit.maxValue, limit.limitType)}</span>
-        </div>
-        <LimitUsageBar percent={percent} label={label} />
-      </div>
-    );
-  })}</>;
 }
