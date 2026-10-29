@@ -526,6 +526,7 @@
   "groups.sheet.allKeys": "分组的全部密钥",
   "groups.sheet.noKeys": "没有密钥使用此分组。",
   "groups.sheet.lastUsed": "最近使用",
+  "groups.sheet.key": "密钥",
   "groups.sheet.keyStatus.disabled": "已禁用",
   "groups.sheet.keyStatus.expired": "已过期",
   "groups.sheet.unsaved": "未保存的更改",

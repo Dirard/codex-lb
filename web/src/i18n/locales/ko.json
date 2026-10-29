@@ -526,6 +526,7 @@
   "groups.sheet.allKeys": "그룹의 모든 키",
   "groups.sheet.noKeys": "이 그룹을 사용하는 키가 없습니다.",
   "groups.sheet.lastUsed": "마지막 사용",
+  "groups.sheet.key": "키",
   "groups.sheet.keyStatus.disabled": "비활성",
   "groups.sheet.keyStatus.expired": "만료됨",
   "groups.sheet.unsaved": "저장되지 않은 변경",

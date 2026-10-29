@@ -526,6 +526,7 @@
   "groups.sheet.allKeys": "All keys of the group",
   "groups.sheet.noKeys": "No keys use this group.",
   "groups.sheet.lastUsed": "Last used",
+  "groups.sheet.key": "Key",
   "groups.sheet.keyStatus.disabled": "disabled",
   "groups.sheet.keyStatus.expired": "expired",
   "groups.sheet.unsaved": "Unsaved changes",
