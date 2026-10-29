@@ -205,8 +205,22 @@ type chargedReader struct {
 	source io.Reader
 	lease  *bodyLease
 	limit  int64
-	read   int64
-	err    error
+	// declared is the source's declared length (0: unknown). A read never
+	// charges past it, so bodies whose declared lengths fit the budget together
+	// are not refused for bytes granted to a read and refunded after it.
+	declared int64
+	read     int64
+	err      error
+}
+
+// newChargedReader reads r's body as returned by lease.open; the declared
+// Content-Length bounds the charges unless the body is decoded on the way.
+func newChargedReader(r *http.Request, source io.Reader, lease *bodyLease, limit int64, decoded bool) *chargedReader {
+	reader := &chargedReader{source: source, lease: lease, limit: limit}
+	if !decoded && r.ContentLength > 0 {
+		reader.declared = r.ContentLength
+	}
+	return reader
 }
 
 func (c *chargedReader) Read(p []byte) (int, error) {
@@ -227,7 +241,11 @@ func (c *chargedReader) Read(p []byte) (int, error) {
 		}
 		p = p[:min(int64(len(p)), c.limit-c.read)]
 	}
-	granted := c.lease.grow(min(int64(len(p)), bodyChargeChunk), false)
+	want := min(int64(len(p)), bodyChargeChunk)
+	if c.declared > 0 {
+		want = min(want, c.declared-c.read)
+	}
+	granted := c.lease.grow(want, false)
 	if granted == 0 {
 		// Nothing is free: the body fits only if it has already ended.
 		c.err = probeEnd(c.source, c.lease.budget.refuse)

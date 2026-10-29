@@ -421,7 +421,7 @@ func readOperationBody(w http.ResponseWriter, r *http.Request, lease *bodyLease,
 	if err != nil {
 		return nil, err
 	}
-	return readChargedBody(&chargedReader{source: source, lease: lease, limit: maximum})
+	return readChargedBody(newChargedReader(r, source, lease, maximum, false))
 }
 
 func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease, requireModel bool) (application.CodexTranscriptionRequest, error) {
@@ -438,7 +438,7 @@ func parseTranscription(w http.ResponseWriter, r *http.Request, lease *bodyLease
 	if err != nil {
 		return application.CodexTranscriptionRequest{}, err
 	}
-	reader := multipart.NewReader(&chargedReader{source: source, lease: lease, limit: domain.MaxRequestBodyBytes}, params["boundary"])
+	reader := multipart.NewReader(newChargedReader(r, source, lease, domain.MaxRequestBodyBytes, false), params["boundary"])
 	var result application.CodexTranscriptionRequest
 	files := 0
 	for {

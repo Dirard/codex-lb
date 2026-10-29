@@ -257,7 +257,7 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				activeMu.Unlock()
 			}
 			turnActive.Store(true)
-			terminal, err := p.respondWebSocket(callCtx, connection, options, message.body, func() {
+			terminal, err := p.respondWebSocket(ctx, callCtx, connection, options, message.body, func() {
 				activeMu.Lock()
 				activeTerminal = true
 				activeMu.Unlock()
