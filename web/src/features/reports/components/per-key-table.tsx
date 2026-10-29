@@ -109,7 +109,8 @@ function limitTone(percent: number | null): string | undefined {
   return undefined;
 }
 
-const COLUMN_COUNT = 2 + SORTABLE_COLUMNS.length + 1;
+// Name, the sortable measures and the actions; the group is the section header.
+const COLUMN_COUNT = 1 + SORTABLE_COLUMNS.length + 1;
 
 /**
  * The keys of the report grouped by group with a subtotal row per group
@@ -211,9 +212,6 @@ export function PerKeyTable({ report }: { report: KeyUsageReport }) {
             <thead>
               <tr className="border-b text-left text-[11px] tracking-wider text-muted-foreground uppercase">
                 <SortHeader def={NAME_COLUMN} sort={sort} onSort={onSort} />
-                <th scope="col" className="px-3 py-2 font-medium">
-                  {t("reports.columns.group")}
-                </th>
                 {SORTABLE_COLUMNS.map((def) => (
                   <SortHeader key={def.column} def={def} sort={sort} onSort={onSort} />
                 ))}
@@ -229,7 +227,7 @@ export function PerKeyTable({ report }: { report: KeyUsageReport }) {
               return (
                 <tbody key={section.id} data-testid="per-key-section">
                   <tr data-testid="per-key-subtotal" className="border-b bg-muted/30">
-                    <td colSpan={2} className="px-3 py-2">
+                    <td className="px-3 py-2">
                       <button
                         type="button"
                         aria-expanded={!isCollapsed}
@@ -271,7 +269,6 @@ export function PerKeyTable({ report }: { report: KeyUsageReport }) {
                             ) : null}
                             <span className="block font-mono text-[11px] text-muted-foreground">{key.prefix}</span>
                           </td>
-                          <td className="px-3 py-2 text-xs">{section.name}</td>
                           <MeasureCells item={key} />
                           <td
                             className="px-3 py-2 text-xs text-muted-foreground"
