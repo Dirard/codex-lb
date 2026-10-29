@@ -760,50 +760,65 @@ Extension/Screen:
 6. Traffic details, collapsed and loaded on expand: model and user-agent distributions and daily latency medians for the selection from the existing `GET /api/reports` with `api_key_id` filters when at most 50 keys are selected, unfiltered when "All keys" is selected, otherwise a prompt to narrow the selection.
 
 Events And Endpoints:
-- `GET /api/reports/keys?group_id=…&api_key_id=…&ungrouped=1&start_date&end_date&timezone` (new, admin, gzip; ids repeatable; an empty selection means all keys; at most 731 days) → `KeyUsageReport`.
-- `GET /api/reports/keys/export.csv?<same parameters>` (new, admin) → streamed `text/csv` with `Content-Disposition: attachment`, one row per local day and key with non-zero requests: `date,group_id,group_name,key_id,key_name,requests,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,cost_usd,errors,cancelled`.
-- Sources: `usage_rollup_slice` kind `key` (UTC-day grain inside the period, hour grain for local-day corrections and period edges) for per-key totals, the top-8 daily series and the previous period; `usage_rollup_total_hour` for "All keys" daily totals; `legacy_hourly_usage` through `idx_legacy_hourly_key_account` for pruned days; `api_keys` and `api_key_limits` for names, groups, last use and fill.
-- Expected cost at 300 keys: 30 d per-key totals ≈ 300 × (30 + 47) ≈ 23 k slice rows, 35–70 ms; 90 d ≈ 41 k rows, 60–120 ms; daily top-8 series ≈ 8 × days × 3 rows; total ≤ 150 ms at 90 days. CSV for 300 keys × 90 days ≈ 81 k slice rows, 150–300 ms, streamed (an export, not page content).
+- `GET /api/reports/keys?group_id=…&api_key_id=…&ungrouped=1&start_date&end_date&timezone` (new, admin, gzip, `Server-Timing`; ids repeatable; an empty selection means all keys; at most 731 days; default the 7 local days ending today) → `KeyUsageReport`. Any other parameter, a blank or longer than 256-character id, more than 200 group or 1 000 key ids or `ungrouped` other than `1`/`0` → 400 `invalid_report_filters`; malformed, inverted or longer than 731-day dates → 400 `invalid_report_date_range`; unknown zone → 400 `invalid_timezone`; resolved keys × days above 250 000 → 400 `report_too_large` (bounds the per-key day sums held in memory; 300 keys fit 731 days).
+- `GET /api/reports/keys/export.csv?<same parameters>` (new, admin, `Server-Timing`, not compressed) → `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="key-usage-<start>_<end>.csv"`, one row per local day and key with non-zero requests: `date,group_id,group_name,key_id,key_name,requests,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,cost_usd,errors,cancelled`, ordered by date, group name with ungrouped keys last, key name and id; `reasoning_tokens` empty when unknown, `cost_usd` with six decimals, text cells starting with `=`, `+`, `-`, `@`, tab or CR prefixed with `'`. The rows are computed in one analytics snapshot that is closed before the first byte is written.
+- Sources, in one analytics read transaction (9 statements in whole-hour zones, 10 in fractional ones, at any number of keys and days): group names, current keys and their active limits; folded legacy hours of the read window (`legacy_hourly_usage`, filtered by the resolved keys for a strict selection); raw partial hours and fractional-zone split hours summed per key in SQL after cutting them at the day bounds; images of the unfolded tail and the journal; and one `usage_rollup_slice` kind `key` statement whose hour and UTC-day bucket lists travel as two JSON arrays (`json_each`) driving primary-key lookups. Each local day is the UTC-day row of its midpoint minus the hour rows of that UTC day outside it plus its rollup hour rows outside it, whenever that reads fewer rows than its hour rows (also in fractional zones, whose raw split hours stay with the images); the previous period reads UTC-day rows for whole UTC days and hour rows for the rest. `usage_rollup_total_hour` is not read: every figure sums the resolved keys, so the CSV, the keys table and the totals agree.
+- Expected cost at 300 keys: 30 d ≈ 300 × 30 × 2–3 slice rows (Europe/Prague), 90 d ≈ 300 × 90 × 2–3 plus the previous period's day rows; see Implementation notes (PR 3b) for the measurements.
 - The page no longer calls `/api/accounts` or `/api/request-logs/options`; key and group names come from the directory.
 
 Types:
 KeyUsageReport
+ - generatedAt: time
  - period: ReportPeriod
+   - start: date
+   - end: date
+   - timezone: string
+   - previousStart: date
+   - previousEnd: date
+   - days: int
  - selection: ReportSelection
    - groupIds: list of string
    - keyIds: list of string
    - ungrouped: bool
+   - allKeys: bool # empty selection
    - resolvedKeyCount: int
  - summary: UsageMeasures
- - previous: UsageMeasures|null
+ - previous: UsageMeasures|null # null when the previous period has no requests
  - activeKeys: int
- - groups: list of GroupReportRow
+ - seriesBy: key|group # group when the selection names several groups (ungrouped counts as one) or is empty and the keys span several groups
+ - series: list of ReportSeries # top 8 by cost plus other; daily[].series follows this order
    - id: string|null
+   - name: string
+   - kind: key|group|ungrouped|other
+ - groups: list of GroupReportRow # groups of the resolved keys and selected groups, by cost
+   - id: string|null # null is the ungrouped keys
    - name: string
    - keyCount: int
    - activeKeys: int
    - measures: UsageMeasures
-   - share: number
- - keys: list of KeyReportRow
+   - share: number # of the summary cost, 0..1
+ - keys: list of KeyReportRow # every resolved key, by cost
    - id: string
    - name: string
    - prefix: string
    - groupId: string|null
+   - groupName: string|null
+   - status: active|disabled|expired
    - measures: UsageMeasures
    - share: number
    - lastUsedAt: time|null
    - maxLimitPercent: number|null
- - daily: list of ReportDay
+ - daily: list of ReportDay # every local day of the period
    - date: date
    - total: UsageMeasures
-   - series: list of key or group id, name and measures # top 8 plus other
+   - series: list of requests, tokens (input plus output) and costUsd
 UsageMeasures
  - requests: int
  - inputTokens: int
  - outputTokens: int
  - cachedInputTokens: int
  - reasoningTokens: int|null
- - costUsd: number
+ - costUsd: number # rounded to six decimals
  - errors: int
  - cancelled: int
 
@@ -830,24 +845,30 @@ The Reports page SHALL encode the selection and the period in the URL, SHALL off
 
 Files And Functions:
  - existing: web/src/features/reports/components/reports-page.tsx - rebuilt around the selection
- - planned: web/src/features/reports/components/scope-picker.tsx#ScopePicker
- - planned: web/src/features/reports/components/per-key-table.tsx#PerKeyTable
- - planned: web/src/features/reports/components/group-report-table.tsx#GroupReportTable
- - planned: web/src/features/reports/components/key-daily-chart.tsx#KeyDailyChart
- - planned: web/src/features/reports/components/traffic-details.tsx#TrafficDetails - lazy, reuses the distribution donuts and latency charts
+ - implemented: web/src/features/reports/components/scope-picker.tsx#ScopePicker - at most 100 rendered matches, keyboard navigation
+ - implemented: web/src/features/reports/components/period-picker.tsx#PeriodPicker
+ - implemented: web/src/features/reports/components/key-report-summary.tsx#KeyReportSummary
+ - implemented: web/src/features/reports/components/per-key-table.tsx#PerKeyTable - grouped with subtotals, idle keys hidden, 20 rows per group before "Show all"
+ - implemented: web/src/features/reports/components/group-report-table.tsx#GroupReportTable
+ - implemented: web/src/features/reports/components/key-daily-chart.tsx#KeyDailyChart
+ - implemented: web/src/features/reports/components/traffic-details.tsx#TrafficDetails - lazy, reuses the distribution donuts and latency charts
+ - implemented: web/src/features/reports/report-url.ts - URL state `group`, `key`, `ungrouped=1`, `period` or `from`/`to`
  - existing: web/src/features/reports/components/model-distribution-donut.tsx, useragent-distribution-donut.tsx, time-to-first-token-chart.tsx, tokens-per-second-chart.tsx - reused in traffic details
- - planned: web/src/features/reports/hooks/use-key-usage-report.ts#useKeyUsageReport
- - planned: internal/application/key_usage_report.go#KeyUsageReportService.Report
- - planned: internal/adapters/sqlite/key_usage_report_rollup.go#Store.KeyUsageReport
- - planned: internal/adapters/sqlite/key_usage_report_rollup.go#Store.StreamKeyDailyRows
- - planned: internal/adapters/httpapi/reports_keys.go#reportsKeys, #reportsKeysCSV
+ - existing: web/src/features/reports/components/reports-summary-cards.tsx, daily-detail-table.tsx, cost-per-day-chart.tsx, tokens-per-day-chart.tsx - no longer used by Reports; kept while `features/key-reports` imports them (removed with it in PR 3a)
+ - implemented: web/src/features/reports/hooks/use-key-usage-report.ts#useKeyUsageReport
+ - implemented: internal/domain/key_usage_report.go - `KeySelection.Resolve`, report types and bounds
+ - implemented: internal/application/key_usage_report.go#KeyUsageReportService.Report, #KeyUsageReportService.Export - owns `KeyUsageReportRepository`
+ - implemented: internal/adapters/sqlite/key_usage_report_rollup.go#Store.KeyUsageReport - rollup reader and raw fallback; the export reuses it (no separate `StreamKeyDailyRows`)
+ - implemented: internal/adapters/httpapi/reports_keys.go#registerKeyUsageReportRoutes
 
 Tests:
 internal/adapters/sqlite/key_usage_report_rollup_test.go
- - description: per-key and per-group measures equal the raw evaluation with legacy rows, keys moved between groups, ungrouped selection and Europe/Prague days
+ - description: per-key, per-day and previous-period measures equal the raw evaluation with legacy rows, an escaped key dimension, keys moved between groups, the ungrouped selection and six zones including Europe/Prague days, in every fold state; raw days equal the admin report filtered by each key
+   requirements: R30
+ - description: statement count equal for 30 and 300 keys and for 7 and 90 days; 30-day report at 300 keys under 300 ms (also R49)
    requirements: R30
 internal/adapters/httpapi/reports_keys_test.go
- - description: CSV rows sum to the JSON report; statement count equal for 30 and 300 keys
+ - description: CSV rows sum to the JSON report; selection resolution, validation codes, gzip, Server-Timing and authentication (also R50)
    requirements: R30, R31
 web/src/__integration__/reports-flow.test.tsx
  - description: selection and period round-trip through the URL, owner link copied, traffic details requested only on expand, no interval polling
@@ -1185,11 +1206,11 @@ PR 3a — key page (use cases 4 and 4.1):
 
 PR 3b — reports for API-key users (use case 5):
 
-15. [ ] OpenSpec change `key-usage-reports`: `go-runtime` delta (R30–R32) and the `frontend-architecture` deltas of use case 5; strict validation.
-16. [ ] SQLite: `KeyUsageReport`, `StreamKeyDailyRows`; raw-equivalence tests with legacy rows, moved keys, the ungrouped selection and Europe/Prague days (R30, R31).
-17. [ ] Application and HTTP: `KeyUsageReportService`, `GET /api/reports/keys`, `GET /api/reports/keys/export.csv` with gzip and `Server-Timing`; CSV-sum and statement-count tests (R30, R31, R50).
-18. [ ] Web: Reports rebuilt (`ScopePicker`, `PerKeyTable`, `GroupReportTable`, `KeyDailyChart`, CSV, `TrafficDetails`), owner links per R29, locales and MSW mocks (R32).
-19. [ ] Contract tests, `BenchmarkDashboardPages` for the report; gates, PR, CI (R46, R49).
+15. [x] OpenSpec change `key-usage-reports`: `go-runtime` delta (R30–R32) and the `frontend-architecture` deltas of use case 5; strict validation.
+16. [x] SQLite: `KeyUsageReport` (the export reuses it instead of a separate `StreamKeyDailyRows`); raw-equivalence tests with legacy rows, moved keys, the ungrouped selection and Europe/Prague days (R30, R31).
+17. [x] Application and HTTP: `KeyUsageReportService`, `GET /api/reports/keys` (gzip) and `GET /api/reports/keys/export.csv`, both with `Server-Timing`; CSV-sum and statement-count tests (R30, R31, R50).
+18. [x] Web: Reports rebuilt (`ScopePicker`, `PeriodPicker`, `PerKeyTable`, `GroupReportTable`, `KeyDailyChart`, CSV, `TrafficDetails`), owner links per R29, locales and MSW mocks (R32).
+19. [ ] Contract tests and `BenchmarkDashboardPages` for the report and the local gates are done; PR and CI are open (R46, R49).
 
 After PR 3a and 3b:
 
@@ -1248,6 +1269,18 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - Dashboard: the by-model table has no effort column; Regenerate and Disable ask for confirmation, Enable does not; the administrator's request details dialog is the key page's own (the Requests page dialog loads the conversation archive); a 401 from the owner's requests also ends the session; an invalid day in the URL counts as absent and the custom picker ends at today at the latest; "show these requests" opens the Requests page with the smallest timeframe (24 h, 7 d or 30 d) covering the period start. The APIs page keeps the list, key creation and the lifetime cards beside the list; editing and deleting moved to the key page. `/keys/:id` carries the shell status only while its period includes today.
 - The production-copy latency run of the key page is open with checklist item 20 (operator approval).
 
+## Implementation notes (PR 3b)
+
+- Branch `feat/key-usage-reports` from `feat/overview-groups` (PR #11); OpenSpec change `openspec/changes/key-usage-reports/`.
+- Scope: every figure sums the resolved current keys (non-deleted, non-internal), so totals, groups, keys, the daily series and the CSV agree; requests without a key, deleted and internal keys are in no selection, and `usage_rollup_total_hour` is not read. Unknown ids select nothing; a selected group without keys keeps a row with zero keys.
+- Daily series: keys, or groups when the selection names more than one group (ungrouped counting as one) or is empty and the keys span several groups; top 8 by cost with requests, plus `other`. The top-level `series` list names them once and every `daily[].series` holds requests, tokens and cost in that order, which keeps 90 days under 150 KB raw.
+- `previous` is null when the previous period has no requests (no history-wide existence read). Costs are rounded to six decimals; CSV sums equal the JSON totals up to that rounding of each row.
+- The export runs the same snapshot read with the previous period skipped and writes rows only after the snapshot is closed; memory is bounded by resolved keys × days ≤ 250 000 (`report_too_large` beyond).
+- Reads: 9 SQL statements in whole-hour zones and 10 in fractional ones for any number of keys and days (`TestKeyUsageReportStatementCountIsIndependentOfScale`: 30 and 300 keys, 7 and 90 days). The slice statement sends its bucket lists as JSON arrays, so the number of days does not change the statement text or the bound-parameter count.
+- Measured (i9-14900K, modernc, warm, `BenchmarkDashboardPages`, 300 keys, 50 groups, 100 accounts, 1.51 M events over 30 days): all keys 30 d 16 ms (UTC), 48 ms (Europe/Prague), 208 ms (Asia/Kolkata); 90 d 18 ms, 50 ms, 211 ms; three groups 30 d 3 ms, 6 ms, 49 ms; CSV 90 d 20 ms, 41–88 ms, 202 ms. Every key active every hour of 90 days (648 k events): 90 d 47 ms (UTC), 136 ms (Europe/Prague), CSV 40 ms and 122 ms. The 30-day report at 300 keys is asserted under 300 ms (`TestKeyUsageReportMeetsItsLatencyBudgetAtTargetScale`, median 12 ms on 8 days of data). Fractional zones read 7 slice rows per key and day and sum their raw split hours per key in SQL, which cut Asia/Kolkata from 313 ms to 208 ms.
+- Web: the scope picker renders at most 100 matches (type to narrow); the keys table hides idle keys behind a toggle, filters by text, collapses groups and shows 20 rows per group before "Show all"; quick periods stay relative in the URL (`period=30d`), custom ones are `from`/`to`. Traffic details wait for the report and filter `/api/reports` by its resolved key ids (at most 50), or read it unfiltered for every key.
+- `reports-summary-cards`, `daily-detail-table`, `cost-per-day-chart` and `tokens-per-day-chart` are no longer used by Reports but stay while `features/key-reports` imports them; PR 3a removes them with the old key report.
+
 ## Decision log
 
 - 2026-10-28: The overview is organized by account groups, never lists all keys and has no period picker; every figure carries a fixed period label. This removes the three independent period pickers and the four duplicated quota views.
@@ -1265,3 +1298,4 @@ Non-blocking; the defaults in parentheses are planned unless the owner decides o
 - 2026-10-28 (owner): Q1–Q5 and Q8–Q10 take the defaults above. Q6: the total-latency histogram is added to rollup layout 1 in PR 1 (no rebuild later). Q7: `idx_usage_rollup_error_key` and `histQuantile` are part of PR 1.
 - 2026-10-29: PR 3 is split into PR 3a (key page, OpenSpec change `key-page`) and PR 3b (reports for key users, OpenSpec change `key-usage-reports`): they share no files apart from routing and locales, so they are built and reviewed in parallel. Following Q6, R22 now includes total-latency p50 and p95.
 - 2026-10-29: PR 3a reads the key page in one analytics snapshot through one store method (`KeyPageUsage`) instead of three, so the period, its error codes, the limit pace and the first page of recent requests are consistent; percentiles use the PR 1 interpolated `histQuantile` on both read paths.
+- 2026-10-29 (PR 3b): Reports sum only the resolved current keys, so the summary, the tables and the CSV always agree; the export reuses the report's snapshot read instead of a separate streaming reader and writes after the snapshot closes, bounded by keys × days; the daily series carry a top-level series list with compact points.

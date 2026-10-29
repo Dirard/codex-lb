@@ -51,6 +51,12 @@ import {
   createOwnerKeyPage,
   pageKeyRequests,
 } from "@/test/mocks/key-page-factories";
+import {
+  buildKeyUsageReport,
+  createReportsResponse,
+  keyReportRowsFromState,
+  keyUsageReportCsv,
+} from "@/test/mocks/key-usage-report-factories";
 
 const MODEL_OPTION_DELIMITER = ":::";
 const STATUS_ORDER = ["ok", "cancelled", "rate_limit", "quota", "error"] as const;
@@ -749,6 +755,34 @@ function listFilteredAutomationRuns(url: URL) {
 	});
 }
 
+/** GET /api/reports/keys over the mock keys: groups, explicit keys and the ungrouped keys, or every key. */
+function mockKeyUsageReport(url: URL) {
+  const params = url.searchParams;
+  const groupIds = params.getAll("group_id");
+  const keyIds = params.getAll("api_key_id");
+  const ungrouped = params.get("ungrouped") === "1";
+  const allKeys = groupIds.length === 0 && keyIds.length === 0 && !ungrouped;
+  const end = params.get("end_date") ?? new Date().toISOString().slice(0, 10);
+  const defaultStart = new Date(`${end}T00:00:00Z`);
+  defaultStart.setUTCDate(defaultStart.getUTCDate() - 6);
+  const start = params.get("start_date") ?? defaultStart.toISOString().slice(0, 10);
+  const keys = keyReportRowsFromState(state.apiKeys, state.accountGroups).filter(
+    (key) =>
+      allKeys ||
+      keyIds.includes(key.id) ||
+      (key.groupId !== null && groupIds.includes(key.groupId)) ||
+      (ungrouped && key.groupId === null),
+  );
+  return buildKeyUsageReport({
+    start,
+    end,
+    timezone: params.get("timezone") ?? "UTC",
+    keys,
+    groupNames: Object.fromEntries(state.accountGroups.map((group) => [group.id, group.name])),
+    selection: { groupIds, keyIds, ungrouped, allKeys, resolvedKeyCount: keys.length },
+  });
+}
+
 export const handlers = [
   http.get("/health", () => {
     return HttpResponse.json({ status: "ok" });
@@ -816,6 +850,24 @@ export const handlers = [
 
   http.get("/api/directory", () => {
     return HttpResponse.json(createDirectory(state.accounts, state.apiKeys, state.accountGroups));
+  }),
+
+  // Reports for API-key users: traffic details, the key report and its CSV export.
+  http.get("/api/reports", () => {
+    return HttpResponse.json(createReportsResponse());
+  }),
+
+  http.get("/api/reports/keys", ({ request }) => {
+    return HttpResponse.json(mockKeyUsageReport(new URL(request.url)));
+  }),
+
+  http.get("/api/reports/keys/export.csv", ({ request }) => {
+    return new HttpResponse(keyUsageReportCsv(mockKeyUsageReport(new URL(request.url))), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="key-usage.csv"',
+      },
+    });
   }),
 
   http.get("/api/dashboard/projections", () => {

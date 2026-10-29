@@ -120,6 +120,10 @@ const EXPECTED_ENDPOINTS = [
 	"PATCH /api/automations/:automationId",
 	"DELETE /api/automations/:automationId",
 	"POST /api/automations/:automationId/run-now",
+	// reports
+	"GET /api/reports",
+	"GET /api/reports/keys",
+	"GET /api/reports/keys/export.csv",
 ];
 
 describe("MSW handler coverage", () => {
