@@ -1234,7 +1234,7 @@ PR 4a — keys page (use cases 6 and 6.1):
 21. [x] OpenSpec change `keys-page`: `go-runtime` delta (R33–R39) and the `frontend-architecture` deltas of use case 6; strict validation.
 22. [x] Application and HTTP: `KeysListService` (batch reads reusing the overview key rows and key day slices, filter, sort and page in memory), `KeysBulkService`, `GET /api/keys`, `GET /api/keys/ids`, `POST /api/keys/bulk`; statement-count, boundary and partial-failure tests (R33, R34, R36–R38).
 23. [x] Web: `features/keys` (`KeysPage`, `KeysTable`, `KeysFilters`, `BulkActionsBar`, URL-backed `useKeysList`) at `/keys`, the APIs page and `ApiKeysOverview` removed, locales and MSW mocks (R35, R39).
-24. [ ] Contract tests, `BenchmarkDashboardPages` for the keys list; gates, PR, CI (R46, R49).
+24. [x] Contract tests, `BenchmarkDashboardPages` for the keys list; gates, PR (#20), CI (R46, R49).
 
 PR 4b — groups page and Settings (use case 7):
 
