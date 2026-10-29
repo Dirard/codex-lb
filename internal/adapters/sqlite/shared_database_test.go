@@ -524,7 +524,7 @@ func TestConcurrentRepriceResumptionAppliesEachDeltaOnce(t *testing.T) {
 	if err := first.SaveAPIKey(ctx, key, fixedTime); err != nil {
 		t.Fatal(err)
 	}
-	const events = 2*repriceRawChunk + 7
+	events := 2*repriceRawChunk + 7
 	usage := domain.UsageAmount{InputTokens: 1000, OutputTokens: 100}
 	for i := range events {
 		id := fmt.Sprintf("cost-%05d", i)
@@ -561,7 +561,7 @@ func TestConcurrentRepriceResumptionAppliesEachDeltaOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, err := second.GetAPIKey(ctx, "key")
-	if err != nil || len(loaded.Limits) != 1 || loaded.Limits[0].CurrentValue != events*expected {
-		t.Fatalf("cost limit %+v, want %d: %v", loaded.Limits, events*expected, err)
+	if err != nil || len(loaded.Limits) != 1 || loaded.Limits[0].CurrentValue != int64(events)*expected {
+		t.Fatalf("cost limit %+v, want %d: %v", loaded.Limits, int64(events)*expected, err)
 	}
 }

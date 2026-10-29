@@ -32,10 +32,11 @@ type currentCostLimit struct {
 }
 
 // Repricing chunk sizes bound one batch-writer job.
-const (
-	repriceRawChunk    = 500
-	repriceBucketChunk = 100
-)
+const repriceBucketChunk = 100
+
+// repriceRawChunk is a variable only so that the race tests can shrink it:
+// under the detector one job of 500 events can outlast the writer's 5 s budget.
+var repriceRawChunk = 500
 
 type priceResolver func(context.Context, *sql.Tx, string) (pricing.Price, bool, error)
 
