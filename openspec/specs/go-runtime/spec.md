@@ -2639,3 +2639,15 @@ A 429 without such a header SHALL keep the existing account quota handling.
 #### Scenario: Account quota refusal is unchanged
 - **WHEN** a Responses request is refused with 429 `usage_limit_reached` without an image `X-Codex-Active-Limit`
 - **THEN** the account is marked as quota-exhausted and the request moves to another account as before
+
+### Requirement: Cancelled dashboard requests are not server errors
+
+When a dashboard (admin API) request fails because its client cancelled it, so that the operation returns the request context's cancellation, the runtime SHALL answer 499 with code `request_cancelled` and SHALL NOT log it as a failed admin operation. Other unexpected admin failures SHALL keep 500 `internal_error` and their error log line.
+
+#### Scenario: Browser drops a dashboard request
+- **WHEN** an authenticated `/api/accounts` read fails with the request context's cancellation
+- **THEN** the response is 499 `request_cancelled` and no `admin operation failed` line is logged
+
+#### Scenario: Unexpected admin failure
+- **WHEN** an authenticated `/api/accounts` read fails with any other error
+- **THEN** the response is 500 `internal_error` and one `admin operation failed` line is logged
