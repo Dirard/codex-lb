@@ -3,6 +3,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -266,6 +267,10 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	}{detail{code, message}})
 }
 
+// statusClientClosedRequest is the de-facto status for a request whose client
+// went away before the answer (nginx's 499); net/http has no constant for it.
+const statusClientClosedRequest = 499
+
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	for _, known := range []struct {
 		target        error
@@ -300,6 +305,12 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 			w.Header().Set("Retry-After", formatInt(int64(auth.RetryAfter)))
 		}
 		writeError(w, status, auth.Code, auth.Message)
+		return
+	}
+	// A client that went away cancels its request context: that is not a server
+	// failure, so it gets the proxy's 499 and no error log line.
+	if errors.Is(err, context.Canceled) {
+		writeError(w, statusClientClosedRequest, "request_cancelled", "Request cancelled")
 		return
 	}
 	// Do not log an arbitrary error string: upstream/database errors may contain

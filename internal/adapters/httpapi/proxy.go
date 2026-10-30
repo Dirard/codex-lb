@@ -261,7 +261,7 @@ func proxyError(err error) (int, string, string) {
 	case errors.Is(err, context.DeadlineExceeded):
 		return 504, "upstream_timeout", "The response deadline was exceeded"
 	case errors.Is(err, context.Canceled):
-		return 499, "request_cancelled", "Request cancelled"
+		return statusClientClosedRequest, "request_cancelled", "Request cancelled"
 	default:
 		return 500, "proxy_error", "The proxy could not complete this request"
 	}
