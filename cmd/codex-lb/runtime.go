@@ -310,10 +310,15 @@ func (r *runtime) startBackground() {
 			return
 		default:
 		}
-		r.background.Add(9)
+		r.background.Add(10)
 		go func() {
 			defer r.background.Done()
 			r.videos.RunSweep(r.backgroundCtx, application.BackgroundSchedule{Report: r.reporter.report})
+		}()
+		go func() {
+			defer r.background.Done()
+			r.videos.RunUsagePoller(r.backgroundCtx, application.BackgroundSchedule{
+				InitialDelay: startupJitter(10*time.Second, 20*time.Second), Report: r.reporter.report})
 		}()
 		go func() {
 			defer r.background.Done()

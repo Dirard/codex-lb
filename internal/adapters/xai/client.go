@@ -20,6 +20,9 @@ import (
 const (
 	DefaultAPIBaseURL  = "https://api.x.ai"
 	DefaultAuthBaseURL = "https://auth.x.ai"
+	// DefaultBillingBaseURL serves the subscription pool. It is undocumented and
+	// used by the official CLI, and it needs the scope grok-cli:access.
+	DefaultBillingBaseURL = "https://cli-chat-proxy.grok.com"
 	// DefaultClientID is the public OAuth client of the official Grok CLI. xAI
 	// publishes no way to register a client, and the owner accepted that xAI may
 	// stop allowing this use.
@@ -36,13 +39,16 @@ type Config struct {
 	HTTPClient  *http.Client
 	APIBaseURL  string
 	AuthBaseURL string
-	ClientID    string
+	// BillingBaseURL replaces the subscription pool endpoint in tests.
+	BillingBaseURL string
+	ClientID       string
 }
 
 type Client struct {
 	http     *http.Client
 	api      string
 	auth     string
+	billing  string
 	clientID string
 }
 
@@ -64,7 +70,11 @@ func New(config Config) *Client {
 	if clientID == "" {
 		clientID = DefaultClientID
 	}
-	return &Client{http: client, api: strings.TrimSuffix(api, "/"), auth: strings.TrimSuffix(auth, "/"), clientID: clientID}
+	billing := config.BillingBaseURL
+	if billing == "" {
+		billing = DefaultBillingBaseURL
+	}
+	return &Client{http: client, api: strings.TrimSuffix(api, "/"), auth: strings.TrimSuffix(auth, "/"), billing: strings.TrimSuffix(billing, "/"), clientID: clientID}
 }
 
 // Refresh exchanges a refresh token. A definitive 4xx refusal is
@@ -195,6 +205,58 @@ func (c *Client) Identity(ctx context.Context, accessToken string) (application.
 		return application.VideoIdentity{}, fmt.Errorf("xai userinfo status %d", response.StatusCode)
 	}
 	return application.VideoIdentity{UserID: payload.Sub, Email: payload.Email}, nil
+}
+
+// Usage reads the account's subscription pool. Zero values are absent from the
+// answer, so a period without a percentage means nothing has been used.
+func (c *Client) Usage(ctx context.Context, accessToken string) (application.VideoUsage, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.billing+"/v1/billing?format=credits", nil)
+	if err != nil {
+		return application.VideoUsage{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", userAgent)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return application.VideoUsage{}, err
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized:
+		return application.VideoUsage{}, application.ErrVideoUsageUnauthorized
+	case http.StatusForbidden:
+		return application.VideoUsage{}, application.ErrVideoUsageForbidden
+	default:
+		return application.VideoUsage{}, fmt.Errorf("xai billing status %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+	if err != nil {
+		return application.VideoUsage{}, err
+	}
+	var payload struct {
+		Config *struct {
+			Percent *float64 `json:"creditUsagePercent"`
+			Period  *struct {
+				End string `json:"end"`
+			} `json:"currentPeriod"`
+		} `json:"config"`
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.Config == nil || payload.Config.Period == nil {
+		return application.VideoUsage{}, errors.New("xai billing answered without a usage period")
+	}
+	end, err := time.Parse(time.RFC3339, payload.Config.Period.End)
+	if err != nil {
+		return application.VideoUsage{}, errors.New("xai billing answered with an invalid period end")
+	}
+	usage := application.VideoUsage{PeriodEnd: end}
+	if payload.Config.Percent != nil {
+		usage.Percent = *payload.Config.Percent
+	}
+	return usage, nil
 }
 
 // CreateVideo posts a validated body unchanged.

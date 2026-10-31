@@ -2090,7 +2090,6 @@
   "video.totals.detail": "{{done}} of {{jobs}} jobs done, {{seconds}} s",
   "video.accounts.title": "Pool accounts",
   "video.accounts.howTo": "Sign in to each Grok account from here. Signing in to an account already in the pool renews its session.",
-  "video.accounts.poolNote": "xAI does not report the remaining weekly pool through its API; see the Usage tab on xAI's site.",
   "video.accounts.emptyTitle": "No Grok accounts yet",
   "video.accounts.emptyDescription": "Import an auth.json to start the pool.",
   "video.accounts.account": "Account",
@@ -2146,5 +2145,12 @@
   "video.login.description": "Open the xAI page, check that it shows this code, and approve the sign-in with the Grok account you want to add. Keep this dialog open.",
   "video.login.open": "Open the xAI sign-in page",
   "video.login.code": "Code",
-  "video.login.waiting": "Waiting for your approval…"
+  "video.login.waiting": "Waiting for your approval…",
+  "video.accounts.pool": "Weekly pool",
+  "video.pool.left": "{{percent}}% left",
+  "video.pool.exhausted": "Exhausted",
+  "video.pool.resets": "Resets {{time}}",
+  "video.pool.noData": "No data yet",
+  "video.pool.needsSignIn": "Sign in again to see this",
+  "video.pool.stale": "Last reading; the latest read failed"
 }

@@ -31,6 +31,32 @@ function coolingUntil(account: VideoAccount): string | null {
   return account.cooldownUntil && new Date(account.cooldownUntil).getTime() > Date.now() ? account.cooldownUntil : null;
 }
 
+function periodElapsed(account: VideoAccount): boolean {
+  return account.usagePeriodEnd !== null && new Date(account.usagePeriodEnd).getTime() <= Date.now();
+}
+
+/** The pool cell: left percentage and reset, or why there is no reading. */
+function PoolUsage({ account }: { account: VideoAccount }) {
+  const { t } = useTranslation();
+  if (account.usagePercent === null || periodElapsed(account)) {
+    return <span className="text-muted-foreground">{t(account.usageError === "scope_missing" ? "video.pool.needsSignIn" : "video.pool.noData")}</span>;
+  }
+  const used = Math.min(account.usagePercent, 100);
+  return (
+    <div className="min-w-36">
+      <div className="flex items-baseline justify-between gap-2 tabular-nums">
+        <span>{t("video.pool.left", { percent: Math.round(100 - used) })}</span>
+        {account.usagePercent >= 100 ? <span className="text-xs text-destructive">{t("video.pool.exhausted")}</span> : null}
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(used)} aria-valuemin={0} aria-valuemax={100} aria-label={t("video.accounts.pool")}>
+        <div className={`h-full ${used >= 90 ? "bg-destructive" : "bg-primary"}`} style={{ width: `${used}%` }} />
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{t("video.pool.resets", { time: formatDateTimeInline(account.usagePeriodEnd) })}</p>
+      {account.usageError ? <p className="text-xs text-muted-foreground">{t(account.usageError === "scope_missing" ? "video.pool.needsSignIn" : "video.pool.stale")}</p> : null}
+    </div>
+  );
+}
+
 /** The separate "Video generation" page: its own pool, allowed keys and jobs. Reading it never calls xAI. */
 export function VideoPage() {
   const { t } = useTranslation();
@@ -126,7 +152,6 @@ export function VideoPage() {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">{t("video.accounts.howTo")}</p>
-        <p className="text-sm text-muted-foreground">{t("video.accounts.poolNote")}</p>
         {accounts.data && accounts.data.accounts.length === 0 ? (
           <EmptyState icon={Clapperboard} title={t("video.accounts.emptyTitle")} description={t("video.accounts.emptyDescription")} />
         ) : (
@@ -136,6 +161,7 @@ export function VideoPage() {
                 <TableRow>
                   <TableHead>{t("video.accounts.account")}</TableHead>
                   <TableHead>{t("video.accounts.status")}</TableHead>
+                  <TableHead>{t("video.accounts.pool")}</TableHead>
                   <TableHead className="text-right">{t("video.accounts.unfinished")}</TableHead>
                   <TableHead className="text-right">{t("video.accounts.done")}</TableHead>
                   <TableHead className="text-right">{t("video.accounts.cost")}</TableHead>
@@ -153,12 +179,13 @@ export function VideoPage() {
                         <Badge variant={account.status === "active" && !cooling ? "secondary" : "outline"}>{t(`video.status.${account.status}`, account.status)}</Badge>
                         {cooling ? <span className="ml-2 text-xs text-muted-foreground">{t("video.accounts.coolingUntil", { time: formatDateTimeInline(cooling) })}</span> : null}
                       </TableCell>
+                      <TableCell><PoolUsage account={account} /></TableCell>
                       <TableCell className="text-right tabular-nums">{account.unfinishedJobs}</TableCell>
                       <TableCell className="text-right tabular-nums">{account.doneJobs}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatCurrency(account.costUsd)}</TableCell>
                       <TableCell>{formatDateTimeInline(account.lastUsedAt)}</TableCell>
                       <TableCell className="space-x-2 whitespace-nowrap text-right">
-                        {account.status === "reauth_required" ? (
+                        {account.status === "reauth_required" || account.usageError === "scope_missing" ? (
                           <Button size="sm" variant="outline" disabled={startLogin.isPending} onClick={() => startLogin.mutate()}>
                             {t("video.accounts.signInAgain")}
                           </Button>

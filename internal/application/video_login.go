@@ -171,12 +171,13 @@ func (s *VideoService) exchangeLogin(ctx context.Context, clientID, deviceCode s
 		s.revokeUnsaved(ctx, clientID, tokens.Refresh)
 		return VideoLoginStatus{Status: "error", Message: "xAI did not say which account signed in; start a new sign-in"}, 0
 	}
+	var saved domain.VideoAccount
 	access, err := s.cipher.Encrypt([]byte(tokens.Access))
 	if err == nil {
 		var refresh []byte
 		if refresh, err = s.cipher.Encrypt([]byte(tokens.Refresh)); err == nil {
 			now := s.now().UTC()
-			_, err = s.store.SaveVideoAccount(ctx, domain.VideoAccount{ID: videoID("vacc_"), XAIUserID: identity.UserID, Email: identity.Email,
+			saved, err = s.store.SaveVideoAccount(ctx, domain.VideoAccount{ID: videoID("vacc_"), XAIUserID: identity.UserID, Email: identity.Email,
 				OIDCClientID: clientID, AccessTokenEncrypted: access, RefreshTokenEncrypted: refresh,
 				AccessExpiresAt: now.Add(tokens.ExpiresIn), CreatedAt: now, UpdatedAt: now})
 		}
@@ -185,6 +186,8 @@ func (s *VideoService) exchangeLogin(ctx context.Context, clientID, deviceCode s
 		s.revokeUnsaved(ctx, clientID, tokens.Refresh)
 		return VideoLoginStatus{Status: "error", Message: "The account could not be saved; start a new sign-in"}, 0
 	}
+	// The page shows the pool at once; a failed read is recorded and retried.
+	s.readAccountUsage(ctx, saved.ID)
 	return VideoLoginStatus{Status: "success", Email: identity.Email}, 0
 }
 

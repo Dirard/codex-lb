@@ -41,7 +41,7 @@ administrator on the Video generation page --start a device sign-in and show xAI
 Requirements:
 
   R1:
-`POST /api/video/accounts/login` SHALL start a device sign-in at `https://auth.x.ai` with the scope `openid profile email offline_access api:access` and answer with a flow id, xAI's verification link and code, and the poll interval. `GET /api/video/accounts/login/{id}` SHALL answer `pending`, `success` or `error`, and SHALL exchange the device code at most once per interval, honoring `slow_down`. On approval it SHALL read the account's `sub` and email from `/oauth2/userinfo`, store the tokens encrypted, and replace the tokens of an account with the same `sub` instead of adding another. A session it cannot save SHALL be revoked. The device code MUST stay in process memory and MUST NOT reach the browser, the database or logs. At most eight sign-ins SHALL be pending at once; `DELETE /api/video/accounts/login/{id}` SHALL forget a sign-in, and a closed sign-in SHALL never be exchanged. No goroutine SHALL outlive a request: status requests drive the flow.
+`POST /api/video/accounts/login` SHALL start a device sign-in at `https://auth.x.ai` with the scope `openid profile email offline_access grok-cli:access api:access` and answer with a flow id, xAI's verification link and code, and the poll interval. `GET /api/video/accounts/login/{id}` SHALL answer `pending`, `success` or `error`, and SHALL exchange the device code at most once per interval, honoring `slow_down`. On approval it SHALL read the account's `sub` and email from `/oauth2/userinfo`, store the tokens encrypted, and replace the tokens of an account with the same `sub` instead of adding another. A session it cannot save SHALL be revoked. The device code MUST stay in process memory and MUST NOT reach the browser, the database or logs. At most eight sign-ins SHALL be pending at once; `DELETE /api/video/accounts/login/{id}` SHALL forget a sign-in, and a closed sign-in SHALL never be exchanged. No goroutine SHALL outlive a request: status requests drive the flow.
 
   R2:
 Video accounts SHALL be stored only in `video_accounts`; no row SHALL be written to `accounts`, `account_credentials`, groups or usage tables.
@@ -249,7 +249,7 @@ administrator --open Video generation--> page with pool, allowed keys and recent
 Requirements:
 
   R16:
-A navigation entry SHALL open `/video` with three sections: pool accounts with sign-in and actions, allowed keys with add and remove, and recent jobs with key, account, mode, status, seconds and cost, plus totals for today and for 7 and 30 days. Reading the page MUST NOT call xAI. The page SHALL state that the remaining weekly pool is not available through the API and is shown only on xAI's site.
+A navigation entry SHALL open `/video` with three sections: pool accounts with sign-in and actions, allowed keys with add and remove, and recent jobs with key, account, mode, status, seconds and cost, plus totals for today and for 7 and 30 days. Reading the page MUST NOT call xAI. 
 
   R17:
 Other pages, reports and the overview SHALL NOT change.
@@ -274,6 +274,48 @@ Tests:
  - description: existing overview, accounts and reports tests pass unchanged with pool data present
    requirements: R17
 
+### 7. Read each account's weekly pool
+active or paused pool account --read its subscription pool after sign-in and every 5 minutes--> [stored reading, recorded read failure] --order and skip accounts by the reading when creating a job--> job on the account with most left
+
+Requirements:
+
+  R18:
+The runtime SHALL read `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the account's access token right after a sign-in and every 5 minutes for active and paused accounts, with at most four reads at once, and SHALL store `config.creditUsagePercent` (absent means 0) and `config.currentPeriod.end`. Sign-in SHALL also request the scope `grok-cli:access`, without which this read answers 403.
+
+  R19:
+A failed read SHALL keep the last value and record `usage_error`: `scope_missing` on 403, `unavailable` otherwise. A 401 SHALL refresh the token and repeat once. A failed read MUST NOT change the account's status or fail the task, and MUST NOT stop the account from generating. A new sign-in SHALL clear `usage_error`.
+
+  R20:
+Selection SHALL skip an account whose reading is at least 100% until its period ends, order the rest by usage in 10-point bands and then by unfinished jobs and least recent use, treat an elapsed period as unused, and place an account without a reading after those with one. When only exhausted or cooling accounts remain, the client SHALL get 429 `video_pool_exhausted` with `Retry-After` of the nearest return.
+
+  R21:
+The Video page SHALL show per account what is left, a bar, the reset time, and for a missing reading either "no data" or, on `scope_missing`, a request to sign in again with a button. Reading the page MUST NOT call xAI.
+
+Tables:
+video_accounts (added by schema 45)
+ - usage_percent: REAL nullable
+ - usage_period_end: INTEGER
+ - usage_checked_at: INTEGER
+ - usage_error: TEXT
+
+Files And Functions:
+ - planned: internal/application/video_usage.go#RefreshUsage, #readAccountUsage
+ - existing: internal/application/video_jobs.go#RunUsagePoller
+ - existing: internal/adapters/xai/client.go#Usage
+ - existing: internal/adapters/sqlite/video_pool.go#ReserveVideoJob, #SaveVideoUsage, #SetVideoUsageError, #NearestVideoCooldown
+ - existing: web/src/features/video/components/video-page.tsx#PoolUsage
+
+Tests:
+internal/adapters/httpapi/video_test.go
+ - description: a sign-in reads the pool; a later read updates it; a failed read keeps the last value and records unavailable; an absent percentage is 0; an answer without a period is not accepted
+   requirements: R18, R19
+ - description: an account answering 403 records scope_missing, stays active and still generates, and a new sign-in restores the reading
+   requirements: R18, R19
+ - description: the account with more left is chosen; inside one band the less loaded one is; an exhausted one is skipped; all exhausted gives 429 with Retry-After of the period end; an elapsed period is usable again
+   requirements: R20
+ - description: the page shows what is left, exhausted, the sign-in request with its button and no data
+   requirements: R21
+
 ## Implementation checklist
 
 1. [x] Solution spec and OpenSpec change `add-grok-video-pool`.
@@ -291,11 +333,11 @@ Deferred:
 - Video extension and editing endpoints, xAI Files API inputs, and `storage_options` uploads.
 - Copying finished videos to codex-lb storage; the client receives xAI's URL.
 - Per-key video limits and budgets: the allow list is the only control for now, because the function is for the owner's keys.
-- Choosing an account by its remaining pool: the API exposes no such value.
+- Prepaid balance and on-demand credits: an account at 100% is skipped even if it has them, so it never spends money by itself.
 
 ## Open questions
 
-1. Non-blocking: the refusal at an exhausted limit and the pool cost of a job were not observed. The refusal mapping (R10) follows HTTP status and may need adjusting after the first real refusal.
+1. Non-blocking: the refusal at an exhausted limit was not observed, and the pool cost of one job is not known precisely. The refusal mapping (R10) follows HTTP status and may need adjusting after the first real refusal.
 2. Non-blocking: xAI's terms were seen only through a secondary source and bar making an account available to others. The owner's several accounts with the owner's keys fit "only for myself", but using several subscriptions to get around limits was not checked against the current text; the owner accepts the account risk by choosing this design.
 
 ## Decision log
@@ -310,3 +352,6 @@ Deferred:
 - 2026-10-31: `grok-imagine-video-1.5-lite` is treated like the classic model for pinned frames and references: xAI's reference page says only `grok-imagine-video-1.5` supports them. Not probed on the subscription.
 - 2026-10-31: End-to-end run of the built binary with the owner's sign-in through the admin API and the narrow scope: 403 before allow, 503 with an empty pool, sign-in success, one `grok-imagine-video-1.5` job with first frame, last frame and text (1 s, 480p, 28 s, $0.10 reported), account deleted with revoke, and no tokens or image payloads in the server log. The browser dialog itself is covered by dashboard tests with stubs.
 - 2026-10-31: For go-v1.9.0 the owner stopped `go test -race` of `internal/adapters/sqlite` after 19 minutes on the local machine: this branch does not touch that package. Plain `go test` passed for it, and the race run passed for every other package.
+- 2026-11-01: The owner found the remaining limits unclear and approved showing them and using them for selection. Probes: `cli-chat-proxy.grok.com/v1/billing?format=credits` answers 403 `User does not have Grok Code CLI permission` with `api:access` alone and 200 with `grok-cli:access`, giving `creditUsagePercent`, `productUsage`, `currentPeriod` and `prepaidBalance`. The endpoint is undocumented, so a failed read never blocks generation. Accounts signed in with go-v1.9.0 need one new sign-in to show a reading (go-v1.10.0).
+- 2026-11-01: 10-point bands instead of strict lowest percentage: readings are up to 5 minutes old and whole-numbered, so a strict order would send every job to one account between reads.
+- 2026-11-01: Validation for go-v1.10.0 ran locally: vet, golangci-lint, `go test`, `go test -race` in four parallel shards (about 10 minutes for all gates instead of over 20), govulncheck, openspec, `make web-check`, build and contract tests. The product read on a real account after this release is still to be seen on prod.

@@ -2090,7 +2090,6 @@
   "video.totals.detail": "{{jobs}} 个任务中完成 {{done}} 个,{{seconds}} 秒",
   "video.accounts.title": "账号池",
   "video.accounts.howTo": "请在此处登录每个 Grok 账号。登录已在账号池中的账号会续期其会话。",
-  "video.accounts.poolNote": "xAI 不通过 API 提供每周剩余用量,请查看 xAI 网站的 Usage 选项卡。",
   "video.accounts.emptyTitle": "还没有 Grok 账号",
   "video.accounts.emptyDescription": "导入 auth.json 以开始使用账号池。",
   "video.accounts.account": "账号",
@@ -2146,5 +2145,12 @@
   "video.login.description": "打开 xAI 页面,确认显示的是此代码,然后使用要添加的 Grok 账号批准登录。请保持此对话框打开。",
   "video.login.open": "打开 xAI 登录页面",
   "video.login.code": "代码",
-  "video.login.waiting": "正在等待您批准…"
+  "video.login.waiting": "正在等待您批准…",
+  "video.accounts.pool": "每周用量",
+  "video.pool.left": "剩余 {{percent}}%",
+  "video.pool.exhausted": "已用尽",
+  "video.pool.resets": "{{time}} 重置",
+  "video.pool.noData": "暂无数据",
+  "video.pool.needsSignIn": "重新登录后可查看",
+  "video.pool.stale": "上次读取的值;最近一次读取失败"
 }

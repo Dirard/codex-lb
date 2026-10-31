@@ -11,7 +11,8 @@ import (
 )
 
 const videoAccountColumns = `id,xai_user_id,email,label,status,access_token_encrypted,refresh_token_encrypted,
- oidc_client_id,access_expires_at,token_version,cooldown_until,last_refusal_code,last_used_at,created_at,updated_at`
+ oidc_client_id,access_expires_at,token_version,cooldown_until,last_refusal_code,last_used_at,created_at,updated_at,
+ usage_percent,usage_period_end,usage_checked_at,usage_error`
 
 const videoJobColumns = `id,api_key_id,account_id,coalesce(upstream_request_id,''),model,mode,requested_seconds,status,
  video_url,duration_seconds,cost_microdollars,error_code,next_poll_at,created_at,finished_at`
@@ -34,9 +35,11 @@ func nullableMillisTime(value sql.NullInt64) *time.Time {
 
 func scanVideoAccount(row interface{ Scan(...any) error }) (domain.VideoAccount, error) {
 	var a domain.VideoAccount
-	var expires, cooldown, used, created, updated int64
+	var expires, cooldown, used, created, updated, usageEnd, usageChecked int64
+	var usage sql.NullFloat64
 	err := row.Scan(&a.ID, &a.XAIUserID, &a.Email, &a.Label, &a.Status, &a.AccessTokenEncrypted, &a.RefreshTokenEncrypted,
-		&a.OIDCClientID, &expires, &a.TokenVersion, &cooldown, &a.LastRefusalCode, &used, &created, &updated)
+		&a.OIDCClientID, &expires, &a.TokenVersion, &cooldown, &a.LastRefusalCode, &used, &created, &updated,
+		&usage, &usageEnd, &usageChecked, &a.UsageError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -45,6 +48,10 @@ func scanVideoAccount(row interface{ Scan(...any) error }) (domain.VideoAccount,
 	}
 	a.AccessExpiresAt, a.CreatedAt, a.UpdatedAt = fromMillis(expires), fromMillis(created), fromMillis(updated)
 	a.CooldownUntil, a.LastUsedAt = positiveMillisTime(cooldown), positiveMillisTime(used)
+	a.UsagePeriodEnd, a.UsageCheckedAt = positiveMillisTime(usageEnd), positiveMillisTime(usageChecked)
+	if usage.Valid {
+		a.UsagePercent = &usage.Float64
+	}
 	return a, nil
 }
 
@@ -81,7 +88,7 @@ func (s *Store) SaveVideoAccount(ctx context.Context, account domain.VideoAccoun
  ON CONFLICT(xai_user_id) DO UPDATE SET email=excluded.email,status='active',access_token_encrypted=excluded.access_token_encrypted,
  refresh_token_encrypted=excluded.refresh_token_encrypted,oidc_client_id=excluded.oidc_client_id,
  access_expires_at=excluded.access_expires_at,token_version=video_accounts.token_version+1,refresh_claimed_until=0,
- cooldown_until=0,last_refusal_code='',updated_at=excluded.updated_at`,
+ cooldown_until=0,last_refusal_code='',usage_error='',updated_at=excluded.updated_at`,
 			account.ID, account.XAIUserID, account.Email, account.Label, account.AccessTokenEncrypted, account.RefreshTokenEncrypted,
 			account.OIDCClientID, millis(account.AccessExpiresAt), millis(account.CreatedAt), millis(account.UpdatedAt))
 		if err != nil {
@@ -226,6 +233,18 @@ func (s *Store) SaveVideoTokens(ctx context.Context, id string, version int64, a
 	return saved, err
 }
 
+// SaveVideoUsage records a successful read of the account's pool.
+func (s *Store) SaveVideoUsage(ctx context.Context, id string, percent float64, periodEnd, now time.Time) error {
+	return s.videoAccountUpdate(ctx, `UPDATE video_accounts SET usage_percent=?,usage_period_end=?,usage_checked_at=?,usage_error='' WHERE id=?`,
+		percent, millis(periodEnd), millis(now), id)
+}
+
+// SetVideoUsageError records why the pool could not be read and keeps the last
+// value that was read.
+func (s *Store) SetVideoUsageError(ctx context.Context, id, code string, now time.Time) error {
+	return s.videoAccountUpdate(ctx, `UPDATE video_accounts SET usage_error=?,usage_checked_at=? WHERE id=?`, code, millis(now), id)
+}
+
 // IsVideoKeyAllowed reports whether the key is on the video allow list.
 func (s *Store) IsVideoKeyAllowed(ctx context.Context, keyID string) (bool, error) {
 	var found int
@@ -282,15 +301,22 @@ func (s *Store) DenyVideoKey(ctx context.Context, keyID string) error {
 	})
 }
 
-// ReserveVideoJob picks the least busy account in one short transaction and
-// writes the dispatching job with it, so concurrent requests and overlapping
-// workers count the job at once. It returns ErrNoAccounts when none qualifies.
+// ReserveVideoJob picks an account in one short transaction and writes the
+// dispatching job with it, so concurrent requests and overlapping workers count
+// the job at once. An account whose pool is known to be exhausted is skipped.
+// Accounts are ordered by pool usage in 10-point bands, so similar accounts
+// share the work, then by unfinished jobs and least recent use. An account with
+// no reading comes after those with one; an elapsed period counts as unused.
+// It returns ErrNoAccounts when none qualifies.
 func (s *Store) ReserveVideoJob(ctx context.Context, job domain.VideoJob, excluded map[string]bool, maxUnfinished int, now time.Time) (domain.VideoAccount, error) {
 	var selected domain.VideoAccount
 	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT a.id,
  (SELECT count(*) FROM video_jobs j WHERE j.account_id=a.id AND j.status IN ('dispatching','pending')) AS unfinished
- FROM video_accounts a WHERE a.status='active' AND a.cooldown_until<=? ORDER BY unfinished,a.last_used_at,a.id`, millis(now))
+ FROM video_accounts a WHERE a.status='active' AND a.cooldown_until<=?
+ AND NOT (a.usage_percent>=100 AND a.usage_period_end>?)
+ ORDER BY CASE WHEN a.usage_percent IS NULL THEN 999 WHEN a.usage_period_end<=? THEN 0 ELSE CAST(a.usage_percent/10 AS INTEGER) END,
+ unfinished,a.last_used_at,a.id`, millis(now), millis(now), millis(now))
 		if err != nil {
 			return err
 		}
@@ -329,10 +355,12 @@ func (s *Store) ReserveVideoJob(ctx context.Context, job domain.VideoJob, exclud
 	return selected, err
 }
 
-// NearestVideoCooldown returns when the first cooling active account returns.
+// NearestVideoCooldown returns when the first active account that is cooling
+// down or has an exhausted pool can be used again.
 func (s *Store) NearestVideoCooldown(ctx context.Context, now time.Time) (*time.Time, error) {
 	var until sql.NullInt64
-	err := s.readDB.QueryRowContext(ctx, `SELECT min(cooldown_until) FROM video_accounts WHERE status='active' AND cooldown_until>?`, millis(now)).Scan(&until)
+	err := s.readDB.QueryRowContext(ctx, `SELECT min(max(cooldown_until,CASE WHEN usage_percent>=100 THEN usage_period_end ELSE 0 END))
+ FROM video_accounts WHERE status='active' AND (cooldown_until>? OR (usage_percent>=100 AND usage_period_end>?))`, millis(now), millis(now)).Scan(&until)
 	if err != nil {
 		return nil, err
 	}

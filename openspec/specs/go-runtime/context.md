@@ -803,7 +803,7 @@ For Codex to show the tool, the provider needs `requires_openai_auth = true` wit
 
 Since go-v1.7.0 the image routes relay `stream: true` answers as they are. A generation streams `keepalive` events and one `image_generation.completed` event with the image and usage, but no draft frames: the subscription ignores `partial_images`. An edit answers JSON. A final 429 carries the upstream reset headers. On Responses with the hosted `image_generation` tool, a 429 whose `X-Codex-Active-Limit` names an image limit is returned as 429 `usage_limit_reached` with those headers, without marking the account or replaying the request. Details: [image-streams-and-limit-headers](../../changes/archive/2026-10-30-image-streams-and-limit-headers/context.md).
 
-## Grok video generation (go-v1.8.0, web sign-in go-v1.9.0)
+## Grok video generation (go-v1.8.0, web sign-in go-v1.9.0, weekly pool go-v1.10.0)
 
 Video generation is a separate function. Grok accounts form their own pool in `video_accounts`, separate from `accounts`, so no proxy route, report or key limit sees them. A job's cost is kept on its own row and consumes no API-key limit.
 
@@ -823,12 +823,14 @@ The answer is 202 with an `id`. Poll `GET /video/v1/generations/{id}` until `sta
 | `grok-imagine-video-1.5` | yes | yes | yes |
 | `grok-imagine-video-1.5-lite` | yes | yes | no |
 
+**Weekly pool (go-v1.10.0).** The page shows what is left of each account's pool and when it resets, read right after sign-in and every 5 minutes from `cli-chat-proxy.grok.com/v1/billing?format=credits`. This route is undocumented and is what the official CLI uses, so a failed read keeps the last value and never blocks generation. It needs the scope `grok-cli:access`: an account signed in before go-v1.10.0 shows **Sign in again** and keeps generating until then. Selection prefers accounts with more left, in 10-point bands, and skips an account at 100% until its period ends, so it never spends on-demand credits by itself, even with a prepaid balance. When only exhausted or cooling accounts remain, the client gets 429 `video_pool_exhausted` with `Retry-After`.
+
 **Failure handling.** A job is created on the least busy account, at most four unfinished jobs per account. A 401 after one refresh, a 403 or a 429 moves the request to another account, trying at most four. A 429 cools the account down by `Retry-After`, or one hour without it. A 403 sets **Refused by xAI** until the operator resumes the account. A server error or a lost connection gives 502 and is not replayed, because the video may have been generating. Every account refusing gives 429 `video_pool_exhausted` with `Retry-After`; no available account gives 503 `video_no_accounts`. A background task finishes jobs nobody polls; a job pending for an hour becomes `unknown`, and finished rows are deleted after 90 days.
 
 **Limits.**
 - Sign-in uses the official CLI's public OAuth client id, built into codex-lb, because xAI publishes no way to register one; xAI may stop or forbid it. The owner accepted this risk for their own accounts.
 - The video URL is xAI's and can be read by anyone who has it. Its lifetime was not measured.
-- The remaining weekly pool is not available through the API, only in the Usage tab on xAI's site. The refusal at an exhausted limit was not observed; R10 of the spec follows the HTTP status.
+- The refusal at an exhausted limit was not observed; R10 of the spec follows the HTTP status.
 - `cost_usd` is the cost xAI reports, not money charged to a subscription.
 
 Probe evidence and design: [grok-video-generation](../../../../specs/grok-video-generation.md).

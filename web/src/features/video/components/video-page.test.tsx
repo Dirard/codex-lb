@@ -10,6 +10,7 @@ import { renderWithProviders } from "@/test/utils";
 const account = {
   id: "vacc_1", email: "one@example.invalid", label: "Main", status: "active", cooldownUntil: null, lastRefusalCode: "",
   lastUsedAt: null, createdAt: "2026-10-31T10:00:00Z", updatedAt: "2026-10-31T10:00:00Z", unfinishedJobs: 1, doneJobs: 3, costUsd: 0.54,
+  usagePercent: 25, usagePeriodEnd: "2099-01-01T00:00:00Z", usageCheckedAt: "2026-10-31T10:00:00Z", usageError: "",
 };
 const totals = { jobs: 3, done: 3, seconds: 6, costUsd: 0.54 };
 
@@ -50,6 +51,31 @@ describe("VideoPage", () => {
     expect(await within(section).findByText("First and last frame")).toBeInTheDocument();
     expect(within(section).getByText("$0.18")).toBeInTheDocument();
     expect(await screen.findByLabelText("Totals")).toBeInTheDocument();
+  });
+
+  it("shows what is left of each account's pool and why a reading is missing", async () => {
+    server.use(
+      http.get("/api/video/accounts", () =>
+        HttpResponse.json({
+          accounts: [
+            account,
+            { ...account, id: "vacc_2", label: "Empty", usagePercent: 100 },
+            { ...account, id: "vacc_3", label: "Old login", usagePercent: null, usagePeriodEnd: null, usageError: "scope_missing" },
+            { ...account, id: "vacc_4", label: "Unknown", usagePercent: null, usagePeriodEnd: null, usageError: "unavailable" },
+          ],
+        }),
+      ),
+      ...poolHandlers({ allowed: true }),
+    );
+    renderWithProviders(<VideoPage />);
+    expect(await screen.findByText("75% left")).toBeInTheDocument();
+    expect(screen.getByText("Exhausted")).toBeInTheDocument();
+    const oldLogin = screen.getByText("Old login").closest("tr") as HTMLElement;
+    expect(within(oldLogin).getByText("Sign in again to see this")).toBeInTheDocument();
+    expect(within(oldLogin).getByRole("button", { name: "Sign in again" })).toBeInTheDocument();
+    const unknown = screen.getByText("Unknown").closest("tr") as HTMLElement;
+    expect(within(unknown).getByText("No data yet")).toBeInTheDocument();
+    expect(within(unknown).queryByRole("button", { name: "Sign in again" })).not.toBeInTheDocument();
   });
 
   it("adds and removes an allowed key", async () => {
