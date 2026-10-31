@@ -27,7 +27,7 @@ const (
 	// publishes no way to register a client, and the owner accepted that xAI may
 	// stop allowing this use.
 	DefaultClientID  = "b1a00492-073a-47ea-816f-4c329264a828"
-	loginScope       = "openid profile email offline_access api:access"
+	loginScope       = "openid profile email offline_access grok-cli:access api:access"
 	deviceGrant      = "urn:ietf:params:oauth:grant-type:device_code"
 	maxResponseBytes = 1 << 20
 	callTimeout      = 60 * time.Second
