@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"codex-lb/internal/adapters/credentials"
+	"codex-lb/internal/adapters/egress"
 	"codex-lb/internal/adapters/webui"
 )
 
@@ -299,5 +300,12 @@ func TestCLISecurityConfiguration(t *testing.T) {
 	t.Setenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", strings.Repeat("a", 32))
 	if _, err := parseConfig("serve", nil, io.Discard); err != nil {
 		t.Fatalf("32-character bootstrap token rejected: %v", err)
+	}
+}
+
+func TestUpstreamTransportWaitsForSlowImageEdits(t *testing.T) {
+	transport := newUpstreamTransport(egress.New(false, slog.New(slog.DiscardHandler)), 8)
+	if transport.ResponseHeaderTimeout != 3*time.Minute || transport.MaxConnsPerHost != 8 {
+		t.Fatalf("header timeout %v, conns %d", transport.ResponseHeaderTimeout, transport.MaxConnsPerHost)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"math"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -187,8 +188,13 @@ func (a *Adapter) operation(ctx context.Context, method, endpoint string, body [
 	}
 	response, err := a.config.HTTPClient.Do(request)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return application.CodexOperationResult{}, err
+		}
+		// The caller's deadline is still ahead: the transport gave up waiting.
+		var timeout net.Error
+		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout() {
+			return application.CodexOperationResult{}, providerFailure("upstream_timeout", http.StatusGatewayTimeout, true)
 		}
 		return application.CodexOperationResult{}, providerFailure("upstream_unavailable", 502, true)
 	}

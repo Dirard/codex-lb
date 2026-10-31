@@ -308,12 +308,29 @@ func (s *VideoService) videoMayHaveExecuted(ctx context.Context, id string, caus
 // the client just sent, and bounds it.
 func videoUpstreamMessage(body []byte) string {
 	var payload struct {
-		Error string `json:"error"`
+		Error json.RawMessage `json:"error"`
 	}
-	if json.Unmarshal(body, &payload) != nil || payload.Error == "" {
-		return "xAI rejected this request"
+	if json.Unmarshal(body, &payload) == nil {
+		if message := videoErrorText(payload.Error); message != "" {
+			return message
+		}
 	}
-	message := payload.Error
+	return "xAI rejected this request"
+}
+
+// videoErrorText reads xAI's `error`, a string or an object with a message,
+// and bounds it; it is empty when xAI gave no words.
+func videoErrorText(raw json.RawMessage) string {
+	var message string
+	if json.Unmarshal(raw, &message) != nil {
+		var object struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(raw, &object) != nil {
+			return ""
+		}
+		message = object.Message
+	}
 	if len(message) > videoErrorBytes {
 		message = strings.ToValidUTF8(message[:videoErrorBytes], "")
 	}

@@ -283,7 +283,10 @@ export function VideoPage() {
                     <TableCell>{job.accountLabel}</TableCell>
                     <TableCell>{job.model}</TableCell>
                     <TableCell>{t(`video.mode.${job.mode}`, job.mode)}</TableCell>
-                    <TableCell title={job.errorCode || undefined}>{t(`video.jobStatus.${job.status}`, job.status)}</TableCell>
+                    <TableCell>
+                      {t(`video.jobStatus.${job.status}`, job.status)}
+                      {job.errorMessage ? <div className="text-xs text-muted-foreground">{job.errorMessage}</div> : null}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">{job.durationSeconds ?? job.requestedSeconds}</TableCell>
                     <TableCell className="text-right tabular-nums">{job.costUsd === null ? "--" : formatCurrency(job.costUsd)}</TableCell>
                   </TableRow>

@@ -29,6 +29,10 @@ CREATE INDEX idx_video_jobs_due ON video_jobs(next_poll_at) WHERE status='pendin
 CREATE INDEX idx_video_jobs_finished ON video_jobs(finished_at) WHERE finished_at IS NOT NULL;
 `
 
+// schemaV46 keeps the reason of a job that gave no video. Additive: older code
+// names its columns and never reads this one.
+const schemaV46 = `ALTER TABLE video_jobs ADD COLUMN error_message TEXT NOT NULL DEFAULT '';`
+
 // schemaV45 keeps the last read of each video account's subscription pool.
 // Additive: older code selects its own columns and ignores these.
 const schemaV45 = `

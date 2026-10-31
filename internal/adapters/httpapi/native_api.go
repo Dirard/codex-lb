@@ -292,7 +292,7 @@ func writeNativeFailure(w http.ResponseWriter, result application.NativeAPIResul
 	if code == "" {
 		code = "upstream_error"
 	}
-	writeError(w, status, code, "Upstream request failed")
+	writeError(w, status, code, providerFailureMessage(code))
 }
 
 func nativeStreamError(err error) json.RawMessage {

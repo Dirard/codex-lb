@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,7 @@ type VideoService struct {
 	admission CodexAdmission
 	now       func() time.Time
 	wait      func(context.Context, time.Duration) error
+	log       *slog.Logger
 
 	mu      sync.Mutex
 	flights map[string]*videoRefreshFlight
@@ -105,11 +107,14 @@ type videoRefreshFlight struct {
 
 func NewVideoService(store VideoStore, cipher SecretCipher, upstream VideoUpstream) *VideoService {
 	return &VideoService{store: store, cipher: cipher, upstream: upstream, admission: blockedCodexAdmission{}, now: time.Now,
-		wait: waitVideo, flights: map[string]*videoRefreshFlight{}, logins: map[string]*videoLoginFlow{}}
+		wait: waitVideo, log: slog.New(slog.DiscardHandler), flights: map[string]*videoRefreshFlight{}, logins: map[string]*videoLoginFlow{}}
 }
 
 // ConfigureClock replaces the clock; tests use it to reach poll and stale deadlines.
 func (s *VideoService) ConfigureClock(now func() time.Time) { s.now = now }
+
+// ConfigureLogger sets where unfinished jobs leave their trace.
+func (s *VideoService) ConfigureLogger(logger *slog.Logger) { s.log = logger }
 
 // ConfigureAdmission shares the proxy's bounded admission and drain state.
 func (s *VideoService) ConfigureAdmission(admission CodexAdmission) { s.admission = admission }

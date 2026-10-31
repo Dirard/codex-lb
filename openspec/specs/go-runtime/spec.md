@@ -2568,6 +2568,8 @@ Accounts SHALL be selected by the shared balancer among the key's eligible ChatG
 
 The API-key reservation SHALL be taken before dispatch. It SHALL be settled exactly once from the response `usage` at the image model's token rates. A successful response without at least one `data` entry carrying `b64_json` SHALL return 502. A successful response without usage SHALL return 502 and keep its reservation for reconciliation. Image requests SHALL NOT change account health or quota state, whether they succeed or are refused.
 
+The wait for the first byte of an upstream answer SHALL last up to three minutes; a longer wait SHALL answer 504 `upstream_timeout`. Every provider failure answer SHALL name its reason in `error.message`.
+
 An upstream HTTP 429 usage-limit refusal that arrives before any output or usage SHALL be settled as a failed, uncharged attempt. That account SHALL then be excluded from image routing for 10 minutes, and the same request SHALL be sent to another eligible account, trying at most four accounts per request. Any other failure, and any response that carried output or usage, SHALL NOT be retried on another account.
 
 When the request finally fails with an upstream 429, the response SHALL carry these upstream headers unchanged:
@@ -2620,6 +2622,11 @@ Usage events SHALL record request kind `image_generation` or `image_edit` with t
 - **WHEN** an edit references a `file_id` created through codex-lb on one account and that account refuses with 429
 - **THEN** the refusal is returned to the client and no other account receives the edit
 
+#### Scenario: An image edit gets no answer in time
+
+- **WHEN** the upstream sends no first byte within the bound
+- **THEN** the client gets 504 `upstream_timeout` with a message that says so, not 502 `upstream_unavailable`
+
 ### Requirement: Image-limit refusals on Responses leave the account usable
 
 The runtime SHALL classify an upstream refusal as `image_generation_limit` instead of account quota exhaustion when all of these hold:
@@ -2662,7 +2669,7 @@ Creation SHALL accept `model`, `prompt`, `image`, `last_frame`, `keyframes`, `re
 
 A job row SHALL be written before dispatch, and a successful creation SHALL answer 202 with the local `id`. An upstream 401 after one token refresh, 403 or 429 SHALL mark that attempt refused, take the account out of selection and move the request to another eligible account, trying at most four accounts. Any other failure, or one that may have executed, MUST NOT be sent to another account. When all tried accounts refused, the client SHALL receive 429 `video_pool_exhausted`.
 
-Status reads and a background sweep SHALL query only the job's account. A job SHALL leave `pending` exactly once. `done` SHALL record `usage.cost_in_usd_ticks` at 1e-10 USD per tick and the duration. `failed` and `expired` SHALL record no cost. A job still `pending` one hour after creation SHALL become `unknown`, and a job left in `dispatching` for 15 minutes SHALL become `unknown`. Responses SHALL NOT name the account or the upstream request id. Logs and diagnostics MUST NOT contain tokens, prompts, image or audio payloads, or video URLs.
+Status reads and a background sweep SHALL query only the job's account. A job SHALL leave `pending` exactly once. `done` SHALL record `usage.cost_in_usd_ticks` at 1e-10 USD per tick and the duration. `failed` and `expired` SHALL record no cost. A finished job without a video SHALL answer `error` with its code and `error_message` with its reason in words, xAI's own text when xAI gave one, and the dashboard job list SHALL show that reason. A `done` answer with `respect_moderation: false` SHALL finish the job as `failed` with `video_moderated`, and a `done` answer without a video URL SHALL finish it as `failed` with `video_failed`; neither SHALL give the client a URL or record a cost. A job still `pending` one hour after creation SHALL become `unknown`, and a job left in `dispatching` for 15 minutes SHALL become `unknown`. Responses SHALL NOT name the account or the upstream request id. A due poll of a job older than two minutes that does not finish it SHALL log a warning with the local job id, its age, xAI's HTTP status and its status word, at most once per minute per job. Logs and diagnostics MUST NOT contain tokens, prompts, image or audio payloads, or video URLs.
 
 The runtime SHALL read each active or paused account's subscription pool right after a sign-in and every 5 minutes from `https://cli-chat-proxy.grok.com/v1/billing?format=credits`, for which sign-in SHALL request the scope `grok-cli:access`, and SHALL store the usage percentage and period end. A failed read SHALL keep the last value, SHALL be recorded on the account, and MUST NOT change the account's status or stop it from generating. Selection SHALL skip an account at 100% or more until its period ends, SHALL prefer accounts with more left in 10-point bands, SHALL treat an elapsed period as unused, and SHALL place an account without a reading after those with one. The dashboard SHALL show what is left and when it resets, without calling xAI when the page is read.
 
@@ -2708,3 +2715,13 @@ The runtime SHALL read each active or paused account's subscription pool right a
 #### Scenario: An exhausted account is skipped
 - **WHEN** an account reads 100% and its period has not ended
 - **THEN** no video request goes to it, another account takes the job, and with no other account the client receives 429 `video_pool_exhausted` with `Retry-After` of the period end
+
+#### Scenario: A moderated video does not stay pending
+
+- **WHEN** xAI answers a poll with `status: done` and `respect_moderation: false`
+- **THEN** the job becomes `failed` with `video_moderated`, without a URL or cost, on that poll
+
+#### Scenario: An unfinished job leaves a trace
+
+- **WHEN** a job older than two minutes is polled by clients several times within a minute and xAI still answers `pending`
+- **THEN** one warning names the job, its age, the HTTP status and `pending`, and it contains no upstream request id, token or URL

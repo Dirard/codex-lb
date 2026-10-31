@@ -15,7 +15,7 @@ const videoAccountColumns = `id,xai_user_id,email,label,status,access_token_encr
  usage_percent,usage_period_end,usage_checked_at,usage_error`
 
 const videoJobColumns = `id,api_key_id,account_id,coalesce(upstream_request_id,''),model,mode,requested_seconds,status,
- video_url,duration_seconds,cost_microdollars,error_code,next_poll_at,created_at,finished_at`
+ video_url,duration_seconds,cost_microdollars,error_code,error_message,next_poll_at,created_at,finished_at`
 
 func positiveMillisTime(value int64) *time.Time {
 	if value <= 0 {
@@ -61,7 +61,7 @@ func scanVideoJob(row interface{ Scan(...any) error }) (domain.VideoJob, error) 
 	var cost, next, finished sql.NullInt64
 	var created int64
 	err := row.Scan(&j.ID, &j.APIKeyID, &j.AccountID, &j.UpstreamRequestID, &j.Model, &j.Mode, &j.RequestedSeconds, &j.Status,
-		&j.VideoURL, &duration, &cost, &j.ErrorCode, &next, &created, &finished)
+		&j.VideoURL, &duration, &cost, &j.ErrorCode, &j.ErrorMessage, &next, &created, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, ErrNotFound
 	}
@@ -391,8 +391,8 @@ func (s *Store) MarkVideoJobPending(ctx context.Context, id, upstreamRequestID s
 func (s *Store) FinishVideoJob(ctx context.Context, id string, finish domain.VideoJobFinish) (bool, error) {
 	applied := false
 	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE video_jobs SET status=?,video_url=?,duration_seconds=?,cost_microdollars=?,error_code=?,finished_at=?,next_poll_at=NULL
- WHERE id=? AND status IN ('dispatching','pending')`, finish.Status, finish.VideoURL, finish.DurationSeconds, finish.CostMicrodollars, finish.ErrorCode, millis(finish.At), id)
+		result, err := tx.ExecContext(ctx, `UPDATE video_jobs SET status=?,video_url=?,duration_seconds=?,cost_microdollars=?,error_code=?,error_message=?,finished_at=?,next_poll_at=NULL
+ WHERE id=? AND status IN ('dispatching','pending')`, finish.Status, finish.VideoURL, finish.DurationSeconds, finish.CostMicrodollars, finish.ErrorCode, finish.ErrorMessage, millis(finish.At), id)
 		if err != nil {
 			return err
 		}
@@ -474,7 +474,7 @@ func (s *Store) PruneVideoJobs(ctx context.Context, before time.Time, limit int)
 func (s *Store) VideoJobEntries(ctx context.Context, before *domain.VideoJobCursor, limit int) ([]domain.VideoJobEntry, error) {
 	var query strings.Builder
 	query.WriteString(`SELECT j.id,coalesce(k.name,''),coalesce(nullif(a.label,''),a.email,''),j.model,j.mode,j.requested_seconds,j.status,
- j.duration_seconds,j.cost_microdollars,j.error_code,j.created_at,j.finished_at
+ j.duration_seconds,j.cost_microdollars,j.error_code,j.error_message,j.created_at,j.finished_at
  FROM video_jobs j LEFT JOIN api_keys k ON k.id=j.api_key_id LEFT JOIN video_accounts a ON a.id=j.account_id WHERE 1=1`)
 	args := []any{}
 	if before != nil {
@@ -494,7 +494,7 @@ func (s *Store) VideoJobEntries(ctx context.Context, before *domain.VideoJobCurs
 		var duration sql.NullFloat64
 		var cost, finished sql.NullInt64
 		var created int64
-		if err := rows.Scan(&e.ID, &e.KeyName, &e.AccountLabel, &e.Model, &e.Mode, &e.RequestedSeconds, &e.Status, &duration, &cost, &e.ErrorCode, &created, &finished); err != nil {
+		if err := rows.Scan(&e.ID, &e.KeyName, &e.AccountLabel, &e.Model, &e.Mode, &e.RequestedSeconds, &e.Status, &duration, &cost, &e.ErrorCode, &e.ErrorMessage, &created, &finished); err != nil {
 			return nil, err
 		}
 		e.CreatedAt, e.FinishedAt = fromMillis(created), nullableMillisTime(finished)
