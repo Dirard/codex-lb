@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clapperboard } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -14,13 +14,14 @@ import {
   deleteVideoAccount,
   denyVideoKey,
   getVideoSummary,
-  importVideoAccount,
   listVideoAccounts,
   listVideoJobs,
   listVideoKeys,
+  startVideoLogin,
   updateVideoAccount,
 } from "@/features/video/api";
-import type { VideoAccount, VideoJob } from "@/features/video/schemas";
+import { VideoLoginDialog } from "@/features/video/components/video-login-dialog";
+import type { VideoAccount, VideoJob, VideoLoginStart } from "@/features/video/schemas";
 import { getErrorMessageOrNull } from "@/utils/errors";
 import { formatCurrency, formatDateTimeInline } from "@/utils/formatters";
 
@@ -34,7 +35,7 @@ function coolingUntil(account: VideoAccount): string | null {
 export function VideoPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const fileInput = useRef<HTMLInputElement>(null);
+  const [login, setLogin] = useState<VideoLoginStart | null>(null);
   const [selectedKey, setSelectedKey] = useState("");
   const [olderJobs, setOlderJobs] = useState<VideoJob[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -46,14 +47,7 @@ export function VideoPage() {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["video"] });
   const onError = (error: unknown) => toast.error(getErrorMessageOrNull(error) ?? t("video.actionFailed"));
-  const importAccount = useMutation({
-    mutationFn: importVideoAccount,
-    onSuccess: (account) => {
-      toast.success(t("video.accounts.imported", { email: account.email }));
-      void refresh();
-    },
-    onError,
-  });
+  const startLogin = useMutation({ mutationFn: startVideoLogin, onSuccess: setLogin, onError });
   const updateAccount = useMutation({
     mutationFn: ({ id, status }: { id: string; status: "active" | "paused" }) => updateVideoAccount(id, { status }),
     onSuccess: () => void refresh(),
@@ -93,6 +87,17 @@ export function VideoPage() {
 
   return (
     <div className="animate-fade-in-up space-y-8">
+      {login ? (
+        <VideoLoginDialog
+          login={login}
+          onClose={() => setLogin(null)}
+          onSignedIn={(email) => {
+            toast.success(t("video.accounts.signedIn", { email }));
+            setLogin(null);
+            void refresh();
+          }}
+        />
+      ) : null}
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">{t("video.title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t("video.subtitle")}</p>
@@ -116,20 +121,8 @@ export function VideoPage() {
       <section className="space-y-3" aria-labelledby="video-accounts">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 id="video-accounts" className="text-lg font-semibold">{t("video.accounts.title")}</h2>
-          <input
-            ref={fileInput}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            aria-label={t("video.accounts.importFile")}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (file) importAccount.mutate(file);
-            }}
-          />
-          <Button size="sm" disabled={importAccount.isPending} onClick={() => fileInput.current?.click()}>
-            {t("video.accounts.import")}
+          <Button size="sm" disabled={startLogin.isPending} onClick={() => startLogin.mutate()}>
+            {t("video.accounts.add")}
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">{t("video.accounts.howTo")}</p>
@@ -165,6 +158,11 @@ export function VideoPage() {
                       <TableCell className="text-right tabular-nums">{formatCurrency(account.costUsd)}</TableCell>
                       <TableCell>{formatDateTimeInline(account.lastUsedAt)}</TableCell>
                       <TableCell className="space-x-2 whitespace-nowrap text-right">
+                        {account.status === "reauth_required" ? (
+                          <Button size="sm" variant="outline" disabled={startLogin.isPending} onClick={() => startLogin.mutate()}>
+                            {t("video.accounts.signInAgain")}
+                          </Button>
+                        ) : null}
                         {account.status === "paused" || account.status === "access_denied" ? (
                           <Button size="sm" variant="outline" onClick={() => updateAccount.mutate({ id: account.id, status: "active" })}>
                             {t("video.accounts.resume")}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -47,11 +46,15 @@ type xaiStub struct {
 	reject401 map[string]bool
 	jobSeq    atomic.Int64
 	server    *httptest.Server
+	// nextLogin is the account the next device sign-in belongs to, and
+	// deviceAnswer holds a refusal to give instead of its tokens.
+	nextLogin    string
+	deviceAnswer map[string]string
 }
 
 func newXAIStub(t *testing.T) *xaiStub {
 	t.Helper()
-	stub := &xaiStub{refreshes: map[string]int{}, refused: map[string]bool{}, reject401: map[string]bool{}}
+	stub := &xaiStub{refreshes: map[string]int{}, refused: map[string]bool{}, reject401: map[string]bool{}, deviceAnswer: map[string]string{}}
 	stub.create = func(string, int) (int, string, http.Header) {
 		return 200, fmt.Sprintf(`{"request_id":"upstream-%d"}`, stub.jobSeq.Add(1)), nil
 	}
@@ -66,6 +69,22 @@ func newXAIStub(t *testing.T) *xaiStub {
 func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/oauth2/userinfo" {
+		account, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), "access-"), "-")
+		_, _ = fmt.Fprintf(w, `{"sub":"user-%s","email":"%s@example.invalid"}`, account, account)
+		return
+	}
+	if r.URL.Path == "/oauth2/device/code" {
+		x.mu.Lock()
+		next := x.nextLogin
+		x.mu.Unlock()
+		if next == "" {
+			w.WriteHeader(500)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"device_code":"device-%s","user_code":"CODE-%s","verification_uri":"https://accounts.example.invalid/device","verification_uri_complete":"https://accounts.example.invalid/device?user_code=CODE-%s","interval":5,"expires_in":1800}`, next, next, next)
+		return
+	}
 	if r.URL.Path == "/oauth2/token" || r.URL.Path == "/oauth2/revoke" {
 		values := strings.Split(string(body), "&")
 		fields := map[string]string{}
@@ -77,6 +96,16 @@ func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 		defer x.mu.Unlock()
 		if r.URL.Path == "/oauth2/revoke" {
 			x.revoked = append(x.revoked, fields["token"])
+			return
+		}
+		if fields["grant_type"] == "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code" {
+			account := strings.TrimPrefix(fields["device_code"], "device-")
+			if answer := x.deviceAnswer[account]; answer != "" {
+				w.WriteHeader(400)
+				_, _ = fmt.Fprintf(w, `{"error":%q}`, answer)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"access_token":"access-%s-0","refresh_token":"refresh-%s-0","id_token":"unused","expires_in":21600,"token_type":"Bearer"}`, account, account)
 			return
 		}
 		account, _, _ := strings.Cut(strings.TrimPrefix(fields["refresh_token"], "refresh-"), "-")
@@ -150,15 +179,13 @@ func newVideoFixture(t *testing.T, accounts ...string) videoFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := application.NewVideoService(store, vault, xai.New(xai.Config{HTTPClient: stub.server.Client(), APIBaseURL: stub.server.URL, AuthBaseURL: stub.server.URL}))
+	service := application.NewVideoService(store, vault, xai.New(xai.Config{HTTPClient: stub.server.Client(), APIBaseURL: stub.server.URL, AuthBaseURL: stub.server.URL, ClientID: "synthetic-cli-client"}))
 	service.ConfigureAdmission(proxy)
 	mux := http.NewServeMux()
 	httpapi.NewVideoHandler(store, service).RegisterRoutes(mux)
 	f := videoFixture{stub: stub, store: store, service: service, mux: mux}
 	for _, account := range accounts {
-		if _, err := service.ImportAccount(context.Background(), videoAuthFile(account)); err != nil {
-			t.Fatal(err)
-		}
+		signInVideoAccount(t, f, account)
 	}
 	if err := service.AllowKey(context.Background(), "wire-key"); err != nil {
 		t.Fatal(err)
@@ -166,8 +193,21 @@ func newVideoFixture(t *testing.T, accounts ...string) videoFixture {
 	return f
 }
 
-func videoAuthFile(account string) []byte {
-	return []byte(fmt.Sprintf(`{"https://auth.x.ai::synthetic":{"key":"cli-access","refresh_token":"refresh-%s-0","user_id":"user-%s","email":"%s@example.invalid","oidc_issuer":"https://auth.x.ai","oidc_client_id":"synthetic-cli-client"}}`, account, account, account))
+// signInVideoAccount runs a device sign-in that the stub approves at once.
+func signInVideoAccount(t *testing.T, f videoFixture, account string) {
+	t.Helper()
+	ctx := context.Background()
+	f.stub.mu.Lock()
+	f.stub.nextLogin = account
+	f.stub.mu.Unlock()
+	login, err := f.service.StartLogin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := f.service.LoginStatus(ctx, login.FlowID)
+	if err != nil || status.Status != "success" {
+		t.Fatalf("sign-in of %s: %+v %v", account, status, err)
+	}
 }
 
 func (f videoFixture) request(method, path, body string) *httptest.ResponseRecorder {
@@ -582,11 +622,11 @@ func TestVideoSweepFinishesJobsNobodyPolls(t *testing.T) {
 func TestVideoTokensRefreshOnceAndRotate(t *testing.T) {
 	f := newVideoFixture(t, "one")
 	ctx := context.Background()
-	if count := f.stub.refreshes["one"]; count != 1 {
-		t.Fatalf("import refreshes once, got %d", count)
+	if count := f.stub.refreshes["one"]; count != 0 {
+		t.Fatalf("a fresh sign-in needs no refresh, got %d", count)
 	}
 	f.stub.mu.Lock()
-	f.stub.reject401["one-1"] = true
+	f.stub.reject401["one-0"] = true
 	f.stub.mu.Unlock()
 	var group sync.WaitGroup
 	for range 3 {
@@ -600,8 +640,8 @@ func TestVideoTokensRefreshOnceAndRotate(t *testing.T) {
 	f.stub.mu.Lock()
 	refreshes := f.stub.refreshes["one"]
 	f.stub.mu.Unlock()
-	if refreshes != 2 {
-		t.Fatalf("concurrent 401s refreshed %d times", refreshes-1)
+	if refreshes != 1 {
+		t.Fatalf("concurrent 401s refreshed %d times", refreshes)
 	}
 	if calls := f.stub.createCalls(); len(calls) != 3 {
 		t.Fatalf("repeat after refresh: %+v", calls)
@@ -609,7 +649,7 @@ func TestVideoTokensRefreshOnceAndRotate(t *testing.T) {
 
 	f.stub.mu.Lock()
 	f.stub.refused["one"] = true
-	f.stub.reject401["one-2"] = true
+	f.stub.reject401["one-1"] = true
 	f.stub.mu.Unlock()
 	w := f.request(http.MethodPost, "/video/v1/generations", videoPinnedBody)
 	if w.Code != 429 && w.Code != 503 {
@@ -621,17 +661,90 @@ func TestVideoTokensRefreshOnceAndRotate(t *testing.T) {
 	if err := f.service.UpdateAccount(ctx, f.accountStatus(t, "one").ID, nil, videoStatusPtr(domain.VideoAccountActive)); err == nil {
 		t.Fatal("resume brought back an account without a session")
 	}
-	f.stub.mu.Lock()
-	f.stub.refused["one"] = false
-	f.stub.mu.Unlock()
-	if _, err := f.service.ImportAccount(ctx, videoAuthFile("one")); err != nil {
-		t.Fatal(err)
-	}
+	signInVideoAccount(t, f, "one")
 	accounts, err := f.service.ListAccounts(ctx)
 	if err != nil || len(accounts) != 1 || accounts[0].Status != domain.VideoAccountActive {
-		t.Fatalf("re-import of the same user: %+v %v", accounts, err)
+		t.Fatalf("a new sign-in of the same user: %+v %v", accounts, err)
 	}
 }
+
+func TestVideoLoginWaitsRefusesAndExpires(t *testing.T) {
+	f := newVideoFixture(t)
+	ctx := context.Background()
+	var offset atomic.Int64
+	f.service.ConfigureClock(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })
+	f.stub.nextLogin = "slow"
+	f.stub.deviceAnswer["slow"] = "authorization_pending"
+	login, err := f.service.StartLogin(ctx)
+	if err != nil || login.UserCode != "CODE-slow" || login.IntervalSeconds != 5 || !strings.Contains(login.VerificationURL, "user_code=CODE-slow") {
+		t.Fatalf("start: %+v %v", login, err)
+	}
+	if status, err := f.service.LoginStatus(ctx, login.FlowID); err != nil || status.Status != "pending" {
+		t.Fatalf("waiting: %+v %v", status, err)
+	}
+	if status, err := f.service.LoginStatus(ctx, "vlogin_missing"); err == nil {
+		t.Fatalf("an unknown sign-in: %+v", status)
+	}
+	f.stub.mu.Lock()
+	f.stub.deviceAnswer["slow"] = ""
+	f.stub.mu.Unlock()
+	if status, err := f.service.LoginStatus(ctx, login.FlowID); err != nil || status.Status != "pending" {
+		t.Fatalf("a poll before the interval went upstream: %+v %v", status, err)
+	}
+	offset.Store(int64(6 * time.Second))
+	status, err := f.service.LoginStatus(ctx, login.FlowID)
+	if err != nil || status.Status != "success" || status.Email != "slow@example.invalid" {
+		t.Fatalf("approved: %+v %v", status, err)
+	}
+	accounts, err := f.service.ListAccounts(ctx)
+	if err != nil || len(accounts) != 1 || accounts[0].Email != "slow@example.invalid" {
+		t.Fatalf("accounts: %+v %v", accounts, err)
+	}
+
+	f.stub.nextLogin = "denied"
+	f.stub.deviceAnswer["denied"] = "access_denied"
+	refused, err := f.service.StartLogin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := f.service.LoginStatus(ctx, refused.FlowID); err != nil || status.Status != "error" {
+		t.Fatalf("refused: %+v %v", status, err)
+	}
+
+	f.stub.nextLogin = "late"
+	f.stub.deviceAnswer["late"] = "authorization_pending"
+	late, err := f.service.StartLogin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offset.Store(int64(2 * time.Hour))
+	if status, err := f.service.LoginStatus(ctx, late.FlowID); err != nil || status.Status != "error" {
+		t.Fatalf("expired: %+v %v", status, err)
+	}
+
+	f.stub.nextLogin = "closed"
+	closed, err := f.service.StartLogin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.CancelLogin(closed.FlowID)
+	if _, err := f.service.LoginStatus(ctx, closed.FlowID); err == nil {
+		t.Fatal("a cancelled sign-in stayed alive")
+	}
+	if accounts, _ := f.service.ListAccounts(ctx); len(accounts) != 1 {
+		t.Fatalf("a refused, expired or cancelled sign-in added an account: %+v", accounts)
+	}
+	for range maxVideoLoginsForTest {
+		if _, err := f.service.StartLogin(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.service.StartLogin(ctx); err == nil {
+		t.Fatal("sign-ins are not bounded")
+	}
+}
+
+const maxVideoLoginsForTest = 8
 
 func videoStatusPtr(status domain.VideoAccountStatus) *domain.VideoAccountStatus { return &status }
 
@@ -666,35 +779,34 @@ func TestVideoAdminRoutes(t *testing.T) {
 		t.Fatalf("setup: %d", setup.Code)
 	}
 	cookie = setup.Result().Cookies()[0]
-	upload := func(content []byte) *httptest.ResponseRecorder {
-		var body bytes.Buffer
-		form := multipart.NewWriter(&body)
-		part, _ := form.CreateFormFile("auth_json", "auth.json")
-		_, _ = part.Write(content)
-		_ = form.Close()
-		return call(http.MethodPost, "/api/video/accounts/import", form.FormDataContentType(), body.Bytes())
+	f.stub.nextLogin = "one"
+	started := call(http.MethodPost, "/api/video/accounts/login", "", nil)
+	if started.Code != 200 || strings.Contains(started.Body.String(), "device-one") {
+		t.Fatalf("login start exposes the device code: %d %s", started.Code, started.Body.String())
 	}
-	for name, content := range map[string][]byte{
-		"wrong issuer":  bytes.ReplaceAll(videoAuthFile("one"), []byte("https://auth.x.ai\","), []byte("https://evil.example.invalid\",")),
-		"two entries":   []byte(`{"a":{},"b":{}}`),
-		"not json":      []byte("synthetic-secret-text"),
-		"missing token": []byte(`{"a":{"oidc_issuer":"https://auth.x.ai"}}`),
-	} {
-		w := upload(content)
-		if code, _ := errorParam(t, w.Body.Bytes()); w.Code != 400 || code != "invalid_xai_auth" || strings.Contains(w.Body.String(), "synthetic-secret") {
-			t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
-		}
+	var login struct {
+		FlowID string `json:"flowId"`
+		Code   string `json:"userCode"`
+		URL    string `json:"verificationUrl"`
 	}
-	imported := upload(videoAuthFile("one"))
-	if imported.Code != 200 || strings.Contains(imported.Body.String(), "access-") || strings.Contains(imported.Body.String(), "refresh") {
-		t.Fatalf("import: %d %s", imported.Code, imported.Body.String())
+	if err := json.Unmarshal(started.Body.Bytes(), &login); err != nil || login.Code != "CODE-one" || login.URL == "" {
+		t.Fatal(started.Body.String())
+	}
+	finished := call(http.MethodGet, "/api/video/accounts/login/"+login.FlowID, "", nil)
+	if finished.Code != 200 || !strings.Contains(finished.Body.String(), `"success"`) || strings.Contains(finished.Body.String(), "access-") {
+		t.Fatalf("login status: %d %s", finished.Code, finished.Body.String())
+	}
+	if w := call(http.MethodDelete, "/api/video/accounts/login/"+login.FlowID, "", nil); w.Code != 204 {
+		t.Fatalf("login cancel: %d", w.Code)
 	}
 	var account struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(imported.Body.Bytes(), &account); err != nil || account.ID == "" {
-		t.Fatal(imported.Body.String())
+	accountsNow, err := f.service.ListAccounts(context.Background())
+	if err != nil || len(accountsNow) != 1 {
+		t.Fatalf("accounts: %+v %v", accountsNow, err)
 	}
+	account.ID = accountsNow[0].ID
 	listed := call(http.MethodGet, "/api/video/accounts", "", nil)
 	if listed.Code != 200 || !strings.Contains(listed.Body.String(), "one@example.invalid") || strings.Contains(listed.Body.String(), "access-") {
 		t.Fatalf("list: %s", listed.Body.String())

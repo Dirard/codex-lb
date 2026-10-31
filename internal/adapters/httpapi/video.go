@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -164,7 +163,9 @@ func (s *Server) registerVideoAdminRoutes(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("GET /api/video/accounts", s.listVideoAccounts)
-	mux.HandleFunc("POST /api/video/accounts/import", s.importVideoAccount)
+	mux.HandleFunc("POST /api/video/accounts/login", s.startVideoLogin)
+	mux.HandleFunc("GET /api/video/accounts/login/{id}", s.videoLoginStatus)
+	mux.HandleFunc("DELETE /api/video/accounts/login/{id}", s.cancelVideoLogin)
 	mux.HandleFunc("PATCH /api/video/accounts/{id}", s.updateVideoAccount)
 	mux.HandleFunc("DELETE /api/video/accounts/{id}", s.deleteVideoAccount)
 	mux.HandleFunc("GET /api/video/keys", s.listVideoKeys)
@@ -195,29 +196,27 @@ func (s *Server) listVideoAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": accounts})
 }
 
-func (s *Server) importVideoAccount(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthJSONSize+(16<<10))
-	if err := r.ParseMultipartForm(32 << 10); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_multipart", "Expected multipart/form-data with an auth_json file")
-		return
-	}
-	file, _, err := r.FormFile("auth_json")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_multipart", "auth_json file is required")
-		return
-	}
-	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, maxAuthJSONSize+1))
-	if err != nil || len(raw) > maxAuthJSONSize {
-		writeError(w, http.StatusBadRequest, "invalid_xai_auth", "auth.json exceeds the 1 MiB limit")
-		return
-	}
-	account, err := s.video.ImportAccount(r.Context(), raw)
+func (s *Server) startVideoLogin(w http.ResponseWriter, r *http.Request) {
+	login, err := s.video.StartLogin(r.Context())
 	if err != nil {
 		s.videoAdminFail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, account)
+	writeJSON(w, http.StatusOK, login)
+}
+
+func (s *Server) videoLoginStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := s.video.LoginStatus(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.videoAdminFail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) cancelVideoLogin(w http.ResponseWriter, r *http.Request) {
+	s.video.CancelLogin(r.PathValue("id"))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) updateVideoAccount(w http.ResponseWriter, r *http.Request) {

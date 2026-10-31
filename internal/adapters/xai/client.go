@@ -20,9 +20,15 @@ import (
 const (
 	DefaultAPIBaseURL  = "https://api.x.ai"
 	DefaultAuthBaseURL = "https://auth.x.ai"
-	maxResponseBytes   = 1 << 20
-	callTimeout        = 60 * time.Second
-	userAgent          = "codex-lb"
+	// DefaultClientID is the public OAuth client of the official Grok CLI. xAI
+	// publishes no way to register a client, and the owner accepted that xAI may
+	// stop allowing this use.
+	DefaultClientID  = "b1a00492-073a-47ea-816f-4c329264a828"
+	loginScope       = "openid profile email offline_access api:access"
+	deviceGrant      = "urn:ietf:params:oauth:grant-type:device_code"
+	maxResponseBytes = 1 << 20
+	callTimeout      = 60 * time.Second
+	userAgent        = "codex-lb"
 )
 
 // Config sets the HTTP client and, for tests, the endpoints.
@@ -30,12 +36,14 @@ type Config struct {
 	HTTPClient  *http.Client
 	APIBaseURL  string
 	AuthBaseURL string
+	ClientID    string
 }
 
 type Client struct {
-	http *http.Client
-	api  string
-	auth string
+	http     *http.Client
+	api      string
+	auth     string
+	clientID string
 }
 
 var _ application.VideoUpstream = (*Client)(nil)
@@ -52,7 +60,11 @@ func New(config Config) *Client {
 	if auth == "" {
 		auth = DefaultAuthBaseURL
 	}
-	return &Client{http: client, api: strings.TrimSuffix(api, "/"), auth: strings.TrimSuffix(auth, "/")}
+	clientID := config.ClientID
+	if clientID == "" {
+		clientID = DefaultClientID
+	}
+	return &Client{http: client, api: strings.TrimSuffix(api, "/"), auth: strings.TrimSuffix(auth, "/"), clientID: clientID}
 }
 
 // Refresh exchanges a refresh token. A definitive 4xx refusal is
@@ -92,6 +104,97 @@ func (c *Client) Revoke(ctx context.Context, clientID, refreshToken string) erro
 		return fmt.Errorf("xai revoke status %d", status)
 	}
 	return nil
+}
+
+// StartDeviceLogin asks for a device code the administrator approves at xAI.
+func (c *Client) StartDeviceLogin(ctx context.Context) (application.VideoDeviceLogin, error) {
+	status, body, err := c.form(ctx, "/oauth2/device/code", url.Values{"client_id": {c.clientID}, "scope": {loginScope}})
+	if err != nil {
+		return application.VideoDeviceLogin{}, err
+	}
+	if status != http.StatusOK {
+		return application.VideoDeviceLogin{}, fmt.Errorf("xai device authorization status %d", status)
+	}
+	var payload struct {
+		DeviceCode              string `json:"device_code"`
+		UserCode                string `json:"user_code"`
+		VerificationURI         string `json:"verification_uri"`
+		VerificationURIComplete string `json:"verification_uri_complete"`
+		Interval                int64  `json:"interval"`
+		ExpiresIn               int64  `json:"expires_in"`
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.DeviceCode == "" || payload.UserCode == "" || payload.ExpiresIn <= 0 ||
+		!strings.HasPrefix(payload.VerificationURI, "https://") {
+		return application.VideoDeviceLogin{}, errors.New("xai answered without a device code")
+	}
+	complete := payload.VerificationURIComplete
+	if !strings.HasPrefix(complete, "https://") {
+		complete = payload.VerificationURI
+	}
+	return application.VideoDeviceLogin{ClientID: c.clientID, DeviceCode: payload.DeviceCode, UserCode: payload.UserCode, VerificationURL: complete,
+		Interval: time.Duration(max(payload.Interval, 1)) * time.Second, ExpiresIn: time.Duration(payload.ExpiresIn) * time.Second}, nil
+}
+
+// PollDeviceLogin tries to exchange an approved device code once.
+func (c *Client) PollDeviceLogin(ctx context.Context, clientID, deviceCode string) (application.VideoTokens, error) {
+	status, body, err := c.form(ctx, "/oauth2/token", url.Values{"grant_type": {deviceGrant}, "client_id": {clientID}, "device_code": {deviceCode}})
+	if err != nil {
+		return application.VideoTokens{}, err
+	}
+	if status != http.StatusOK {
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &refusal)
+		switch {
+		case refusal.Error == "authorization_pending":
+			return application.VideoTokens{}, application.ErrVideoLoginPending
+		case refusal.Error == "slow_down":
+			return application.VideoTokens{}, application.ErrVideoLoginSlowDown
+		case status >= 400 && status < 500 && status != http.StatusTooManyRequests:
+			return application.VideoTokens{}, application.ErrVideoLoginRefused
+		}
+		return application.VideoTokens{}, fmt.Errorf("xai token endpoint status %d", status)
+	}
+	var payload struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.AccessToken == "" || payload.RefreshToken == "" || payload.ExpiresIn <= 0 {
+		return application.VideoTokens{}, errors.New("xai token endpoint answered without tokens")
+	}
+	return application.VideoTokens{Access: payload.AccessToken, Refresh: payload.RefreshToken, ExpiresIn: time.Duration(payload.ExpiresIn) * time.Second}, nil
+}
+
+// Identity reads who signed in, so the same xAI user is never added twice.
+func (c *Client) Identity(ctx context.Context, accessToken string) (application.VideoIdentity, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.auth+"/oauth2/userinfo", nil)
+	if err != nil {
+		return application.VideoIdentity{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", userAgent)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return application.VideoIdentity{}, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+	if err != nil {
+		return application.VideoIdentity{}, err
+	}
+	var payload struct {
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+	}
+	if response.StatusCode != http.StatusOK || json.Unmarshal(body, &payload) != nil || payload.Sub == "" {
+		return application.VideoIdentity{}, fmt.Errorf("xai userinfo status %d", response.StatusCode)
+	}
+	return application.VideoIdentity{UserID: payload.Sub, Email: payload.Email}, nil
 }
 
 // CreateVideo posts a validated body unchanged.

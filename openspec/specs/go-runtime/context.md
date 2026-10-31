@@ -803,17 +803,11 @@ For Codex to show the tool, the provider needs `requires_openai_auth = true` wit
 
 Since go-v1.7.0 the image routes relay `stream: true` answers as they are. A generation streams `keepalive` events and one `image_generation.completed` event with the image and usage, but no draft frames: the subscription ignores `partial_images`. An edit answers JSON. A final 429 carries the upstream reset headers. On Responses with the hosted `image_generation` tool, a 429 whose `X-Codex-Active-Limit` names an image limit is returned as 429 `usage_limit_reached` with those headers, without marking the account or replaying the request. Details: [image-streams-and-limit-headers](../../changes/archive/2026-10-30-image-streams-and-limit-headers/context.md).
 
-## Grok video generation (go-v1.8.0)
+## Grok video generation (go-v1.8.0, web sign-in go-v1.9.0)
 
 Video generation is a separate function. Grok accounts form their own pool in `video_accounts`, separate from `accounts`, so no proxy route, report or key limit sees them. A job's cost is kept on its own row and consumes no API-key limit.
 
-**Adding an account.** Use a separate folder per account, then import the file on the **Video generation** page and delete it:
-
-```bash
-GROK_HOME=/tmp/grok-one grok login --device-auth
-```
-
-Import refreshes the token once, which detaches the stored session from the CLI's copy, so the CLI's file is no longer needed. Importing the same xAI user again replaces its tokens. An account in **Needs a new sign-in** comes back only through a new import. Deleting an account revokes its refresh token; an access token already issued stays valid until it expires, up to 6 hours.
+**Adding an account.** On the **Video generation** page press **Add account**, open xAI's page, check the code and approve with the Grok account. Keep the dialog open until it closes itself. Signing in to an account already in the pool renews its session, and an account in **Needs a new sign-in** comes back the same way. Deleting an account revokes its refresh token; an access token already issued stays valid until it expires, up to 6 hours. A sign-in lives in the worker's memory, so a sign-in in progress during an update must be started again.
 
 **Using it.** Add the API key on the page; until then it gets 403 `video_access_denied`.
 
@@ -832,7 +826,7 @@ The answer is 202 with an `id`. Poll `GET /video/v1/generations/{id}` until `sta
 **Failure handling.** A job is created on the least busy account, at most four unfinished jobs per account. A 401 after one refresh, a 403 or a 429 moves the request to another account, trying at most four. A 429 cools the account down by `Retry-After`, or one hour without it. A 403 sets **Refused by xAI** until the operator resumes the account. A server error or a lost connection gives 502 and is not replayed, because the video may have been generating. Every account refusing gives 429 `video_pool_exhausted` with `Retry-After`; no available account gives 503 `video_no_accounts`. A background task finishes jobs nobody polls; a job pending for an hour becomes `unknown`, and finished rows are deleted after 90 days.
 
 **Limits.**
-- This path uses the official CLI's OAuth client, because xAI publishes no way to register one; xAI may stop or forbid it. The owner accepted this risk for their own accounts.
+- Sign-in uses the official CLI's public OAuth client id, built into codex-lb, because xAI publishes no way to register one; xAI may stop or forbid it. The owner accepted this risk for their own accounts.
 - The video URL is xAI's and can be read by anyone who has it. Its lifetime was not measured.
 - The remaining weekly pool is not available through the API, only in the Usage tab on xAI's site. The refusal at an exhausted limit was not observed; R10 of the spec follows the HTTP status.
 - `cost_usd` is the cost xAI reports, not money charged to a subscription.

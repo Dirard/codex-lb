@@ -4,9 +4,10 @@ import { del, get, patch, post, put } from "@/lib/api-client";
 
 import {
   VideoAccountsResponseSchema,
-  VideoImportedAccountSchema,
   VideoJobsResponseSchema,
   VideoKeysResponseSchema,
+  VideoLoginStartSchema,
+  VideoLoginStatusSchema,
   VideoSummarySchema,
 } from "@/features/video/schemas";
 
@@ -17,10 +18,16 @@ export function listVideoAccounts() {
   return get(`${VIDEO_PATH}/accounts`, VideoAccountsResponseSchema);
 }
 
-export function importVideoAccount(file: File) {
-  const formData = new FormData();
-  formData.append("auth_json", file);
-  return post(`${VIDEO_PATH}/accounts/import`, VideoImportedAccountSchema, { body: formData });
+export function startVideoLogin() {
+  return post(`${VIDEO_PATH}/accounts/login`, VideoLoginStartSchema);
+}
+
+export function getVideoLoginStatus(flowId: string) {
+  return get(`${VIDEO_PATH}/accounts/login/${encodeURIComponent(flowId)}`, VideoLoginStatusSchema);
+}
+
+export function cancelVideoLogin(flowId: string) {
+  return del(`${VIDEO_PATH}/accounts/login/${encodeURIComponent(flowId)}`);
 }
 
 export function updateVideoAccount(id: string, body: { label?: string; status?: "active" | "paused" }) {

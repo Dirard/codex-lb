@@ -8,7 +8,7 @@ Video generation is a separate function of codex-lb: several of the owner's Supe
 
 ## Planning anchor
 
-- Entrypoints (all planned): `POST /video/v1/generations`, `GET /video/v1/generations/{id}`, `GET /video/v1/generations`, the dashboard page `/video` and `/api/video/*`.
+- Entrypoints: `POST /video/v1/generations`, `GET /video/v1/generations/{id}`, `GET /video/v1/generations`, the dashboard page `/video` and `/api/video/*`.
 - Changed assumption: every upstream call so far finishes within its client request and runs on a row of `accounts`. A video job outlives the request, and a Grok account is not a Codex account.
 - Evidence: the probe of 2026-10-31 with one `grok-imagine-video` job through the OAuth token of the official CLI (202 `pending`, 200 `done` after about 20 s, 848×480, `usage.cost_in_usd_ticks: 500000000`, a `vidgen.x.ai` URL readable without auth), xAI's [reference-to-video](https://docs.x.ai/developers/model-capabilities/video/reference-to-video) and [videos API](https://docs.x.ai/developers/rest-api-reference/inference/videos) pages, and the OIDC discovery document of `https://auth.x.ai`.
 - Non-local: migration, new xAI adapter, new pool service, proxy mount and firewall prefix, admin routes, composition root, dashboard navigation and page, OpenSpec `go-runtime`.
@@ -24,7 +24,7 @@ Video generation is a separate function of codex-lb: several of the owner's Supe
 4. Why not the usage ledger: reservations, settlement, rollups and repricing assume token or per-minute events on `accounts`, and a reservation must be settled within its request or reconciled within an hour. A separate job table with one guarded transition gives exactly-once cost with less risk, and it matches the owner's decision that video is separate.
 5. Background: `application.RunPeriodic` with `BackgroundSchedule` runs recoverable periodic tasks that the runtime cancels and joins; two workers can overlap during a seamless update, so background writes must be guarded in SQL.
 6. Vault: `application.SecretCipher` encrypts credentials; the existing account import reads an `auth_json` multipart part bounded to 1 MiB (`internal/adapters/httpapi/accounts.go#importAccount`).
-7. Official CLI `auth.json`: a map with one entry whose fields include `key`, `refresh_token`, `expires_at`, `user_id`, `email`, `oidc_issuer` and `oidc_client_id`.
+7. Device authorization without the CLI (probe of 2026-10-31): `POST https://auth.x.ai/oauth2/device/code` with `client_id` and `scope` gives `device_code`, `user_code`, `verification_uri_complete`, `interval: 5` and `expires_in: 1800`. The token endpoint then gives `access_token`, `refresh_token`, `id_token` and `expires_in`; `GET /oauth2/userinfo` gives `sub` and `email`. With the scope `openid profile email offline_access api:access`, `GET /v1/video-generation-models` answered 200.
 8. Probe of 2026-10-31 with the owner's sign-in and `User-Agent: codex-lb/probe`:
    - `grok-imagine-video-1.5` with `image`, `last_frame`, `prompt`, 2 s, 480p: 200 with `request_id`, 202 `pending`, then 200 `done` after 29 s, `usage.cost_in_usd_ticks: 1800000000`. The clip's first and last frames matched the given images (SSIM 0.99 and 0.96).
    - `grok-imagine-video` with `last_frame`: 400 `{"code":"invalid-argument","error":"`last_frame` is not supported for this model."}`. An unknown job id: 404 `{"code":"not-found","error":…}`.
@@ -36,18 +36,18 @@ Video generation is a separate function of codex-lb: several of the owner's Supe
 ## Use cases
 
 ### 1. Build and operate the video pool
-official CLI auth.json --validate the issuer, encrypt the tokens and upsert by xAI user--> [pool account, 400 invalid_xai_auth] --pause, resume, rename or delete on the Video generation page--> operated pool account
+administrator on the Video generation page --start a device sign-in and show xAI's link and code--> pending sign-in --approve at xAI, exchange the code when polled, read who signed in, encrypt the tokens and upsert by xAI user--> [pool account, sign-in error] --pause, resume, rename or delete--> operated pool account
 
 Requirements:
 
   R1:
-`POST /api/video/accounts/import` SHALL accept one `auth_json` file of at most 1 MiB holding exactly one entry, SHALL accept it only when `oidc_issuer` is exactly `https://auth.x.ai` and `key`, `refresh_token`, `oidc_client_id` and `user_id` are present, SHALL store the tokens encrypted, and SHALL replace the tokens of an account with the same `user_id` instead of adding another. It SHALL refresh the token once before saving, which proves the credential and detaches the stored session from the CLI's copy; a refused refresh SHALL give 400 `invalid_xai_auth` and store nothing. Error messages MUST NOT echo the file.
+`POST /api/video/accounts/login` SHALL start a device sign-in at `https://auth.x.ai` with the scope `openid profile email offline_access api:access` and answer with a flow id, xAI's verification link and code, and the poll interval. `GET /api/video/accounts/login/{id}` SHALL answer `pending`, `success` or `error`, and SHALL exchange the device code at most once per interval, honoring `slow_down`. On approval it SHALL read the account's `sub` and email from `/oauth2/userinfo`, store the tokens encrypted, and replace the tokens of an account with the same `sub` instead of adding another. A session it cannot save SHALL be revoked. The device code MUST stay in process memory and MUST NOT reach the browser, the database or logs. At most eight sign-ins SHALL be pending at once; `DELETE /api/video/accounts/login/{id}` SHALL forget a sign-in, and a closed sign-in SHALL never be exchanged. No goroutine SHALL outlive a request: status requests drive the flow.
 
   R2:
 Video accounts SHALL be stored only in `video_accounts`; no row SHALL be written to `accounts`, `account_credentials`, groups or usage tables.
 
   R3:
-The administrator SHALL be able to list accounts with label, email, status, cooldown end, last refusal code, job counts and reported cost, and to pause, resume, rename and delete them. Deleting an account SHALL revoke its refresh token on a best-effort basis and mark its `pending` jobs `unknown`; responses SHALL NOT include tokens.
+The dashboard SHALL offer sign-in as the only way to add or renew an account. The administrator SHALL be able to list accounts with label, email, status, cooldown end, last refusal code, job counts and reported cost, and to pause, resume, rename and delete them. Deleting an account SHALL revoke its refresh token on a best-effort basis and mark its `pending` jobs `unknown`; responses SHALL NOT include tokens.
 
 Tables:
 video_accounts
@@ -72,13 +72,13 @@ Files And Functions:
  - planned: internal/domain/video.go#VideoAccount, #VideoJob, #VideoJobStatus
  - planned: internal/adapters/sqlite/video_schema.go#schemaV44 - additive; add 44 to `additiveMigrations`
  - planned: internal/adapters/sqlite/video_pool.go
- - planned: internal/application/video_pool.go#ImportAccount, #parseCLIAuth
+  - planned: internal/application/video_login.go#StartLogin, #LoginStatus, #CancelLogin, #exchangeLogin
  - planned: internal/adapters/httpapi/video_admin.go#registerVideoAdminRoutes
 
 Tests:
- - description: a valid file creates one account; importing the same user replaces tokens; a wrong issuer, two entries, missing fields and an oversized file give 400 without echoing their content
+ - description: a sign-in waits for approval without polling faster than the interval, then creates one account; signing in the same user again replaces its tokens; refused, expired and cancelled sign-ins add nothing; pending sign-ins are bounded; responses carry no device code or tokens
    requirements: R1
- - description: after an import, `accounts`, `EligibleAccounts`, the overview and `/api/accounts` are unchanged
+ - description: after a sign-in, `accounts`, `EligibleAccounts`, the overview and `/api/accounts` are unchanged
    requirements: R2
  - description: list hides tokens; pause removes an account from selection; delete marks its pending jobs unknown
    requirements: R3
@@ -94,7 +94,7 @@ Requirements:
 An access token expiring within 60 seconds, or rejected with 401 once, SHALL be refreshed at `https://auth.x.ai/oauth2/token` with the account's `oidc_client_id` and refresh token before the upstream call is repeated once. A rotated refresh token SHALL be stored in the same write as the access token.
 
   R5:
-At most one worker SHALL refresh one account at a time, and a stale refresh result MUST NOT overwrite newer tokens. A definitive refusal (`invalid_grant` or another 4xx) SHALL set `reauth_required`; a network failure SHALL leave the status unchanged and fail only this attempt. No token SHALL be logged, and no lock or transaction SHALL be held across the refresh call.
+At most one worker SHALL refresh one account at a time, and a stale refresh result MUST NOT overwrite newer tokens. A definitive refusal (`invalid_grant` or another 4xx) SHALL set `reauth_required`, and only a new sign-in SHALL clear it; a network failure SHALL leave the status unchanged and fail only this attempt. No token SHALL be logged, and no lock or transaction SHALL be held across the refresh call.
 
 Implementation Logic:
 1. Per-process single flight by account id joins concurrent callers.
@@ -249,13 +249,13 @@ administrator --open Video generation--> page with pool, allowed keys and recent
 Requirements:
 
   R16:
-A navigation entry SHALL open `/video` with three sections: pool accounts with import and actions, allowed keys with add and remove, and recent jobs with key, account, mode, status, seconds and cost, plus totals for today and for 7 and 30 days. Reading the page MUST NOT call xAI. The page SHALL state that the remaining weekly pool is not available through the API and is shown only on xAI's site.
+A navigation entry SHALL open `/video` with three sections: pool accounts with sign-in and actions, allowed keys with add and remove, and recent jobs with key, account, mode, status, seconds and cost, plus totals for today and for 7 and 30 days. Reading the page MUST NOT call xAI. The page SHALL state that the remaining weekly pool is not available through the API and is shown only on xAI's site.
 
   R17:
 Other pages, reports and the overview SHALL NOT change.
 
 Events And Endpoints:
- - GET /api/video/accounts, POST /api/video/accounts/import, PATCH /api/video/accounts/{id}, DELETE /api/video/accounts/{id}
+ - GET /api/video/accounts, POST /api/video/accounts/login, GET and DELETE /api/video/accounts/login/{id}, PATCH /api/video/accounts/{id}, DELETE /api/video/accounts/{id}
  - GET /api/video/jobs, GET /api/video/summary
 
 Files And Functions:
@@ -267,7 +267,7 @@ Files And Functions:
  - existing: web/src/test/mocks/handlers.ts - mocks
 
 Tests:
- - description: the page lists accounts, imports a file, adds a key and shows recent jobs and totals; no token field is rendered
+ - description: the page lists accounts, runs a sign-in through a dialog with xAI's link and code that keeps polling in the background, adds a key and shows recent jobs and totals; closing the dialog forgets the sign-in; no token field is rendered
    requirements: R16
  - description: contract tests against the built binary cover /api/video/*
    requirements: R16
@@ -288,7 +288,6 @@ Tests:
 10. [x] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync the delta, archive the change, release notes with REST examples. No production-copy rehearsal: migration 44 only creates empty tables.
 
 Deferred:
-- Sign-in from the dashboard: needs a registered OAuth client, and no way to register one was found.
 - Video extension and editing endpoints, xAI Files API inputs, and `storage_options` uploads.
 - Copying finished videos to codex-lb storage; the client receives xAI's URL.
 - Per-key video limits and budgets: the allow list is the only control for now, because the function is for the owner's keys.
@@ -305,8 +304,9 @@ Deferred:
 - 2026-10-31: Separate tables instead of `accounts`. A row in `accounts` would have required exclusions in every selection and broken text routing after a rollback; separate tables make the migration additive and rollback safe.
 - 2026-10-31: Separate job accounting instead of the usage ledger. A job outlives its request and has no tokens; one guarded status transition gives exactly-once cost, and video consumes no key limits. The AGENTS.md money invariant covers API-key reservations, and this path takes none.
 - 2026-10-31: `/video/v1/*` with a local job id and a normalized response instead of mirroring xAI's `/v1/videos/*`. The surface is visibly separate, and the account and upstream id stay hidden.
-- 2026-10-31: Import from `auth.json` instead of a device flow in the dashboard, so no client id is embedded in the product; the id comes from the owner's own file. Pending open question 1.
+- 2026-10-31: The owner rejected file import as a bad option and asked for web sign-in. go-v1.8.0's `POST /api/video/accounts/import` was replaced by a device sign-in from the dashboard (go-v1.9.0), with the official CLI's public client id as a constant in `internal/adapters/xai/client.go`, because xAI publishes no way to register a client. This supersedes the earlier decision to embed no client id. A third probe confirmed device authorization without the CLI, `sub` and email at `/oauth2/userinfo`, refresh rotation and revoke; the token list of video models worked with the narrower scope.
 - 2026-10-31: An allow list of keys instead of groups: it is independent of the ChatGPT pool's group model and denies by default.
-- 2026-10-31: The owner approved holding imported CLI tokens and refreshing them with the CLI's client id, and approved the probe. xAI may stop or forbid this; the risk is the owner's.
+- 2026-10-31: The owner approved holding Grok tokens and refreshing them with the official CLI's client id, and approved the probes. xAI may stop or forbid this; the risk is the owner's.
 - 2026-10-31: `grok-imagine-video-1.5-lite` is treated like the classic model for pinned frames and references: xAI's reference page says only `grok-imagine-video-1.5` supports them. Not probed on the subscription.
-- 2026-10-31: Import refreshes at once, because the probe showed that a rotated session survives `grok logout`, and logout before any refresh was not tested. After import the CLI's copy no longer matters.
+- 2026-10-31: End-to-end run of the built binary with the owner's sign-in through the admin API and the narrow scope: 403 before allow, 503 with an empty pool, sign-in success, one `grok-imagine-video-1.5` job with first frame, last frame and text (1 s, 480p, 28 s, $0.10 reported), account deleted with revoke, and no tokens or image payloads in the server log. The browser dialog itself is covered by dashboard tests with stubs.
+- 2026-10-31: For go-v1.9.0 the owner stopped `go test -race` of `internal/adapters/sqlite` after 19 minutes on the local machine: this branch does not touch that package. Plain `go test` passed for it, and the race run passed for every other package.
