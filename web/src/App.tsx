@@ -41,6 +41,7 @@ const SettingsPage = lazy(() =>
   import("@/features/settings/components/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
 const KeyPage = lazy(() => import("@/features/key-page/components/key-page").then((m) => ({ default: m.KeyPage })));
+const VideoPage = lazy(() => import("@/features/video/components/video-page").then((m) => ({ default: m.VideoPage })));
 const GroupsPage = lazy(() => import("@/features/groups/components/groups-page").then((m) => ({ default: m.GroupsPage })));
 
 /** `/keys/:id`: the administrator key page; a new key remounts the page. */
@@ -114,6 +115,7 @@ export default function App() {
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/keys" element={<KeysRoute />} />
             <Route path="/keys/:id" element={<AdminKeyPage />} />
+            <Route path="/video" element={<VideoPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/automations" element={<AutomationsPage />} />

@@ -437,7 +437,7 @@ func TestPendingLogIndexMigrationIsAdditiveBesideAnOlderWriter(t *testing.T) {
 	if opened > 3*time.Second {
 		t.Fatalf("migration of %d reservations took %s", reservations, opened)
 	}
-	if state := readSchemaFingerprint(t, path); state.version != 43 || state.floor != 40 {
+	if state := readSchemaFingerprint(t, path); state.version != SchemaVersion() || state.floor != 40 {
 		t.Fatalf("migrated database records %+v", state)
 	}
 	var indexed, flagged int

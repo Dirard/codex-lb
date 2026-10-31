@@ -76,5 +76,5 @@ func firewallIdentity(r *http.Request, trusted []netip.Prefix) netip.Addr {
 }
 
 func proxyFacingPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/backend-api/") || strings.HasPrefix(path, "/api/codex/")
+	return strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/backend-api/") || strings.HasPrefix(path, "/api/codex/") || strings.HasPrefix(path, "/video/v1/")
 }

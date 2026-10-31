@@ -21,6 +21,7 @@ const CORE_NAV_ITEMS = [
   { to: "/groups", labelKey: "nav.groups" },
   { to: "/accounts", labelKey: "nav.accounts" },
   { to: "/keys", labelKey: "nav.keys" },
+  { to: "/video", labelKey: "nav.video" },
   { to: "/reports", labelKey: "nav.reports" },
   { to: "/automations", labelKey: "nav.automations" },
   { to: "/settings", labelKey: "nav.settings" },

@@ -69,6 +69,7 @@ type Server struct {
 	usage          *application.AccountUsageService
 	automations    *application.AutomationsService
 	warmups        *application.WarmupService
+	video          *application.VideoService
 	catalog        *application.ModelCatalogService
 	modelPricing   *ModelPricingHandler
 	firewall       *application.Firewall
@@ -101,6 +102,9 @@ func (s *Server) ConfigureAutomations(service *application.AutomationsService) {
 
 func (s *Server) ConfigureWarmups(service *application.WarmupService) { s.warmups = service }
 
+// ConfigureVideo supplies the separate video pool before Handler is built.
+func (s *Server) ConfigureVideo(service *application.VideoService) { s.video = service }
+
 func (s *Server) ConfigureModelCatalog(service *application.ModelCatalogService) { s.catalog = service }
 
 func (s *Server) ConfigureModelPricing(store application.ModelPricingStore) {
@@ -124,6 +128,7 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 		mux.Handle("/v1/", proxy)
 		mux.Handle("/backend-api/", proxy)
 		mux.Handle("/api/codex/", proxy)
+		mux.Handle("/video/v1/", proxy)
 	}
 	if ui != nil {
 		mux.Handle("/", ui)
@@ -176,6 +181,7 @@ func (s *Server) adminRoutes() *http.ServeMux {
 	s.registerKeyUsageReportRoutes(admin)
 	s.registerGroupsSummaryRoutes(admin)
 	s.registerKeysRoutes(admin)
+	s.registerVideoAdminRoutes(admin)
 	s.registerAffinityRoutes(admin)
 	if s.modelPricing != nil {
 		s.modelPricing.RegisterAdminRoutes(admin)
