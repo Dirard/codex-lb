@@ -28,3 +28,12 @@ CREATE INDEX idx_video_jobs_unfinished ON video_jobs(account_id) WHERE status IN
 CREATE INDEX idx_video_jobs_due ON video_jobs(next_poll_at) WHERE status='pending';
 CREATE INDEX idx_video_jobs_finished ON video_jobs(finished_at) WHERE finished_at IS NOT NULL;
 `
+
+// schemaV45 keeps the last read of each video account's subscription pool.
+// Additive: older code selects its own columns and ignores these.
+const schemaV45 = `
+ALTER TABLE video_accounts ADD COLUMN usage_percent REAL;
+ALTER TABLE video_accounts ADD COLUMN usage_period_end INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE video_accounts ADD COLUMN usage_checked_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE video_accounts ADD COLUMN usage_error TEXT NOT NULL DEFAULT '';
+`

@@ -12,6 +12,10 @@ export const VideoAccountSchema = z.object({
   unfinishedJobs: z.number(),
   doneJobs: z.number(),
   costUsd: z.number(),
+  usagePercent: z.number().nullable(),
+  usagePeriodEnd: z.string().nullable(),
+  usageCheckedAt: z.string().nullable(),
+  usageError: z.string(),
 });
 
 export const VideoAccountsResponseSchema = z.object({

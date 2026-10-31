@@ -30,6 +30,12 @@ type VideoAccount struct {
 	LastUsedAt            *time.Time         `json:"lastUsedAt"`
 	CreatedAt             time.Time          `json:"createdAt"`
 	UpdatedAt             time.Time          `json:"updatedAt"`
+	// UsagePercent is the last value read of the account's subscription pool;
+	// nil until the first successful read.
+	UsagePercent   *float64   `json:"usagePercent"`
+	UsagePeriodEnd *time.Time `json:"usagePeriodEnd"`
+	UsageCheckedAt *time.Time `json:"usageCheckedAt"`
+	UsageError     string     `json:"usageError"`
 }
 
 type VideoJobStatus string

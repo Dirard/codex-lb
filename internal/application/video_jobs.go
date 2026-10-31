@@ -214,6 +214,11 @@ func (s *VideoService) RunSweep(ctx context.Context, schedule BackgroundSchedule
 	RunPeriodic(ctx, "video_jobs", schedule, videoFirstPollDelay, nil, s.Sweep)
 }
 
+// RunUsagePoller keeps the pool readings fresh; the runtime cancels and joins it.
+func (s *VideoService) RunUsagePoller(ctx context.Context, schedule BackgroundSchedule) {
+	RunPeriodic(ctx, "video_usage", schedule, videoUsageInterval, nil, s.RefreshUsage)
+}
+
 // VideoSummary holds the totals of the dashboard page.
 type VideoSummary struct {
 	Today  domain.VideoPeriodTotals

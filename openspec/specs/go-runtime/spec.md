@@ -2664,6 +2664,8 @@ A job row SHALL be written before dispatch, and a successful creation SHALL answ
 
 Status reads and a background sweep SHALL query only the job's account. A job SHALL leave `pending` exactly once. `done` SHALL record `usage.cost_in_usd_ticks` at 1e-10 USD per tick and the duration. `failed` and `expired` SHALL record no cost. A job still `pending` one hour after creation SHALL become `unknown`, and a job left in `dispatching` for 15 minutes SHALL become `unknown`. Responses SHALL NOT name the account or the upstream request id. Logs and diagnostics MUST NOT contain tokens, prompts, image or audio payloads, or video URLs.
 
+The runtime SHALL read each active or paused account's subscription pool right after a sign-in and every 5 minutes from `https://cli-chat-proxy.grok.com/v1/billing?format=credits`, for which sign-in SHALL request the scope `grok-cli:access`, and SHALL store the usage percentage and period end. A failed read SHALL keep the last value, SHALL be recorded on the account, and MUST NOT change the account's status or stop it from generating. Selection SHALL skip an account at 100% or more until its period ends, SHALL prefer accounts with more left in 10-point bands, SHALL treat an elapsed period as unused, and SHALL place an account without a reading after those with one. The dashboard SHALL show what is left and when it resets, without calling xAI when the page is read.
+
 #### Scenario: First frame, last frame and text
 - **WHEN** an allowed key posts `grok-imagine-video-1.5` with `image`, `last_frame` and `prompt` to `/video/v1/generations`
 - **THEN** one pool account receives those fields unchanged and the client receives 202 with a local `id`
@@ -2694,3 +2696,15 @@ Status reads and a background sweep SHALL query only the job's account. A job SH
 - **WHEN** the administrator starts a sign-in on the Video generation page and approves it at xAI
 - **THEN** the page shows xAI's link and code, the next status request after approval stores the account, and the dialog closes
 - **AND** closing the dialog first means the code is never exchanged, and no response or log carries the device code or tokens
+
+#### Scenario: The page shows what is left
+- **WHEN** an account signed in with `grok-cli:access` has used 25% of its weekly pool
+- **THEN** the Video page shows 75% left and the reset time
+
+#### Scenario: An account signed in before this permission
+- **WHEN** the pool read answers 403 for an account
+- **THEN** the page asks to sign in again, and the account stays active and keeps generating
+
+#### Scenario: An exhausted account is skipped
+- **WHEN** an account reads 100% and its period has not ended
+- **THEN** no video request goes to it, another account takes the job, and with no other account the client receives 429 `video_pool_exhausted` with `Retry-After` of the period end

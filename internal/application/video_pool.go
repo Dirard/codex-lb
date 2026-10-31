@@ -47,6 +47,7 @@ type VideoUpstream interface {
 	StartDeviceLogin(ctx context.Context) (VideoDeviceLogin, error)
 	PollDeviceLogin(ctx context.Context, clientID, deviceCode string) (VideoTokens, error)
 	Identity(ctx context.Context, accessToken string) (VideoIdentity, error)
+	Usage(ctx context.Context, accessToken string) (VideoUsage, error)
 	CreateVideo(ctx context.Context, token string, body []byte) (VideoUpstreamResponse, error)
 	GetVideo(ctx context.Context, token, requestID string) (VideoUpstreamResponse, error)
 }
@@ -62,6 +63,8 @@ type VideoStore interface {
 	DeleteVideoAccount(ctx context.Context, id string, now time.Time) error
 	ClaimVideoRefresh(ctx context.Context, id string, version int64, until, now time.Time) (bool, error)
 	SaveVideoTokens(ctx context.Context, id string, version int64, access, refresh []byte, expires, now time.Time) (bool, error)
+	SaveVideoUsage(ctx context.Context, id string, percent float64, periodEnd, now time.Time) error
+	SetVideoUsageError(ctx context.Context, id, code string, now time.Time) error
 	IsVideoKeyAllowed(context.Context, string) (bool, error)
 	ListVideoKeys(context.Context) ([]domain.VideoKeyAccess, error)
 	AllowVideoKey(ctx context.Context, keyID string, now time.Time) error

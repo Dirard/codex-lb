@@ -50,11 +50,17 @@ type xaiStub struct {
 	// deviceAnswer holds a refusal to give instead of its tokens.
 	nextLogin    string
 	deviceAnswer map[string]string
+	billing      map[string]videoBilling
+}
+
+type videoBilling struct {
+	status int
+	body   string
 }
 
 func newXAIStub(t *testing.T) *xaiStub {
 	t.Helper()
-	stub := &xaiStub{refreshes: map[string]int{}, refused: map[string]bool{}, reject401: map[string]bool{}, deviceAnswer: map[string]string{}}
+	stub := &xaiStub{refreshes: map[string]int{}, refused: map[string]bool{}, reject401: map[string]bool{}, deviceAnswer: map[string]string{}, billing: map[string]videoBilling{}}
 	stub.create = func(string, int) (int, string, http.Header) {
 		return 200, fmt.Sprintf(`{"request_id":"upstream-%d"}`, stub.jobSeq.Add(1)), nil
 	}
@@ -129,6 +135,15 @@ func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/billing":
+		x.mu.Lock()
+		answer, known := x.billing[account]
+		x.mu.Unlock()
+		if !known {
+			answer = videoBilling{status: 200, body: `{"config":{"creditUsagePercent":1.0,"currentPeriod":{"end":"2099-01-01T00:00:00.000+00:00"}}}`}
+		}
+		w.WriteHeader(answer.status)
+		_, _ = io.WriteString(w, answer.body)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/videos/generations":
 		x.mu.Lock()
 		index := len(x.creates)
@@ -179,7 +194,7 @@ func newVideoFixture(t *testing.T, accounts ...string) videoFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := application.NewVideoService(store, vault, xai.New(xai.Config{HTTPClient: stub.server.Client(), APIBaseURL: stub.server.URL, AuthBaseURL: stub.server.URL, ClientID: "synthetic-cli-client"}))
+	service := application.NewVideoService(store, vault, xai.New(xai.Config{HTTPClient: stub.server.Client(), APIBaseURL: stub.server.URL, AuthBaseURL: stub.server.URL, BillingBaseURL: stub.server.URL, ClientID: "synthetic-cli-client"}))
 	service.ConfigureAdmission(proxy)
 	mux := http.NewServeMux()
 	httpapi.NewVideoHandler(store, service).RegisterRoutes(mux)
@@ -661,6 +676,10 @@ func TestVideoTokensRefreshOnceAndRotate(t *testing.T) {
 	if err := f.service.UpdateAccount(ctx, f.accountStatus(t, "one").ID, nil, videoStatusPtr(domain.VideoAccountActive)); err == nil {
 		t.Fatal("resume brought back an account without a session")
 	}
+	f.stub.mu.Lock()
+	f.stub.refused["one"] = false
+	f.stub.reject401 = map[string]bool{}
+	f.stub.mu.Unlock()
 	signInVideoAccount(t, f, "one")
 	accounts, err := f.service.ListAccounts(ctx)
 	if err != nil || len(accounts) != 1 || accounts[0].Status != domain.VideoAccountActive {
@@ -870,5 +889,131 @@ func TestVideoAdminRoutes(t *testing.T) {
 	job, err := f.store.GetVideoJob(context.Background(), second)
 	if err != nil || job.Status != domain.VideoJobUnknown {
 		t.Fatalf("a pending job of a deleted account: %+v %v", job, err)
+	}
+}
+
+func videoBillingAt(percent string, end time.Time) videoBilling {
+	return videoBilling{status: 200, body: fmt.Sprintf(`{"config":{"creditUsagePercent":%s,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":%q}}}`, percent, end.Format(time.RFC3339Nano))}
+}
+
+func (x *xaiStub) setBilling(account string, answer videoBilling) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.billing[account] = answer
+}
+
+func TestVideoPoolUsageIsReadAndKept(t *testing.T) {
+	f := newVideoFixture(t, "one")
+	ctx := context.Background()
+	account := f.accountStatus(t, "one")
+	if account.UsagePercent == nil || *account.UsagePercent != 1 || account.UsagePeriodEnd == nil || account.UsageCheckedAt == nil || account.UsageError != "" {
+		t.Fatalf("a sign-in did not read the pool: %+v", account)
+	}
+	end := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Millisecond)
+	f.stub.setBilling("one", videoBillingAt("37.5", end))
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	account = f.accountStatus(t, "one")
+	if *account.UsagePercent != 37.5 || !account.UsagePeriodEnd.Equal(end) {
+		t.Fatalf("reading: %+v", account)
+	}
+	f.stub.setBilling("one", videoBilling{status: 500, body: `{"error":"boom"}`})
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatalf("a failed read failed the task: %v", err)
+	}
+	account = f.accountStatus(t, "one")
+	if *account.UsagePercent != 37.5 || account.UsageError != "unavailable" {
+		t.Fatalf("a failed read lost the last value: %+v", account)
+	}
+	f.stub.setBilling("one", videoBilling{status: 200, body: `{"config":{"currentPeriod":{"end":"2099-01-01T00:00:00+00:00"}}}`})
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if account = f.accountStatus(t, "one"); *account.UsagePercent != 0 || account.UsageError != "" {
+		t.Fatalf("an absent percentage means nothing was used: %+v", account)
+	}
+	f.stub.setBilling("one", videoBilling{status: 200, body: `{"config":{}}`})
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if account = f.accountStatus(t, "one"); account.UsageError != "unavailable" {
+		t.Fatalf("an answer without a period was accepted: %+v", account)
+	}
+}
+
+func TestVideoAccountWithoutPermissionKeepsWorking(t *testing.T) {
+	f := newVideoFixture(t, "old")
+	f.stub.setBilling("old", videoBilling{status: 403, body: `{"error":"User does not have Grok Code CLI permission"}`})
+	if err := f.service.RefreshUsage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if account := f.accountStatus(t, "old"); account.UsageError != application.VideoUsageScopeMissing || account.Status != domain.VideoAccountActive {
+		t.Fatalf("a missing permission: %+v", account)
+	}
+	f.createJob(t)
+	f.stub.setBilling("old", videoBillingAt("5", time.Now().Add(time.Hour)))
+	signInVideoAccount(t, f, "old")
+	if account := f.accountStatus(t, "old"); account.UsageError != "" || account.UsagePercent == nil || *account.UsagePercent != 5 {
+		t.Fatalf("a new sign-in did not restore the reading: %+v", account)
+	}
+}
+
+func TestVideoSelectionFollowsThePool(t *testing.T) {
+	f := newVideoFixture(t, "busy", "fresh")
+	ctx := context.Background()
+	week := time.Now().Add(7 * 24 * time.Hour)
+	f.stub.setBilling("busy", videoBillingAt("60", week))
+	f.stub.setBilling("fresh", videoBillingAt("5", week))
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		f.createJob(t)
+	}
+	for _, call := range f.stub.createCalls() {
+		if call.account != "fresh" {
+			t.Fatalf("the fuller account was preferred: %+v", f.stub.createCalls())
+		}
+	}
+	// In one band the jobs spread by load, whatever the exact percentage is.
+	f.stub.setBilling("busy", videoBillingAt("7", week))
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.createJob(t)
+	if calls := f.stub.createCalls(); calls[len(calls)-1].account != "busy" {
+		t.Fatalf("the less loaded account of a band was not chosen: %+v", calls)
+	}
+}
+
+func TestVideoExhaustedPoolIsSkippedUntilItResets(t *testing.T) {
+	f := newVideoFixture(t, "full", "spare")
+	ctx := context.Background()
+	end := time.Now().Add(48 * time.Hour)
+	f.stub.setBilling("full", videoBillingAt("100", end))
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.createJob(t)
+	if calls := f.stub.createCalls(); len(calls) != 1 || calls[0].account != "spare" {
+		t.Fatalf("an exhausted account was tried: %+v", calls)
+	}
+	f.stub.setBilling("spare", videoBillingAt("120", end))
+	if err := f.service.RefreshUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := f.request(http.MethodPost, "/video/v1/generations", videoPinnedBody)
+	code, _ := errorParam(t, w.Body.Bytes())
+	retry, _ := strconv.Atoi(w.Header().Get("Retry-After"))
+	if w.Code != 429 || code != "video_pool_exhausted" || retry < 47*3600 || retry > 48*3600+1 || len(f.stub.createCalls()) != 1 {
+		t.Fatalf("all exhausted: %d %s retry=%d calls=%d", w.Code, w.Body.String(), retry, len(f.stub.createCalls()))
+	}
+	var offset atomic.Int64
+	f.service.ConfigureClock(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })
+	offset.Store(int64(49 * time.Hour))
+	f.createJob(t)
+	if calls := f.stub.createCalls(); len(calls) != 2 {
+		t.Fatalf("an elapsed period stayed exhausted: %+v", calls)
 	}
 }

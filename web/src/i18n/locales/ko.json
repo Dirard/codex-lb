@@ -2090,7 +2090,6 @@
   "video.totals.detail": "작업 {{jobs}}개 중 {{done}}개 완료, {{seconds}}초",
   "video.accounts.title": "풀 계정",
   "video.accounts.howTo": "각 Grok 계정은 여기에서 로그인하세요. 이미 풀에 있는 계정으로 로그인하면 세션이 갱신됩니다.",
-  "video.accounts.poolNote": "xAI는 남은 주간 사용량을 API로 제공하지 않습니다. xAI 사이트의 Usage 탭을 확인하세요.",
   "video.accounts.emptyTitle": "아직 Grok 계정이 없습니다",
   "video.accounts.emptyDescription": "auth.json 을 가져와 풀을 시작하세요.",
   "video.accounts.account": "계정",
@@ -2146,5 +2145,12 @@
   "video.login.description": "xAI 페이지를 열어 이 코드가 표시되는지 확인한 뒤, 추가할 Grok 계정으로 로그인을 승인하세요. 이 창은 열어 두세요.",
   "video.login.open": "xAI 로그인 페이지 열기",
   "video.login.code": "코드",
-  "video.login.waiting": "승인을 기다리는 중…"
+  "video.login.waiting": "승인을 기다리는 중…",
+  "video.accounts.pool": "주간 사용량",
+  "video.pool.left": "{{percent}}% 남음",
+  "video.pool.exhausted": "소진됨",
+  "video.pool.resets": "{{time}} 초기화",
+  "video.pool.noData": "아직 데이터 없음",
+  "video.pool.needsSignIn": "확인하려면 다시 로그인하세요",
+  "video.pool.stale": "마지막 값입니다. 최근 읽기에 실패했습니다"
 }
