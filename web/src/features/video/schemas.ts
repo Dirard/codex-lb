@@ -59,6 +59,7 @@ export const VideoJobSchema = z.object({
   durationSeconds: z.number().nullable(),
   costUsd: z.number().nullable(),
   errorCode: z.string(),
+  errorMessage: z.string(),
   createdAt: z.string(),
   finishedAt: z.string().nullable(),
 });

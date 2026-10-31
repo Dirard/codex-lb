@@ -65,15 +65,15 @@ func newerDatabase(t *testing.T, floor int) string {
 	return path
 }
 
-func TestSchemaFloorClassifiesMigrations41To45AsAdditive(t *testing.T) {
-	if SchemaVersion() != 45 || SchemaFloor() != 40 || !additiveMigrations[41] || !additiveMigrations[42] || !additiveMigrations[43] || !additiveMigrations[44] || !additiveMigrations[45] {
+func TestSchemaFloorClassifiesMigrations41To46AsAdditive(t *testing.T) {
+	if SchemaVersion() != 46 || !additiveMigrations[46] || SchemaFloor() != 40 || !additiveMigrations[41] || !additiveMigrations[42] || !additiveMigrations[43] || !additiveMigrations[44] || !additiveMigrations[45] {
 		t.Fatalf("schema %d floor %d", SchemaVersion(), SchemaFloor())
 	}
 	store, path := testStore(t)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if state := readSchemaFingerprint(t, path); state.version != 45 || state.floor != 40 {
+	if state := readSchemaFingerprint(t, path); state.version != 46 || state.floor != 40 {
 		t.Fatalf("fresh database records %+v", state)
 	}
 	// Reopening at the current schema applies nothing and keeps the floor.

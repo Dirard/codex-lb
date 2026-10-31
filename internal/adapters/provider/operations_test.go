@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
@@ -211,5 +212,29 @@ func TestAudioPartContentTypeRejectsMalformedValues(t *testing.T) {
 		if got := audioPartContentType(input); got != want {
 			t.Fatalf("audioPartContentType(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestImageEditWithoutAnswerInTimeNamesTheTimeout(t *testing.T) {
+	for _, protocol := range []string{"http1", "http2"} {
+		t.Run(protocol, func(t *testing.T) {
+			release := make(chan struct{})
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+			server.EnableHTTP2 = protocol == "http2"
+			server.StartTLS()
+			defer server.Close()
+			defer close(release)
+			adapter, _ := operationAdapter(t, server)
+			transport := server.Client().Transport.(*http.Transport).Clone()
+			transport.ForceAttemptHTTP2 = protocol == "http2"
+			transport.ResponseHeaderTimeout = 50 * time.Millisecond
+			adapter.config.HTTPClient = &http.Client{Transport: transport}
+			_, err := adapter.Images(context.Background(), application.CodexOperationTarget{Account: operationAccount()},
+				application.CodexImageRequest{Edit: true, Body: []byte(`{"prompt":"x"}`)})
+			var failure *application.ProviderFailure
+			if !errors.As(err, &failure) || failure.Code != "upstream_timeout" || failure.Status != http.StatusGatewayTimeout || !failure.Dispatched {
+				t.Fatalf("failure: %#v %v", failure, err)
+			}
+		})
 	}
 }

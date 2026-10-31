@@ -66,6 +66,7 @@ type VideoJob struct {
 	DurationSeconds   *float64
 	CostMicrodollars  *int64
 	ErrorCode         string
+	ErrorMessage      string
 	NextPollAt        *time.Time
 	CreatedAt         time.Time
 	FinishedAt        *time.Time
@@ -78,6 +79,7 @@ type VideoJobFinish struct {
 	DurationSeconds  *float64
 	CostMicrodollars *int64
 	ErrorCode        string
+	ErrorMessage     string
 	At               time.Time
 }
 
@@ -109,6 +111,7 @@ type VideoJobEntry struct {
 	DurationSeconds  *float64
 	CostMicrodollars *int64
 	ErrorCode        string
+	ErrorMessage     string
 	CreatedAt        time.Time
 	FinishedAt       *time.Time
 }

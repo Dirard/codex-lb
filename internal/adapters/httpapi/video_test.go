@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -497,6 +498,85 @@ func TestVideoRefusalBeforeExecutionMovesToAnotherAccount(t *testing.T) {
 			t.Fatalf("exhausted: %d %s calls=%d", w.Code, w.Body.String(), len(f.stub.createCalls()))
 		}
 	})
+}
+
+func TestVideoDoneWithoutUsableResultFinishesTheJob(t *testing.T) {
+	cases := []struct{ name, body, code, message string }{
+		{"moderated without url", `{"status":"done","video":{"url":"","respect_moderation":false},"usage":{"cost_in_usd_ticks":5}}`, "video_moderated", "xAI blocked this video by moderation"},
+		{"moderated with url", `{"status":"done","video":{"url":"https://vidgen.example.invalid/x.mp4","respect_moderation":false}}`, "video_moderated", "xAI blocked this video by moderation"},
+		{"no url", `{"status":"done","video":{"url":""}}`, "video_failed", "xAI finished this job without a video"},
+		{"failed with an object", `{"status":"failed","error":{"code":"invalid_argument","message":"Blocked: the last frame"}}`, "video_failed", "Blocked: the last frame"},
+		{"failed with a string", `{"status":"failed","error":"No capacity"}`, "video_failed", "No capacity"},
+		{"failed in silence", `{"status":"failed"}`, "video_failed", "xAI could not generate this video"},
+		{"expired", `{"status":"expired"}`, "video_expired", "xAI expired this job before it gave a video"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newVideoFixture(t, "one")
+			id := f.createJob(t)
+			f.stub.get = func(string, string) (int, string) { return 200, c.body }
+			w := f.request(http.MethodGet, "/video/v1/generations/"+id, "")
+			var job struct {
+				Status, Error string
+				ErrorMessage  string `json:"error_message"`
+				Video         *struct{ URL string }
+				CostUSD       *float64 `json:"cost_usd"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &job); err != nil || w.Code != 200 {
+				t.Fatalf("status: %d %s", w.Code, w.Body.String())
+			}
+			if job.Error != c.code || job.ErrorMessage != c.message || job.Video != nil || job.CostUSD != nil {
+				t.Fatalf("job: %s", w.Body.String())
+			}
+			// The reason survives the read of a finished job and reaches the dashboard.
+			if again := f.request(http.MethodGet, "/video/v1/generations/"+id, ""); !strings.Contains(again.Body.String(), c.message) {
+				t.Fatalf("reread: %s", again.Body.String())
+			}
+			entries, _, err := f.service.Jobs(context.Background(), nil, 10)
+			if err != nil || len(entries) != 1 || entries[0].ErrorMessage != c.message {
+				t.Fatalf("dashboard entry: %+v %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestVideoUnfinishedJobLeavesOneTracePerDuePoll(t *testing.T) {
+	f := newVideoFixture(t, "one")
+	var logged bytes.Buffer
+	f.service.ConfigureLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	id := f.createJob(t)
+	var offset atomic.Int64
+	f.service.ConfigureClock(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })
+	f.stub.get = func(string, string) (int, string) { return 202, `{"status":"pending"}` }
+	offset.Store(int64(30 * time.Second))
+	f.request(http.MethodGet, "/video/v1/generations/"+id, "")
+	if logged.Len() != 0 {
+		t.Fatalf("a young job logged: %s", logged.String())
+	}
+	offset.Store(int64(3 * time.Minute))
+	for range 3 {
+		if w := f.request(http.MethodGet, "/video/v1/generations/"+id, ""); w.Code != 200 {
+			t.Fatalf("status: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if count := strings.Count(logged.String(), "still unfinished"); count != 1 {
+		t.Fatalf("traces within one minute: %d\n%s", count, logged.String())
+	}
+	for _, want := range []string{`"job":"` + id + `"`, `"upstream_http_status":202`, `"upstream_status":"pending"`} {
+		if !strings.Contains(logged.String(), want) {
+			t.Fatalf("trace lacks %s: %s", want, logged.String())
+		}
+	}
+	if strings.Contains(logged.String(), "upstream-") {
+		t.Fatalf("trace names the upstream request: %s", logged.String())
+	}
+	logged.Reset()
+	f.stub.get = func(string, string) (int, string) { return 503, `{"error":"secret provider text"}` }
+	offset.Store(int64(5 * time.Minute))
+	f.request(http.MethodGet, "/video/v1/generations/"+id, "")
+	if !strings.Contains(logged.String(), `"upstream_http_status":503`) || strings.Contains(logged.String(), "secret provider text") {
+		t.Fatalf("failed read trace: %s", logged.String())
+	}
 }
 
 func TestVideoRateLimitWithoutRetryAfterPausesBriefly(t *testing.T) {

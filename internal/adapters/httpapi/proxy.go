@@ -249,7 +249,7 @@ func proxyError(err error) (int, string, string) {
 		if status < 400 || status > 599 {
 			status = 502
 		}
-		return status, upstream.Code, "Upstream request failed"
+		return status, upstream.Code, providerFailureMessage(upstream.Code)
 	}
 	switch {
 	case errors.Is(err, domain.ErrLimitReached):
@@ -265,6 +265,25 @@ func proxyError(err error) (int, string, string) {
 	default:
 		return 500, "proxy_error", "The proxy could not complete this request"
 	}
+}
+
+// providerFailureMessage says in words why the upstream call gave no answer.
+func providerFailureMessage(code string) string {
+	switch code {
+	case "upstream_timeout":
+		return "The upstream provider did not start answering within the time limit"
+	case "upstream_unavailable":
+		return "The connection to the upstream provider failed before a complete answer"
+	case "upstream_response_too_large":
+		return "The upstream answer exceeds the size limit"
+	case "invalid_upstream_response":
+		return "The upstream provider returned an unusable answer"
+	case "usage_unavailable":
+		return "The upstream provider did not report usage for this request"
+	case "chatgpt_credential_unavailable", "chatgpt_token_unavailable":
+		return "The upstream account could not be authorized"
+	}
+	return "Upstream request failed"
 }
 
 func writeProxyError(w http.ResponseWriter, err error) {

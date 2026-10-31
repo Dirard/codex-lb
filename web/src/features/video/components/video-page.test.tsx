@@ -33,7 +33,7 @@ function poolHandlers(state: { allowed: boolean }) {
         nextCursor: null,
         jobs: [{
           id: "vid_1", keyName: "Owner key", accountLabel: "Main", model: "grok-imagine-video-1.5", mode: "first_last_frame",
-          requestedSeconds: 2, status: "done", durationSeconds: 2, costUsd: 0.18, errorCode: "", createdAt: "2026-10-31T10:00:00Z", finishedAt: "2026-10-31T10:00:30Z",
+          requestedSeconds: 2, status: "done", durationSeconds: 2, costUsd: 0.18, errorCode: "", errorMessage: "", createdAt: "2026-10-31T10:00:00Z", finishedAt: "2026-10-31T10:00:30Z",
         }],
       }),
     ),

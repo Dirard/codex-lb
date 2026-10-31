@@ -278,6 +278,7 @@ type videoJobEntryView struct {
 	DurationSeconds  *float64   `json:"durationSeconds"`
 	CostUSD          *float64   `json:"costUsd"`
 	ErrorCode        string     `json:"errorCode"`
+	ErrorMessage     string     `json:"errorMessage"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	FinishedAt       *time.Time `json:"finishedAt"`
 }
@@ -295,7 +296,7 @@ func (s *Server) listVideoJobEntries(w http.ResponseWriter, r *http.Request) {
 	views := make([]videoJobEntryView, 0, len(entries))
 	for _, e := range entries {
 		view := videoJobEntryView{ID: e.ID, KeyName: e.KeyName, AccountLabel: e.AccountLabel, Model: e.Model, Mode: e.Mode, RequestedSeconds: e.RequestedSeconds,
-			Status: string(e.Status), DurationSeconds: e.DurationSeconds, ErrorCode: e.ErrorCode, CreatedAt: e.CreatedAt, FinishedAt: e.FinishedAt}
+			Status: string(e.Status), DurationSeconds: e.DurationSeconds, ErrorCode: e.ErrorCode, ErrorMessage: e.ErrorMessage, CreatedAt: e.CreatedAt, FinishedAt: e.FinishedAt}
 		if e.CostMicrodollars != nil {
 			cost := float64(*e.CostMicrodollars) / 1e6
 			view.CostUSD = &cost
