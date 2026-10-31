@@ -67,15 +67,23 @@ describe("VideoPage", () => {
     await waitFor(() => expect(state.allowed).toBe(false));
   });
 
-  it("imports an auth.json and pauses an account", async () => {
+  it("signs an account in from the page and pauses an account", async () => {
     const user = userEvent.setup();
-    const imported = vi.fn();
     const patched = vi.fn();
+    const cancelled = vi.fn();
+    let polls = 0;
     server.use(
       ...poolHandlers({ allowed: true }),
-      http.post("/api/video/accounts/import", () => {
-        imported();
-        return HttpResponse.json({ id: "vacc_2", email: "two@example.invalid" });
+      http.post("/api/video/accounts/login", () =>
+        HttpResponse.json({ flowId: "vlogin_1", userCode: "ABCD-1234", verificationUrl: "https://accounts.example.invalid/device?user_code=ABCD-1234", intervalSeconds: 0, expiresInSeconds: 1800 }),
+      ),
+      http.get("/api/video/accounts/login/vlogin_1", () => {
+        polls += 1;
+        return HttpResponse.json(polls < 2 ? { status: "pending" } : { status: "success", email: "two@example.invalid" });
+      }),
+      http.delete("/api/video/accounts/login/vlogin_1", () => {
+        cancelled();
+        return new HttpResponse(null, { status: 204 });
       }),
       http.patch("/api/video/accounts/vacc_1", async ({ request }) => {
         patched(await request.json());
@@ -84,10 +92,38 @@ describe("VideoPage", () => {
     );
     renderWithProviders(<VideoPage />);
     await screen.findAllByText("Main");
-    await user.upload(screen.getByLabelText("auth.json file"), new File(["{}"], "auth.json", { type: "application/json" }));
-    await waitFor(() => expect(imported).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole("button", { name: "Add account" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("ABCD-1234")).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Open the xAI sign-in page" })).toHaveAttribute("href", "https://accounts.example.invalid/device?user_code=ABCD-1234");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument(), { timeout: 5000 });
+    expect(polls).toBeGreaterThanOrEqual(2);
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(patched).toHaveBeenCalledWith({ status: "paused" }));
+  });
+
+  it("forgets a sign-in when the dialog is closed and shows a refusal", async () => {
+    const user = userEvent.setup();
+    const cancelled = vi.fn();
+    server.use(
+      ...poolHandlers({ allowed: true }),
+      http.post("/api/video/accounts/login", () =>
+        HttpResponse.json({ flowId: "vlogin_2", userCode: "WXYZ-9876", verificationUrl: "https://accounts.example.invalid/device", intervalSeconds: 5, expiresInSeconds: 1800 }),
+      ),
+      http.get("/api/video/accounts/login/vlogin_2", () => HttpResponse.json({ status: "error", message: "xAI refused or expired this sign-in; start a new one" })),
+      http.delete("/api/video/accounts/login/vlogin_2", () => {
+        cancelled();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderWithProviders(<VideoPage />);
+    await screen.findAllByText("Main");
+    await user.click(screen.getByRole("button", { name: "Add account" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("xAI refused or expired this sign-in; start a new one")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("shows empty states without calling anything else", async () => {

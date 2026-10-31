@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -13,17 +12,15 @@ import (
 )
 
 const (
-	videoIssuer           = "https://auth.x.ai"
-	videoRefreshMargin    = time.Minute
-	videoRefreshClaim     = 30 * time.Second
-	videoRefreshWaits     = 10
-	videoTokenAttempts    = 3
-	videoRefreshWait      = 500 * time.Millisecond
-	videoWriteTimeout     = 10 * time.Second
-	videoRefreshTimeout   = 30 * time.Second
-	videoRevokeTimeout    = 10 * time.Second
-	maxVideoLabelBytes    = 128
-	maxVideoAuthFileBytes = 1 << 20
+	videoRefreshMargin  = time.Minute
+	videoRefreshClaim   = 30 * time.Second
+	videoRefreshWaits   = 10
+	videoTokenAttempts  = 3
+	videoRefreshWait    = 500 * time.Millisecond
+	videoWriteTimeout   = 10 * time.Second
+	videoRefreshTimeout = 30 * time.Second
+	videoRevokeTimeout  = 10 * time.Second
+	maxVideoLabelBytes  = 128
 )
 
 // ErrVideoRefreshRefused means the issuer definitively refused a refresh token.
@@ -47,6 +44,9 @@ type VideoUpstreamResponse struct {
 type VideoUpstream interface {
 	Refresh(ctx context.Context, clientID, refreshToken string) (VideoTokens, error)
 	Revoke(ctx context.Context, clientID, refreshToken string) error
+	StartDeviceLogin(ctx context.Context) (VideoDeviceLogin, error)
+	PollDeviceLogin(ctx context.Context, clientID, deviceCode string) (VideoTokens, error)
+	Identity(ctx context.Context, accessToken string) (VideoIdentity, error)
 	CreateVideo(ctx context.Context, token string, body []byte) (VideoUpstreamResponse, error)
 	GetVideo(ctx context.Context, token, requestID string) (VideoUpstreamResponse, error)
 }
@@ -92,6 +92,7 @@ type VideoService struct {
 
 	mu      sync.Mutex
 	flights map[string]*videoRefreshFlight
+	logins  map[string]*videoLoginFlow
 }
 
 type videoRefreshFlight struct {
@@ -101,7 +102,7 @@ type videoRefreshFlight struct {
 
 func NewVideoService(store VideoStore, cipher SecretCipher, upstream VideoUpstream) *VideoService {
 	return &VideoService{store: store, cipher: cipher, upstream: upstream, admission: blockedCodexAdmission{}, now: time.Now,
-		wait: waitVideo, flights: map[string]*videoRefreshFlight{}}
+		wait: waitVideo, flights: map[string]*videoRefreshFlight{}, logins: map[string]*videoLoginFlow{}}
 }
 
 // ConfigureClock replaces the clock; tests use it to reach poll and stale deadlines.
@@ -125,63 +126,6 @@ func videoID(prefix string) string { return prefix + strings.ToLower(rand.Text()
 
 func videoWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), videoWriteTimeout)
-}
-
-// cliAuthEntry is the entry of the official CLI's auth.json that the pool reads.
-type cliAuthEntry struct {
-	Key          string `json:"key"`
-	RefreshToken string `json:"refresh_token"`
-	UserID       string `json:"user_id"`
-	Email        string `json:"email"`
-	Issuer       string `json:"oidc_issuer"`
-	ClientID     string `json:"oidc_client_id"`
-}
-
-func parseCLIAuth(raw []byte) (cliAuthEntry, error) {
-	invalid := &ProxyError{Code: "invalid_xai_auth", Status: 400, Message: "The file is not an auth.json of the official Grok CLI"}
-	var file map[string]cliAuthEntry
-	if len(raw) == 0 || len(raw) > maxVideoAuthFileBytes || json.Unmarshal(raw, &file) != nil || len(file) != 1 {
-		return cliAuthEntry{}, invalid
-	}
-	for _, entry := range file {
-		if entry.Issuer != videoIssuer || entry.Key == "" || entry.RefreshToken == "" || entry.ClientID == "" || entry.UserID == "" {
-			return cliAuthEntry{}, invalid
-		}
-		return entry, nil
-	}
-	return cliAuthEntry{}, invalid
-}
-
-// ImportAccount validates a CLI auth.json and refreshes it once: that proves
-// the credential and detaches the stored session from the CLI's copy.
-func (s *VideoService) ImportAccount(ctx context.Context, raw []byte) (domain.VideoAccount, error) {
-	entry, err := parseCLIAuth(raw)
-	if err != nil {
-		return domain.VideoAccount{}, err
-	}
-	refreshCtx, cancel := context.WithTimeout(ctx, videoRefreshTimeout)
-	defer cancel()
-	tokens, err := s.upstream.Refresh(refreshCtx, entry.ClientID, entry.RefreshToken)
-	if errors.Is(err, ErrVideoRefreshRefused) {
-		return domain.VideoAccount{}, &ProxyError{Code: "invalid_xai_auth", Status: 400, Message: "xAI refused this sign-in; run grok login again and import the new file"}
-	}
-	if err != nil {
-		return domain.VideoAccount{}, &ProxyError{Code: "xai_unavailable", Status: 502, Message: "xAI could not be reached"}
-	}
-	access, err := s.cipher.Encrypt([]byte(tokens.Access))
-	if err != nil {
-		return domain.VideoAccount{}, err
-	}
-	refresh, err := s.cipher.Encrypt([]byte(tokens.Refresh))
-	if err != nil {
-		return domain.VideoAccount{}, err
-	}
-	now := s.now().UTC()
-	writeCtx, done := videoWriteContext(ctx)
-	defer done()
-	return s.store.SaveVideoAccount(writeCtx, domain.VideoAccount{ID: videoID("vacc_"), XAIUserID: entry.UserID, Email: entry.Email,
-		OIDCClientID: entry.ClientID, AccessTokenEncrypted: access, RefreshTokenEncrypted: refresh,
-		AccessExpiresAt: now.Add(tokens.ExpiresIn), CreatedAt: now, UpdatedAt: now})
 }
 
 // VideoAccountView joins an account with its totals.
@@ -209,7 +153,7 @@ func (s *VideoService) ListAccounts(ctx context.Context) ([]VideoAccountView, er
 }
 
 // UpdateAccount renames, pauses or resumes. An account that lost its session
-// comes back only through a new import.
+// comes back only through a new sign-in.
 func (s *VideoService) UpdateAccount(ctx context.Context, id string, label *string, status *domain.VideoAccountStatus) error {
 	account, err := s.store.GetVideoAccount(ctx, id)
 	if err != nil {
@@ -234,7 +178,7 @@ func (s *VideoService) UpdateAccount(ctx context.Context, id string, label *stri
 		return &ProxyError{Code: "invalid_request", Status: 400, Message: "The status must be active or paused", Param: "status"}
 	}
 	if *status == domain.VideoAccountActive && account.Status == domain.VideoAccountReauthRequired {
-		return &ProxyError{Code: "video_reauth_required", Status: 409, Message: "This account needs a new sign-in; import a new auth.json"}
+		return &ProxyError{Code: "video_reauth_required", Status: 409, Message: "This account needs a new sign-in"}
 	}
 	return s.store.SetVideoAccountStatus(ctx, id, *status, "", now)
 }

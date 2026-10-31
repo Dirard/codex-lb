@@ -2654,7 +2654,7 @@ When a dashboard (admin API) request fails because its client cancelled it, so t
 
 ### Requirement: Grok video generation is a separate pool and REST surface
 
-The runtime SHALL keep Grok accounts in a video pool separate from `accounts`, imported only from an official CLI `auth.json` whose issuer is exactly `https://auth.x.ai`, with tokens encrypted at rest, refreshed once at import and later through that issuer's token endpoint, and revoked on a best-effort basis when the account is deleted. Video accounts MUST NOT be visible to any other proxy route, routing decision or usage report, and video jobs MUST NOT consume API-key limits or appear in usage events.
+The runtime SHALL keep Grok accounts in a video pool separate from `accounts`, added only through a device sign-in started from the dashboard at `https://auth.x.ai`, with tokens encrypted at rest, refreshed through that issuer's token endpoint, and revoked on a best-effort basis when the account is deleted. The device code MUST stay in process memory. Signing in to the same xAI user SHALL replace its tokens instead of adding an account. Video accounts MUST NOT be visible to any other proxy route, routing decision or usage report, and video jobs MUST NOT consume API-key limits or appear in usage events.
 
 The runtime SHALL serve `POST /video/v1/generations`, `GET /video/v1/generations/{id}` and `GET /video/v1/generations` to an active API key on the video allow list. Any other active key SHALL receive 403 `video_access_denied` before dispatch, and a request without a valid bearer key, including keyless local access, SHALL receive 401. A key SHALL see only its own jobs, and another key's job id SHALL answer 404.
 
@@ -2689,3 +2689,8 @@ Status reads and a background sweep SHALL query only the job's account. A job SH
 #### Scenario: A client never polls
 - **WHEN** a client creates a job and never polls it
 - **THEN** the background sweep records its terminal status and cost, or marks it `unknown` after one hour
+
+#### Scenario: Adding an account from the dashboard
+- **WHEN** the administrator starts a sign-in on the Video generation page and approves it at xAI
+- **THEN** the page shows xAI's link and code, the next status request after approval stores the account, and the dialog closes
+- **AND** closing the dialog first means the code is never exchanged, and no response or log carries the device code or tokens

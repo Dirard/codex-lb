@@ -18,9 +18,18 @@ export const VideoAccountsResponseSchema = z.object({
   accounts: z.array(VideoAccountSchema),
 });
 
-export const VideoImportedAccountSchema = z.object({
-  id: z.string(),
-  email: z.string(),
+export const VideoLoginStartSchema = z.object({
+  flowId: z.string(),
+  userCode: z.string(),
+  verificationUrl: z.string(),
+  intervalSeconds: z.number(),
+  expiresInSeconds: z.number(),
+});
+
+export const VideoLoginStatusSchema = z.object({
+  status: z.enum(["pending", "success", "error"]),
+  email: z.string().optional(),
+  message: z.string().optional(),
 });
 
 export const VideoKeySchema = z.object({
@@ -69,6 +78,7 @@ export const VideoSummarySchema = z.object({
 });
 
 export type VideoAccount = z.infer<typeof VideoAccountSchema>;
+export type VideoLoginStart = z.infer<typeof VideoLoginStartSchema>;
 export type VideoKey = z.infer<typeof VideoKeySchema>;
 export type VideoJob = z.infer<typeof VideoJobSchema>;
 export type VideoSummary = z.infer<typeof VideoSummarySchema>;

@@ -2089,10 +2089,7 @@
   "video.totals.month": "Last 30 days",
   "video.totals.detail": "{{done}} of {{jobs}} jobs done, {{seconds}} s",
   "video.accounts.title": "Pool accounts",
-  "video.accounts.import": "Import auth.json",
-  "video.accounts.importFile": "auth.json file",
-  "video.accounts.imported": "{{email}} is in the pool",
-  "video.accounts.howTo": "Sign in with the official Grok CLI (grok login --device-auth), import its ~/.grok/auth.json here, then delete the file. Use a separate GROK_HOME for each account.",
+  "video.accounts.howTo": "Sign in to each Grok account from here. Signing in to an account already in the pool renews its session.",
   "video.accounts.poolNote": "xAI does not report the remaining weekly pool through its API; see the Usage tab on xAI's site.",
   "video.accounts.emptyTitle": "No Grok accounts yet",
   "video.accounts.emptyDescription": "Import an auth.json to start the pool.",
@@ -2141,5 +2138,13 @@
   "video.jobStatus.expired": "Expired",
   "video.jobStatus.refused": "Refused, moved on",
   "video.jobStatus.rejected": "Rejected",
-  "video.jobStatus.unknown": "Result unknown"
+  "video.jobStatus.unknown": "Result unknown",
+  "video.accounts.add": "Add account",
+  "video.accounts.signedIn": "{{email}} is in the pool",
+  "video.accounts.signInAgain": "Sign in again",
+  "video.login.title": "Sign in to Grok",
+  "video.login.description": "Open the xAI page, check that it shows this code, and approve the sign-in with the Grok account you want to add. Keep this dialog open.",
+  "video.login.open": "Open the xAI sign-in page",
+  "video.login.code": "Code",
+  "video.login.waiting": "Waiting for your approval…"
 }

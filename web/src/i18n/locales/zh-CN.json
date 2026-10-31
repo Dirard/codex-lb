@@ -2089,10 +2089,7 @@
   "video.totals.month": "最近 30 天",
   "video.totals.detail": "{{jobs}} 个任务中完成 {{done}} 个,{{seconds}} 秒",
   "video.accounts.title": "账号池",
-  "video.accounts.import": "导入 auth.json",
-  "video.accounts.importFile": "auth.json 文件",
-  "video.accounts.imported": "{{email}} 已加入账号池",
-  "video.accounts.howTo": "使用官方 Grok CLI 登录(grok login --device-auth),在此导入 ~/.grok/auth.json,然后删除该文件。每个账号使用单独的 GROK_HOME。",
+  "video.accounts.howTo": "请在此处登录每个 Grok 账号。登录已在账号池中的账号会续期其会话。",
   "video.accounts.poolNote": "xAI 不通过 API 提供每周剩余用量,请查看 xAI 网站的 Usage 选项卡。",
   "video.accounts.emptyTitle": "还没有 Grok 账号",
   "video.accounts.emptyDescription": "导入 auth.json 以开始使用账号池。",
@@ -2141,5 +2138,13 @@
   "video.jobStatus.expired": "已过期",
   "video.jobStatus.refused": "被拒绝,已转移",
   "video.jobStatus.rejected": "已拒绝",
-  "video.jobStatus.unknown": "结果未知"
+  "video.jobStatus.unknown": "结果未知",
+  "video.accounts.add": "添加账号",
+  "video.accounts.signedIn": "{{email}} 已加入账号池",
+  "video.accounts.signInAgain": "重新登录",
+  "video.login.title": "登录 Grok",
+  "video.login.description": "打开 xAI 页面,确认显示的是此代码,然后使用要添加的 Grok 账号批准登录。请保持此对话框打开。",
+  "video.login.open": "打开 xAI 登录页面",
+  "video.login.code": "代码",
+  "video.login.waiting": "正在等待您批准…"
 }
