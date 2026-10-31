@@ -24,7 +24,7 @@ const (
 	videoMaxPromptChars  = 32000
 	videoMaxAttempts     = 4
 	videoMaxUnfinished   = 4
-	videoDefaultCooldown = time.Hour
+	videoDefaultCooldown = time.Minute
 	videoFirstPollDelay  = 10 * time.Second
 	videoErrorBytes      = 500
 
@@ -263,6 +263,9 @@ func (s *VideoService) dispatchVideo(ctx context.Context, job domain.VideoJob, g
 		}
 		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_403")
 	case response.Status == videoStatusTooManyRequests:
+		// An exhausted pool is known from its reading, so a 429 without
+		// Retry-After is treated as a short rate limit, such as too many jobs at
+		// once, and does not take the account out for long.
 		cooldown := response.RetryAfter
 		if cooldown <= 0 {
 			cooldown = videoDefaultCooldown

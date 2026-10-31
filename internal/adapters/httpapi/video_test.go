@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,6 +52,7 @@ type xaiStub struct {
 	nextLogin    string
 	deviceAnswer map[string]string
 	billing      map[string]videoBilling
+	scopes       map[string]string
 }
 
 type videoBilling struct {
@@ -60,7 +62,7 @@ type videoBilling struct {
 
 func newXAIStub(t *testing.T) *xaiStub {
 	t.Helper()
-	stub := &xaiStub{refreshes: map[string]int{}, refused: map[string]bool{}, reject401: map[string]bool{}, deviceAnswer: map[string]string{}, billing: map[string]videoBilling{}}
+	stub := &xaiStub{refreshes: map[string]int{}, refused: map[string]bool{}, reject401: map[string]bool{}, deviceAnswer: map[string]string{}, billing: map[string]videoBilling{}, scopes: map[string]string{}}
 	stub.create = func(string, int) (int, string, http.Header) {
 		return 200, fmt.Sprintf(`{"request_id":"upstream-%d"}`, stub.jobSeq.Add(1)), nil
 	}
@@ -81,8 +83,10 @@ func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/oauth2/device/code" {
+		form, _ := url.ParseQuery(string(body))
 		x.mu.Lock()
 		next := x.nextLogin
+		x.scopes[next] = form.Get("scope")
 		x.mu.Unlock()
 		if next == "" {
 			w.WriteHeader(500)
@@ -138,7 +142,14 @@ func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/billing":
 		x.mu.Lock()
 		answer, known := x.billing[account]
+		granted := x.scopes[account]
 		x.mu.Unlock()
+		// As at xAI: without this permission the route refuses, whatever else is known.
+		if !strings.Contains(" "+granted+" ", " grok-cli:access ") {
+			w.WriteHeader(403)
+			_, _ = io.WriteString(w, `{"error":"User does not have Grok Code CLI permission"}`)
+			return
+		}
 		if !known {
 			answer = videoBilling{status: 200, body: `{"config":{"creditUsagePercent":1.0,"currentPeriod":{"end":"2099-01-01T00:00:00.000+00:00"}}}`}
 		}
@@ -486,6 +497,31 @@ func TestVideoRefusalBeforeExecutionMovesToAnotherAccount(t *testing.T) {
 			t.Fatalf("exhausted: %d %s calls=%d", w.Code, w.Body.String(), len(f.stub.createCalls()))
 		}
 	})
+}
+
+func TestVideoRateLimitWithoutRetryAfterPausesBriefly(t *testing.T) {
+	f := newVideoFixture(t, "one")
+	f.stub.create = func(_ string, index int) (int, string, http.Header) {
+		if index == 0 {
+			return 429, `{"error":"too many"}`, nil
+		}
+		return 200, `{"request_id":"upstream-later"}`, nil
+	}
+	w := f.request(http.MethodPost, "/video/v1/generations", videoPinnedBody)
+	if code, _ := errorParam(t, w.Body.Bytes()); w.Code != 429 || code != "video_pool_exhausted" {
+		t.Fatalf("a rate limit: %d %s", w.Code, w.Body.String())
+	}
+	if retry, _ := strconv.Atoi(w.Header().Get("Retry-After")); retry < 1 || retry > 60 {
+		t.Fatalf("Retry-After: %q", w.Header().Get("Retry-After"))
+	}
+	account := f.accountStatus(t, "one")
+	if account.CooldownUntil == nil || time.Until(*account.CooldownUntil) > time.Minute {
+		t.Fatalf("a rate limit took the account out for long: %+v", account.CooldownUntil)
+	}
+	var offset atomic.Int64
+	f.service.ConfigureClock(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })
+	offset.Store(int64(61 * time.Second))
+	f.createJob(t)
 }
 
 func TestVideoAttemptThatMayHaveExecutedIsNotReplayed(t *testing.T) {
@@ -905,6 +941,12 @@ func (x *xaiStub) setBilling(account string, answer videoBilling) {
 func TestVideoPoolUsageIsReadAndKept(t *testing.T) {
 	f := newVideoFixture(t, "one")
 	ctx := context.Background()
+	f.stub.mu.Lock()
+	scope := f.stub.scopes["one"]
+	f.stub.mu.Unlock()
+	if !strings.Contains(scope, "grok-cli:access") || !strings.Contains(scope, "api:access") || strings.Contains(scope, "conversations") {
+		t.Fatalf("sign-in scope: %q", scope)
+	}
 	account := f.accountStatus(t, "one")
 	if account.UsagePercent == nil || *account.UsagePercent != 1 || account.UsagePeriodEnd == nil || account.UsageCheckedAt == nil || account.UsageError != "" {
 		t.Fatalf("a sign-in did not read the pool: %+v", account)
