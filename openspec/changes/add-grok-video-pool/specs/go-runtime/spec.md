@@ -2,7 +2,7 @@
 
 ### Requirement: Grok video generation is a separate pool and REST surface
 
-The runtime SHALL keep Grok accounts in a video pool separate from `accounts`, imported only from an official CLI `auth.json` whose issuer is exactly `https://auth.x.ai`, with tokens encrypted at rest and refreshed through that issuer's token endpoint. Video accounts MUST NOT be visible to any other proxy route, routing decision or usage report, and video jobs MUST NOT consume API-key limits or appear in usage events.
+The runtime SHALL keep Grok accounts in a video pool separate from `accounts`, imported only from an official CLI `auth.json` whose issuer is exactly `https://auth.x.ai`, with tokens encrypted at rest, refreshed once at import and later through that issuer's token endpoint, and revoked on a best-effort basis when the account is deleted. Video accounts MUST NOT be visible to any other proxy route, routing decision or usage report, and video jobs MUST NOT consume API-key limits or appear in usage events.
 
 The runtime SHALL serve `POST /video/v1/generations`, `GET /video/v1/generations/{id}` and `GET /video/v1/generations` to an active API key on the video allow list. Any other key, including keyless local access, SHALL receive 403 `video_access_denied` before dispatch. A key SHALL see only its own jobs, and another key's job id SHALL answer 404.
 

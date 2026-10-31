@@ -163,6 +163,8 @@ func routeGroup(path string) string {
 	switch {
 	case strings.HasPrefix(path, "/health"):
 		return "health"
+	case strings.HasPrefix(path, "/video/v1/"):
+		return "video"
 	case strings.Contains(path, "/compact"):
 		return "compact"
 	case strings.HasPrefix(path, "/v1/responses"), strings.HasPrefix(path, "/backend-api/codex/responses"):

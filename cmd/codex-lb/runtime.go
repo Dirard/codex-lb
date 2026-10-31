@@ -25,6 +25,7 @@ import (
 	"codex-lb/internal/adapters/sqlite"
 	"codex-lb/internal/adapters/streambuffer"
 	"codex-lb/internal/adapters/webui"
+	"codex-lb/internal/adapters/xai"
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
 	"codex-lb/internal/domain/pricing"
@@ -45,6 +46,7 @@ type runtime struct {
 	usage          *application.AccountUsageService
 	catalog        *application.ModelCatalogService
 	automations    *application.AutomationsService
+	videos         *application.VideoService
 	rollups        *application.UsageRollupService
 	backups        *application.BackupService
 	backgroundCtx  context.Context
@@ -195,6 +197,9 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	warmups.Diagnostics = proxy.Diagnostics
 	warmups.ConfigureAccountAdmission(proxy)
 	api.ConfigureWarmups(warmups)
+	videos := application.NewVideoService(data.store, data.vault, xai.New(xai.Config{HTTPClient: client}))
+	videos.ConfigureAdmission(proxy)
+	api.ConfigureVideo(videos)
 	limitWarmup := application.NewLimitWarmupService(data.store, data.store, warmups, data.store, time.Now)
 	limitWarmup.ConfigureCatalog(catalog)
 	usage.ConfigureLimitWarmups(limitWarmup)
@@ -219,7 +224,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	api.ConfigureBackups(backupService)
 	baseCtx, cancel := context.WithCancel(context.Background())
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
-	r := &runtime{data: data, accounts: accounts, tokens: tokens, provider: adapter,
+	r := &runtime{data: data, accounts: accounts, tokens: tokens, provider: adapter, videos: videos,
 		proxy: proxy, transport: transport, cancel: cancel, config: cfg, logger: logger,
 		usage: usage, catalog: catalog, automations: automations, rollups: rollups, backups: backupService,
 		backgroundCtx: backgroundCtx, stopBackground: stopBackground,
@@ -254,6 +259,9 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	nativeRoutes := httpapi.NewNativeAPIHandler(data.store, native, cfg.trusted)
 	nativeRoutes.ConfigureBodyBudget(bodies)
 	nativeRoutes.RegisterRoutes(proxyMux)
+	videoRoutes := httpapi.NewVideoHandler(data.store, videos)
+	videoRoutes.ConfigureBodyBudget(bodies)
+	videoRoutes.RegisterRoutes(proxyMux)
 	httpapi.NewModelCatalogHandler(data.store, catalog).RegisterPublicRoutes(proxyMux)
 	responses := httpapi.NewProxyHandlerWithLimits(data.store, proxy, cfg.trusted, httpapi.ProxyHandlerLimits{Bodies: bodies, ClientWebSockets: capacity.ClientWebSockets})
 	api.ConfigureRuntimeCapacity(httpapi.RuntimeCapacitySource{Plan: capacity, Usage: func() httpapi.CapacityUsage {
@@ -302,7 +310,11 @@ func (r *runtime) startBackground() {
 			return
 		default:
 		}
-		r.background.Add(8)
+		r.background.Add(9)
+		go func() {
+			defer r.background.Done()
+			r.videos.RunSweep(r.backgroundCtx, application.BackgroundSchedule{Report: r.reporter.report})
+		}()
 		go func() {
 			defer r.background.Done()
 			// A retiring worker may still write a requested backup's temp file.

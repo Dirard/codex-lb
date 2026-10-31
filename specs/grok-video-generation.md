@@ -24,7 +24,14 @@ Video generation is a separate function of codex-lb: several of the owner's Supe
 4. Why not the usage ledger: reservations, settlement, rollups and repricing assume token or per-minute events on `accounts`, and a reservation must be settled within its request or reconciled within an hour. A separate job table with one guarded transition gives exactly-once cost with less risk, and it matches the owner's decision that video is separate.
 5. Background: `application.RunPeriodic` with `BackgroundSchedule` runs recoverable periodic tasks that the runtime cancels and joins; two workers can overlap during a seamless update, so background writes must be guarded in SQL.
 6. Vault: `application.SecretCipher` encrypts credentials; the existing account import reads an `auth_json` multipart part bounded to 1 MiB (`internal/adapters/httpapi/accounts.go#importAccount`).
-7. Official CLI `auth.json`: a map with one entry whose fields include `key`, `refresh_token`, `expires_at`, `user_id`, `email`, `oidc_issuer` and `oidc_client_id`. Discovery gives `https://auth.x.ai/oauth2/token` with `refresh_token` among the supported grants. Refresh outside the CLI has not been tried.
+7. Official CLI `auth.json`: a map with one entry whose fields include `key`, `refresh_token`, `expires_at`, `user_id`, `email`, `oidc_issuer` and `oidc_client_id`.
+8. Probe of 2026-10-31 with the owner's sign-in and `User-Agent: codex-lb/probe`:
+   - `grok-imagine-video-1.5` with `image`, `last_frame`, `prompt`, 2 s, 480p: 200 with `request_id`, 202 `pending`, then 200 `done` after 29 s, `usage.cost_in_usd_ticks: 1800000000`. The clip's first and last frames matched the given images (SSIM 0.99 and 0.96).
+   - `grok-imagine-video` with `last_frame`: 400 `{"code":"invalid-argument","error":"`last_frame` is not supported for this model."}`. An unknown job id: 404 `{"code":"not-found","error":…}`.
+   - Refresh at `https://auth.x.ai/oauth2/token` with form fields `grant_type`, `client_id`, `refresh_token` works outside the CLI. Access tokens last 6 hours (`expires_in: 21600`, scope includes `api:access`), and the refresh token rotates on every refresh.
+   - `grok logout` after a refresh left the rotated tokens working. Logout before any refresh was not tested.
+   - `POST https://auth.x.ai/oauth2/revoke` with `client_id`, `token` and `token_type_hint=refresh_token` gives 200, after which refresh gives 400 `invalid_grant`. An already issued access token keeps working until it expires.
+   - Not observed: the refusal at an exhausted limit, and the pool cost.
 
 ## Use cases
 
@@ -34,13 +41,13 @@ official CLI auth.json --validate the issuer, encrypt the tokens and upsert by x
 Requirements:
 
   R1:
-`POST /api/video/accounts/import` SHALL accept one `auth_json` file of at most 1 MiB holding exactly one entry, SHALL accept it only when `oidc_issuer` is exactly `https://auth.x.ai` and `key`, `refresh_token`, `oidc_client_id` and `user_id` are present, SHALL store the tokens encrypted, and SHALL replace the tokens of an account with the same `user_id` instead of adding another. Error messages MUST NOT echo the file.
+`POST /api/video/accounts/import` SHALL accept one `auth_json` file of at most 1 MiB holding exactly one entry, SHALL accept it only when `oidc_issuer` is exactly `https://auth.x.ai` and `key`, `refresh_token`, `oidc_client_id` and `user_id` are present, SHALL store the tokens encrypted, and SHALL replace the tokens of an account with the same `user_id` instead of adding another. It SHALL refresh the token once before saving, which proves the credential and detaches the stored session from the CLI's copy; a refused refresh SHALL give 400 `invalid_xai_auth` and store nothing. Error messages MUST NOT echo the file.
 
   R2:
 Video accounts SHALL be stored only in `video_accounts`; no row SHALL be written to `accounts`, `account_credentials`, groups or usage tables.
 
   R3:
-The administrator SHALL be able to list accounts with label, email, status, cooldown end, last refusal code, job counts and reported cost, and to pause, resume, rename and delete them. Deleting an account SHALL mark its `pending` jobs `unknown`; responses SHALL NOT include tokens.
+The administrator SHALL be able to list accounts with label, email, status, cooldown end, last refusal code, job counts and reported cost, and to pause, resume, rename and delete them. Deleting an account SHALL revoke its refresh token on a best-effort basis and mark its `pending` jobs `unknown`; responses SHALL NOT include tokens.
 
 Tables:
 video_accounts
@@ -157,7 +164,7 @@ supported_models:
 |---|---|---|---|---|
 | `grok-imagine-video` | yes | yes | no | no |
 | `grok-imagine-video-1.5` | yes | yes | yes | yes |
-| `grok-imagine-video-1.5-lite` | yes | yes | to be confirmed in the probe | to be confirmed in the probe |
+| `grok-imagine-video-1.5-lite` | yes | yes | no | no |
 
 Tables:
 video_jobs
@@ -270,8 +277,8 @@ Tests:
 ## Implementation checklist
 
 1. [x] Solution spec and OpenSpec change `add-grok-video-pool`.
-2. [ ] Owner's decision on imported CLI credentials (open question 1).
-3. [ ] Probe with the owner's sign-in (open question 2); update the model table, refusal mapping and R4 from the results.
+2. [x] Owner's decision on imported CLI credentials: approved.
+3. [x] Probe with the owner's sign-in; results recorded under Observed Existing Logic.
 4. [ ] Migration 44, domain types and store (R1–R3, R6, R9, R13).
 5. [ ] xAI adapter with bounded responses and token refresh (R4, R5).
 6. [ ] Pool service: import, allow list, validation, selection, creation with failover (R1, R6–R11).
@@ -289,9 +296,8 @@ Deferred:
 
 ## Open questions
 
-1. Blocking: may codex-lb hold imported tokens from the official Grok CLI and refresh them with that CLI's `oidc_client_id`? xAI publishes no way to register a client, so this reuse is the only subscription path found, and xAI may stop or forbid it. Without this, the pool cannot use subscriptions; an xAI API key is the alternative.
-2. Blocking: a probe is needed with the owner's sign-in. It must show whether refresh works outside the CLI, whether `grok logout` invalidates a copied refresh token, whether a `grok-imagine-video-1.5` job with `image`, `last_frame` and `prompt` works on the subscription, how a limit refusal looks, and how much of the weekly pool one job takes.
-3. Non-blocking: xAI's terms were seen only through a secondary source and bar making an account available to others. The owner's several accounts with the owner's keys fit "only for myself", but using several subscriptions to get around limits was not checked against the current text; the owner accepts the account risk by choosing this design.
+1. Non-blocking: the refusal at an exhausted limit and the pool cost of a job were not observed. The refusal mapping (R10) follows HTTP status and may need adjusting after the first real refusal.
+2. Non-blocking: xAI's terms were seen only through a secondary source and bar making an account available to others. The owner's several accounts with the owner's keys fit "only for myself", but using several subscriptions to get around limits was not checked against the current text; the owner accepts the account risk by choosing this design.
 
 ## Decision log
 
@@ -301,4 +307,5 @@ Deferred:
 - 2026-10-31: `/video/v1/*` with a local job id and a normalized response instead of mirroring xAI's `/v1/videos/*`. The surface is visibly separate, and the account and upstream id stay hidden.
 - 2026-10-31: Import from `auth.json` instead of a device flow in the dashboard, so no client id is embedded in the product; the id comes from the owner's own file. Pending open question 1.
 - 2026-10-31: An allow list of keys instead of groups: it is independent of the ChatGPT pool's group model and denies by default.
-- 2026-10-31: Validation ran for this spec and the OpenSpec change; no implementation exists yet.
+- 2026-10-31: The owner approved holding imported CLI tokens and refreshing them with the CLI's client id, and approved the probe. xAI may stop or forbid this; the risk is the owner's.
+- 2026-10-31: Import refreshes at once, because the probe showed that a rotated session survives `grok logout`, and logout before any refresh was not tested. After import the CLI's copy no longer matters.

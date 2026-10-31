@@ -1,7 +1,7 @@
 ## 1. Before coding
 
-- [ ] 1.1 Owner decides whether codex-lb may use imported CLI credentials and refresh them with the CLI's client id.
-- [ ] 1.2 Probe with the owner's sign-in: refresh outside the CLI, effect of `grok logout` on a copied refresh token, one `grok-imagine-video-1.5` job with `image`, `last_frame` and `prompt`, pool cost, the refusal returned at a limit.
+- [x] 1.1 Owner decides whether codex-lb may use imported CLI credentials and refresh them with the CLI's client id.
+- [x] 1.2 Probe with the owner's sign-in: refresh outside the CLI, effect of `grok logout` on a copied refresh token, one `grok-imagine-video-1.5` job with `image`, `last_frame` and `prompt`, pool cost, the refusal returned at a limit.
 
 ## 2. Implementation
 
