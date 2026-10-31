@@ -802,3 +802,39 @@ Probes on 2026-10-29 showed that the subscription ignores `model`, `quality`, `s
 For Codex to show the tool, the provider needs `requires_openai_auth = true` with a ChatGPT sign-in, or `requires_openai_auth = false` with a non-empty `x-openai-actor-authorization` header. Details and probe evidence: [restore-image-generation-routes](../../changes/archive/2026-10-29-restore-image-generation-routes/context.md).
 
 Since go-v1.7.0 the image routes relay `stream: true` answers as they are. A generation streams `keepalive` events and one `image_generation.completed` event with the image and usage, but no draft frames: the subscription ignores `partial_images`. An edit answers JSON. A final 429 carries the upstream reset headers. On Responses with the hosted `image_generation` tool, a 429 whose `X-Codex-Active-Limit` names an image limit is returned as 429 `usage_limit_reached` with those headers, without marking the account or replaying the request. Details: [image-streams-and-limit-headers](../../changes/archive/2026-10-30-image-streams-and-limit-headers/context.md).
+
+## Grok video generation (go-v1.8.0)
+
+Video generation is a separate function. Grok accounts form their own pool in `video_accounts`, separate from `accounts`, so no proxy route, report or key limit sees them. A job's cost is kept on its own row and consumes no API-key limit.
+
+**Adding an account.** Use a separate folder per account, then import the file on the **Video generation** page and delete it:
+
+```bash
+GROK_HOME=/tmp/grok-one grok login --device-auth
+```
+
+Import refreshes the token once, which detaches the stored session from the CLI's copy, so the CLI's file is no longer needed. Importing the same xAI user again replaces its tokens. An account in **Needs a new sign-in** comes back only through a new import. Deleting an account revokes its refresh token; an access token already issued stays valid until it expires, up to 6 hours.
+
+**Using it.** Add the API key on the page; until then it gets 403 `video_access_denied`.
+
+```bash
+curl -sS -X POST https://<host>/video/v1/generations -H "Authorization: Bearer $CODEX_LB_API_KEY" -H 'Content-Type: application/json' -d '{"model":"grok-imagine-video-1.5","prompt":"The camera moves to the window.","image":{"url":"https://example.com/first.jpg"},"last_frame":{"url":"https://example.com/last.jpg"},"duration":8,"resolution":"720p"}'
+```
+
+The answer is 202 with an `id`. Poll `GET /video/v1/generations/{id}` until `status` is `done`, `failed`, `expired` or `unknown`; `done` carries `video.url`, `video.duration` and `cost_usd`. `GET /video/v1/generations` lists the key's jobs. Images are public URLs or base64 data URLs, and a request body is at most 32 MiB.
+
+| model | text | first frame | last frame, keyframes, references |
+|---|---|---|---|
+| `grok-imagine-video` | yes | yes | no |
+| `grok-imagine-video-1.5` | yes | yes | yes |
+| `grok-imagine-video-1.5-lite` | yes | yes | no |
+
+**Failure handling.** A job is created on the least busy account, at most four unfinished jobs per account. A 401 after one refresh, a 403 or a 429 moves the request to another account, trying at most four. A 429 cools the account down by `Retry-After`, or one hour without it. A 403 sets **Refused by xAI** until the operator resumes the account. A server error or a lost connection gives 502 and is not replayed, because the video may have been generating. Every account refusing gives 429 `video_pool_exhausted` with `Retry-After`; no available account gives 503 `video_no_accounts`. A background task finishes jobs nobody polls; a job pending for an hour becomes `unknown`, and finished rows are deleted after 90 days.
+
+**Limits.**
+- This path uses the official CLI's OAuth client, because xAI publishes no way to register one; xAI may stop or forbid it. The owner accepted this risk for their own accounts.
+- The video URL is xAI's and can be read by anyone who has it. Its lifetime was not measured.
+- The remaining weekly pool is not available through the API, only in the Usage tab on xAI's site. The refusal at an exhausted limit was not observed; R10 of the spec follows the HTTP status.
+- `cost_usd` is the cost xAI reports, not money charged to a subscription.
+
+Probe evidence and design: [grok-video-generation](../../../../specs/grok-video-generation.md).

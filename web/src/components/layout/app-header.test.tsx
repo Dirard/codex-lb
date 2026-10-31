@@ -62,7 +62,7 @@ describe("AppHeader", () => {
     renderHeader();
 
     const links = within(desktopNav()).getAllByRole("link").map((link) => link.textContent);
-    expect(links).toEqual(["Overview", "Groups", "Accounts", "Keys", "Reports", "Automations", "Settings"]);
+    expect(links).toEqual(["Overview", "Groups", "Accounts", "Keys", "Video", "Reports", "Automations", "Settings"]);
     expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Codex LB/ })).toHaveAttribute("href", "/overview");
   });

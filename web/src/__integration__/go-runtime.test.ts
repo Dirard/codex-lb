@@ -1,5 +1,6 @@
 /// <reference types="node" />
 
+import { VideoAccountsResponseSchema, VideoJobsResponseSchema, VideoKeysResponseSchema, VideoSummarySchema } from "@/features/video/schemas";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -118,6 +119,10 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     ModelsResponseSchema.parse(await request("/api/models"));
     ModelSourcesResponseSchema.parse(await request("/api/model-sources"));
     ModelPricesSchema.parse(await request("/api/model-prices"));
+    VideoAccountsResponseSchema.parse(await request("/api/video/accounts"));
+    VideoKeysResponseSchema.parse(await request("/api/video/keys"));
+    VideoJobsResponseSchema.parse(await request("/api/video/jobs"));
+    VideoSummarySchema.parse(await request("/api/video/summary"));
     DashboardSettingsSchema.parse(await request("/api/settings"));
     DashboardOverviewSchema.parse(await request("/api/dashboard/overview"));
     DashboardProjectionsSchema.parse(await request("/api/dashboard/projections"));

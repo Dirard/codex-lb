@@ -121,7 +121,7 @@ existing API key --the administrator adds it to the video allow list--> key allo
 Requirements:
 
   R6:
-A key SHALL be denied until it is listed in `video_allowed_keys`. Listing SHALL change nothing on other routes. A deleted or inactive key SHALL be denied even while listed, and keyless local access SHALL always be denied.
+A key SHALL get 403 `video_access_denied` until it is listed in `video_allowed_keys`. Listing SHALL change nothing on other routes. An inactive, expired or deleted key and a request without a bearer key, including keyless local access, SHALL get 401 `invalid_api_key`, and internal principals MUST NOT be listable.
 
 Tables:
 video_allowed_keys
@@ -134,7 +134,7 @@ Events And Endpoints:
 Tests:
  - description: the same key gets 403 video_access_denied on video before listing and passes after it, while /v1/responses behaves the same in both cases
    requirements: R6
- - description: an inactive listed key and a keyless local client are denied with no job row
+ - description: an inactive listed key and a request without a key get 401 with no job row; the internal principal cannot be listed
    requirements: R6
 
 ### 4. Create a generation
@@ -146,7 +146,7 @@ Requirements:
 `POST /video/v1/generations` SHALL accept JSON with `model`, `prompt`, `image`, `last_frame`, `keyframes`, `reference_images`, `reference_audios`, `duration`, `aspect_ratio` and `resolution`, charged to the shared body budget with the 32 MiB maximum, and SHALL forward those fields unchanged.
 
   R8:
-Before any job row or upstream call it SHALL reject with 400 `invalid_request` and the parameter name: any other field (which also excludes `output`, `storage_options` and `user`), any `file_id`, a model outside the table below, a duration outside 1–15 seconds, more than four keyframes, a keyframe `timestamp_s` not strictly inside the duration, `last_frame` or `keyframes` on `grok-imagine-video`, and a request with neither `prompt` nor a pinned frame.
+Before any job row or upstream call it SHALL reject with 400 `invalid_request` and the parameter name: any other field (which also excludes `output`, `storage_options` and `user`), any `file_id`, a model outside the table below, a duration outside 1–15 seconds, more than four keyframes, a keyframe `timestamp_s` not strictly inside the duration, `last_frame`, `keyframes` or references on a model other than `grok-imagine-video-1.5`, and a request with neither `prompt` nor a pinned frame.
 
   R9:
 Selection SHALL take accounts that are `active`, past `cooldown_until` and below four unfinished jobs, ordered by fewest unfinished jobs and then least recently used. A `dispatching` row SHALL be written first, so concurrent requests and overlapping workers count it.
@@ -162,7 +162,7 @@ supported_models:
 
 | model | text | first frame | last frame, keyframes | references |
 |---|---|---|---|---|
-| `grok-imagine-video` | yes | yes | no | no |
+| `grok-imagine-video` | yes | yes | no (xAI answers 400) | no |
 | `grok-imagine-video-1.5` | yes | yes | yes | yes |
 | `grok-imagine-video-1.5-lite` | yes | yes | no | no |
 
@@ -279,13 +279,13 @@ Tests:
 1. [x] Solution spec and OpenSpec change `add-grok-video-pool`.
 2. [x] Owner's decision on imported CLI credentials: approved.
 3. [x] Probe with the owner's sign-in; results recorded under Observed Existing Logic.
-4. [ ] Migration 44, domain types and store (R1–R3, R6, R9, R13).
-5. [ ] xAI adapter with bounded responses and token refresh (R4, R5).
-6. [ ] Pool service: import, allow list, validation, selection, creation with failover (R1, R6–R11).
-7. [ ] Job status, list, guarded finish and background sweep with retention (R12–R15).
-8. [ ] REST and admin routes, mount, firewall prefix, access-log group, composition (R1, R3, R6, R7, R12, R16).
-9. [ ] Dashboard page, navigation, locales, mocks and tests (R16, R17).
-10. [ ] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; a production-copy migration rehearsal with the owner's OK; sync the delta, archive the change, release notes with REST examples.
+4. [x] Migration 44, domain types and store (R1–R3, R6, R9, R13).
+5. [x] xAI adapter with bounded responses and token refresh (R4, R5).
+6. [x] Pool service: import, allow list, validation, selection, creation with failover (R1, R6–R11).
+7. [x] Job status, list, guarded finish and background sweep with retention (R12–R15).
+8. [x] REST and admin routes, mount, firewall prefix, access-log group, composition (R1, R3, R6, R7, R12, R16).
+9. [x] Dashboard page, navigation, locales, mocks and tests (R16, R17).
+10. [x] `make check`, `make web-check`, `make web-deps build`, `make test-web-contract`; sync the delta, archive the change, release notes with REST examples. No production-copy rehearsal: migration 44 only creates empty tables.
 
 Deferred:
 - Sign-in from the dashboard: needs a registered OAuth client, and no way to register one was found.
@@ -308,4 +308,5 @@ Deferred:
 - 2026-10-31: Import from `auth.json` instead of a device flow in the dashboard, so no client id is embedded in the product; the id comes from the owner's own file. Pending open question 1.
 - 2026-10-31: An allow list of keys instead of groups: it is independent of the ChatGPT pool's group model and denies by default.
 - 2026-10-31: The owner approved holding imported CLI tokens and refreshing them with the CLI's client id, and approved the probe. xAI may stop or forbid this; the risk is the owner's.
+- 2026-10-31: `grok-imagine-video-1.5-lite` is treated like the classic model for pinned frames and references: xAI's reference page says only `grok-imagine-video-1.5` supports them. Not probed on the subscription.
 - 2026-10-31: Import refreshes at once, because the probe showed that a rotated session survives `grok logout`, and logout before any refresh was not tested. After import the CLI's copy no longer matters.
