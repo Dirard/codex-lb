@@ -23,6 +23,8 @@ const (
 	videoPruneBatch         = 500
 	videoTicksPerMicrodolar = 10_000
 	videoMaxPageSize        = 100
+	// videoCodeModerated is the JSON string xAI sends as `code` for moderation.
+	videoCodeModerated = `"imagine:content-moderated"`
 )
 
 // VideoJobView is the job as the REST surface shows it: it never names the
@@ -138,8 +140,9 @@ func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (V
 	now := s.now().UTC()
 	answer := videoAnswer(response, now)
 	var payload struct {
-		Status   string   `json:"status"`
-		Progress *float64 `json:"progress"`
+		Code     json.RawMessage `json:"code"`
+		Status   string          `json:"status"`
+		Progress *float64        `json:"progress"`
 		Video    struct {
 			URL               string   `json:"url"`
 			Duration          *float64 `json:"duration"`
@@ -155,6 +158,8 @@ func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (V
 	switch {
 	case response.Status == videoStatusNotFound:
 		finish.Status, finish.ErrorCode = domain.VideoJobExpired, "video_expired"
+	case string(payload.Code) == videoCodeModerated:
+		finish.Status, finish.ErrorCode, finish.ErrorMessage = domain.VideoJobFailed, "video_moderated", videoErrorText(payload.Error)
 	case response.Status == videoStatusBadRequest && now.Sub(job.CreatedAt) > videoPollSoonFor:
 		// xAI will not read this job, and no job on prod came back from it. A
 		// young job keeps polling in case the refusal is only passing.
@@ -168,16 +173,16 @@ func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (V
 		finish.Status, finish.ErrorCode, finish.ErrorMessage = domain.VideoJobFailed, "video_failed", "xAI finished this job without a video"
 	case payload.Status == "done":
 		finish.Status, finish.VideoURL, finish.DurationSeconds = domain.VideoJobDone, payload.Video.URL, payload.Video.Duration
-		if payload.Usage.Ticks != nil && *payload.Usage.Ticks >= 0 {
-			cost := *payload.Usage.Ticks / videoTicksPerMicrodolar
-			finish.CostMicrodollars = &cost
-		}
 	case payload.Status == "failed":
 		finish.Status, finish.ErrorCode, finish.ErrorMessage = domain.VideoJobFailed, "video_failed", videoErrorText(payload.Error)
 	case payload.Status == "expired":
 		finish.Status, finish.ErrorCode, finish.ErrorMessage = domain.VideoJobExpired, "video_expired", videoErrorText(payload.Error)
 	default:
 		return viewVideoJob(job, payload.Progress), s.keepVideoJobPending(ctx, job, answer, videoStatusWord(payload.Status))
+	}
+	if payload.Usage.Ticks != nil && *payload.Usage.Ticks >= 0 {
+		cost := *payload.Usage.Ticks / videoTicksPerMicrodolar
+		finish.CostMicrodollars = &cost
 	}
 	writeCtx, done := videoWriteContext(ctx)
 	defer done()

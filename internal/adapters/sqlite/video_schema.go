@@ -41,6 +41,17 @@ ALTER TABLE video_jobs ADD COLUMN upstream_body TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_jobs ADD COLUMN upstream_at INTEGER NOT NULL DEFAULT 0;
 `
 
+// schemaV48 corrects jobs that ended on xAI's moderation answer before it had
+// its own code and cost, from the answer kept on their rows. Additive: older
+// code already reads both values, and the table holds few rows. An answer may be
+// cut off or not JSON, so CASE guards json_extract, which fails on those.
+const schemaV48 = `
+UPDATE video_jobs SET error_code='video_moderated',
+ cost_microdollars=CASE WHEN json_type(upstream_body,'$.usage.cost_in_usd_ticks')='integer' AND json_extract(upstream_body,'$.usage.cost_in_usd_ticks')>=0
+  THEN json_extract(upstream_body,'$.usage.cost_in_usd_ticks')/10000 END
+WHERE status='failed' AND CASE WHEN json_valid(upstream_body) THEN json_extract(upstream_body,'$.code')='imagine:content-moderated' ELSE 0 END;
+`
+
 // schemaV45 keeps the last read of each video account's subscription pool.
 // Additive: older code selects its own columns and ignores these.
 const schemaV45 = `
