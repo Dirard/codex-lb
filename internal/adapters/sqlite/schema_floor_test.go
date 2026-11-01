@@ -65,15 +65,15 @@ func newerDatabase(t *testing.T, floor int) string {
 	return path
 }
 
-func TestSchemaFloorClassifiesMigrations41To47AsAdditive(t *testing.T) {
-	if SchemaVersion() != 47 || !additiveMigrations[47] || !additiveMigrations[46] || SchemaFloor() != 40 || !additiveMigrations[41] || !additiveMigrations[42] || !additiveMigrations[43] || !additiveMigrations[44] || !additiveMigrations[45] {
+func TestSchemaFloorClassifiesMigrations41To48AsAdditive(t *testing.T) {
+	if SchemaVersion() != 48 || !additiveMigrations[48] || !additiveMigrations[47] || !additiveMigrations[46] || SchemaFloor() != 40 || !additiveMigrations[41] || !additiveMigrations[42] || !additiveMigrations[43] || !additiveMigrations[44] || !additiveMigrations[45] {
 		t.Fatalf("schema %d floor %d", SchemaVersion(), SchemaFloor())
 	}
 	store, path := testStore(t)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if state := readSchemaFingerprint(t, path); state.version != 47 || state.floor != 40 {
+	if state := readSchemaFingerprint(t, path); state.version != 48 || state.floor != 40 {
 		t.Fatalf("fresh database records %+v", state)
 	}
 	// Reopening at the current schema applies nothing and keeps the floor.
@@ -132,6 +132,72 @@ func TestMigrationFrom40RecordsFloorAndLeavesReservationsUnowned(t *testing.T) {
 	}
 	if state := readSchemaFingerprint(t, path); state.version != SchemaVersion() || state.floor != 40 {
 		t.Fatalf("migrated database records %+v", state)
+	}
+}
+
+// Moderated jobs of schema 47 gain their code and cost from the kept answer;
+// every other answer, cut off or not JSON included, stays as it was.
+func TestMigration48CorrectsModeratedJobsFromTheirAnswers(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "v47.sqlite")
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path, RawQuery: "_synchronous=0"}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:47] {
+		if _, err := db.ExecContext(ctx, migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const moderated = `{"code":"imagine:content-moderated","error":"Rejected","usage":{"cost_in_usd_ticks":2900000000}}`
+	for _, row := range []struct{ id, status, code, body string }{
+		{"moderated", "failed", "video_failed", moderated},
+		{"no-usage", "failed", "video_failed", `{"code":"imagine:content-moderated","error":"Rejected"}`},
+		{"other-code", "failed", "video_failed", `{"code":"invalid_argument","usage":{"cost_in_usd_ticks":5}}`},
+		{"cut-off", "failed", "video_failed", `{"code":"imagine:content-moderated","error":"Rej`},
+		{"no-json", "failed", "video_failed", `connection reset`},
+		{"no-answer", "failed", "video_failed", ``},
+		{"still-pending", "pending", "", moderated},
+	} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO video_jobs(id,api_key_id,account_id,model,mode,requested_seconds,status,error_code,upstream_body,created_at)
+ VALUES(?,'key','acct','m','text',2,?,?,?,0)`, row.id, row.status, row.code, row.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, statement := range []string{fmt.Sprintf("PRAGMA application_id=%d", applicationID), "PRAGMA user_version=47"} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	want := map[string]struct {
+		code string
+		cost int64
+	}{
+		"moderated": {"video_moderated", 290000}, "no-usage": {"video_moderated", -1},
+		"other-code": {"video_failed", -1}, "cut-off": {"video_failed", -1}, "no-json": {"video_failed", -1},
+		"no-answer": {"video_failed", -1}, "still-pending": {"", -1},
+	}
+	for id, expected := range want {
+		var code string
+		var cost int64
+		if err := store.readDB.QueryRowContext(ctx, `SELECT error_code,coalesce(cost_microdollars,-1) FROM video_jobs WHERE id=?`, id).Scan(&code, &cost); err != nil {
+			t.Fatal(err)
+		}
+		if code != expected.code || cost != expected.cost {
+			t.Fatalf("%s: code %q cost %d", id, code, cost)
+		}
 	}
 }
 

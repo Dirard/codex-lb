@@ -509,6 +509,64 @@ func TestVideoStatusRefusalFinishesTheJobAndKeepsTheAnswer(t *testing.T) {
 	}
 }
 
+func TestVideoModerationFinishesAtOnceAndCountsItsCost(t *testing.T) {
+	f := newVideoFixture(t, "one")
+	id := f.createJob(t)
+	reads := 0
+	f.stub.get = func(string, string) (int, string) {
+		reads++
+		return 400, `{"code":"imagine:content-moderated","error":"Generated video rejected by content moderation.","usage":{"cost_in_usd_ticks":2900000000}}`
+	}
+	var job struct {
+		Status, Error string
+		ErrorMessage  string `json:"error_message"`
+		Video         *struct{ URL string }
+		CostUSD       *float64 `json:"cost_usd"`
+	}
+	// The job is seconds old: this code does not wait the two minutes of other 400s.
+	for range 2 {
+		w := f.request(http.MethodGet, "/video/v1/generations/"+id, "")
+		if err := json.Unmarshal(w.Body.Bytes(), &job); err != nil || w.Code != 200 {
+			t.Fatalf("status: %d %s", w.Code, w.Body.String())
+		}
+		if job.Status != "failed" || job.Error != "video_moderated" || job.ErrorMessage != "Generated video rejected by content moderation." ||
+			job.Video != nil || job.CostUSD == nil || *job.CostUSD != 0.29 {
+			t.Fatalf("a moderated job: %s", w.Body.String())
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("a finished job read xAI %d times", reads)
+	}
+	summary, err := f.service.Summary(context.Background())
+	if err != nil || summary.Today.CostMicrodollars != 290000 || summary.Today.Done != 0 {
+		t.Fatalf("totals: %+v %v", summary.Today, err)
+	}
+	entries, _, err := f.service.Jobs(context.Background(), nil, 10)
+	if err != nil || entries[0].ErrorCode != "video_moderated" || entries[0].CostMicrodollars == nil || *entries[0].CostMicrodollars != 290000 {
+		t.Fatalf("dashboard entry: %+v %v", entries, err)
+	}
+
+	// Any other outcome with a reported cost counts it too, and without one stays unknown.
+	for body, want := range map[string]int64{
+		`{"status":"failed","error":"No capacity","usage":{"cost_in_usd_ticks":100000}}`:                      10,
+		`{"status":"done","video":{"url":"","respect_moderation":false},"usage":{"cost_in_usd_ticks":20000}}`: 2,
+		`{"status":"expired"}`: -1,
+	} {
+		other := f.createJob(t)
+		f.stub.get = func(string, string) (int, string) { return 200, body }
+		w := f.request(http.MethodGet, "/video/v1/generations/"+other, "")
+		var finished struct {
+			CostUSD *float64 `json:"cost_usd"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &finished); err != nil {
+			t.Fatal(err)
+		}
+		if want < 0 && finished.CostUSD != nil || want >= 0 && (finished.CostUSD == nil || *finished.CostUSD != float64(want)/1e6) {
+			t.Fatalf("%s: %s", body, w.Body.String())
+		}
+	}
+}
+
 func TestVideoAnswersAreBoundedAndHideURLsOnTheDashboard(t *testing.T) {
 	f := newVideoFixture(t, "one")
 	id := f.createJob(t)
@@ -598,7 +656,7 @@ func TestVideoRefusalBeforeExecutionMovesToAnotherAccount(t *testing.T) {
 
 func TestVideoDoneWithoutUsableResultFinishesTheJob(t *testing.T) {
 	cases := []struct{ name, body, code, message string }{
-		{"moderated without url", `{"status":"done","video":{"url":"","respect_moderation":false},"usage":{"cost_in_usd_ticks":5}}`, "video_moderated", "xAI blocked this video by moderation"},
+		{"moderated without url", `{"status":"done","video":{"url":"","respect_moderation":false}}`, "video_moderated", "xAI blocked this video by moderation"},
 		{"moderated with url", `{"status":"done","video":{"url":"https://vidgen.example.invalid/x.mp4","respect_moderation":false}}`, "video_moderated", "xAI blocked this video by moderation"},
 		{"no url", `{"status":"done","video":{"url":""}}`, "video_failed", "xAI finished this job without a video"},
 		{"failed with an object", `{"status":"failed","error":{"code":"invalid_argument","message":"Blocked: the last frame"}}`, "video_failed", "Blocked: the last frame"},

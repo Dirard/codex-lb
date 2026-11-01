@@ -216,7 +216,7 @@ Requirements:
 `GET /video/v1/generations/{id}` SHALL answer 404 unless the job belongs to the calling key, SHALL query only the job's account, and SHALL answer `{id, status, progress, model, created_at, finished_at, video: {url, duration}, cost_usd, error}`. A finished job SHALL be answered from its row without an upstream call. `GET /video/v1/generations` SHALL list the key's own jobs newest first with a limit of at most 100 and a cursor. A finished job without a video SHALL also answer `error_message` with the reason in words, xAI's own text when it gave one.
 
   R13:
-A job SHALL leave `pending` by one transition guarded by `WHERE status='pending'`. `done` SHALL store the URL, the duration and the cost as `cost_in_usd_ticks / 10000` microdollars; `failed` and `expired` SHALL store no cost. A valid `done` without a cost SHALL store a null cost, which reports show as unknown.
+A job SHALL leave `pending` by one transition guarded by `WHERE status='pending'`. `done` SHALL store the URL and the duration. A finished job of any outcome SHALL store the cost of xAI's final answer as `cost_in_usd_ticks / 10000` microdollars. An answer without a cost SHALL store a null cost, which reports show as unknown. An answer with the code `imagine:content-moderated` SHALL finish the job at once as `failed` with `video_moderated`.
 
   R14:
 A background task SHALL poll `pending` jobs due by `next_poll_at`, at most 20 per run with at most four concurrent calls, every 10 seconds at first and backing off to one minute, and SHALL be cancelled and joined at shutdown. A `pending` job one hour old, or a `dispatching` job 15 minutes old, SHALL become `unknown`. Rows finished more than 90 days ago SHALL be deleted in bounded batches.
@@ -236,7 +236,7 @@ Tests:
    requirements: R12
  - description: a concurrent poll and sweep on done apply one transition, and the summary counts the cost once
    requirements: R13
- - description: failed and expired store no cost; done without usage stores a null cost
+ - description: moderation on a status read finishes a young job at once with its reported cost; an answer without usage stores a null cost
    requirements: R13
  - description: a job never polled by the client finishes through the sweep; a stale pending and a stale dispatching job become unknown; a partial failure in a batch keeps the other results; shutdown joins the task
    requirements: R14
@@ -361,4 +361,5 @@ Deferred:
 - 2026-11-01: The owner decided that the 60-second first-byte bound on the shared upstream transport was wrong and asked for at least three minutes. All 11 image edit 502s on prod ended at 60.6-64.3 s, while the 250 recorded successes of the last six hours peaked at 37.5 s.
 - 2026-11-01: The new log line showed the cause of the hung jobs: xAI answered HTTP 400 to all 84 status reads of four jobs, and the code treated that as temporary. They filled the limit of four unfinished jobs, so every new request got 503 for up to an hour (189 in 23 minutes). The owner asked for the 400 to end the job with xAI's reason, and not to throw xAI's answers and statuses away, since they are what debugging needs. The last answer now stays on the row (migration 47), bodies stay out of logs, and the dashboard hides `url` values.
 - 2026-11-01: The limit of four unfinished jobs was removed. It was chosen without measurement. xAI refused a third simultaneous request by itself twice, and accepted and finished a new job while three hung, so only the local count blocked anything. The owner asked why it existed and no recorded reason was found. The 400 after two minutes is final because hung jobs never recovered within the hour and every finished job took at most 62 s; whether a job can get a passing 400 earlier is unknown, and the new information lines will show it.
+- 2026-11-01: go-v1.10.3 showed that xAI's 400 is moderation: code `imagine:content-moderated`, with the same reported cost as a finished video. None of six such jobs recovered, and the code is explicit, so go-v1.10.4 ends the job at once as `video_moderated` and records the cost; a finished job of any outcome now records what xAI reports. Migration 48 corrects earlier rows from their kept answers, so the totals agree. Whether moderation draws the pool is not measured.
 - 2026-11-01: The owner asked for a clear refusal reason in the answer. A finished job without a video now answers `error_message`, stored in migration 46 when xAI gave its own words, and provider failures name their reason in `error.message`, with `upstream_timeout` split from `upstream_unavailable`.
