@@ -23,11 +23,12 @@ const (
 	videoMaxAudios       = 3
 	videoMaxPromptChars  = 32000
 	videoMaxAttempts     = 4
-	videoMaxUnfinished   = 4
 	videoDefaultCooldown = time.Minute
 	videoFirstPollDelay  = 10 * time.Second
 	videoErrorBytes      = 500
+	videoAnswerBytes     = 8 << 10
 
+	videoStatusBadRequest      = 400
 	videoStatusUnauthorized    = 401
 	videoStatusForbidden       = 403
 	videoStatusNotFound        = 404
@@ -185,7 +186,7 @@ func (s *VideoService) Generate(ctx context.Context, keyID string, body json.Raw
 		now := s.now().UTC()
 		job := domain.VideoJob{ID: videoID("vid_"), APIKeyID: keyID, Model: generation.Model, Mode: generation.Mode,
 			RequestedSeconds: generation.Seconds, Status: domain.VideoJobDispatching, CreatedAt: now}
-		account, err := s.store.ReserveVideoJob(ctx, job, excluded, videoMaxUnfinished, now)
+		account, err := s.store.ReserveVideoJob(ctx, job, excluded, now)
 		if errors.Is(err, domain.ErrNoAccounts) {
 			return VideoJobView{}, s.noVideoAccount(ctx, len(excluded) != 0)
 		}
@@ -214,7 +215,7 @@ func (s *VideoService) noVideoAccount(ctx context.Context, refused bool) error {
 	if refused {
 		return &VideoPoolExhausted{RetryAfter: videoDefaultCooldown}
 	}
-	return &ProxyError{Code: "video_no_accounts", Status: 503, Message: "No video account is available now"}
+	return &ProxyError{Code: "video_no_accounts", Status: 503, Message: "No video account is active; sign in or resume one on the Video page"}
 }
 
 // dispatchVideo runs one attempt. retry means this account refused before
@@ -223,31 +224,32 @@ func (s *VideoService) dispatchVideo(ctx context.Context, job domain.VideoJob, g
 	token, version, err := s.accessToken(ctx, job.AccountID, -1)
 	if err != nil {
 		// Nothing was sent, so this account can simply be skipped.
-		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "video_token_unavailable")
+		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "video_token_unavailable", domain.VideoUpstreamAnswer{})
 	}
 	response, err := s.upstream.CreateVideo(ctx, token, generation.Body)
 	if err == nil && response.Status == videoStatusUnauthorized {
 		token, _, err = s.accessToken(ctx, job.AccountID, version)
 		if err != nil {
-			return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "video_token_unavailable")
+			return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "video_token_unavailable", domain.VideoUpstreamAnswer{})
 		}
 		response, err = s.upstream.CreateVideo(ctx, token, generation.Body)
 	}
 	if err != nil {
-		return VideoJobView{}, false, s.videoMayHaveExecuted(ctx, job.ID, err)
+		return VideoJobView{}, false, s.videoMayHaveExecuted(ctx, job.ID, err, videoNoAnswer(err, s.now().UTC()))
 	}
 	writeCtx, done := videoWriteContext(ctx)
 	defer done()
 	now := s.now().UTC()
+	answer := videoAnswer(response, now)
 	switch {
 	case response.Status >= 200 && response.Status < 300:
 		var created struct {
 			RequestID string `json:"request_id"`
 		}
 		if json.Unmarshal(response.Body, &created) != nil || created.RequestID == "" {
-			return VideoJobView{}, false, s.videoMayHaveExecuted(ctx, job.ID, errors.New("invalid upstream response"))
+			return VideoJobView{}, false, s.videoMayHaveExecuted(ctx, job.ID, errors.New("invalid upstream response"), answer)
 		}
-		if err := s.store.MarkVideoJobPending(writeCtx, job.ID, created.RequestID, now.Add(videoFirstPollDelay)); err != nil {
+		if err := s.store.MarkVideoJobPending(writeCtx, job.ID, created.RequestID, now.Add(videoFirstPollDelay), answer); err != nil {
 			return VideoJobView{}, false, &ProxyError{Code: "video_job_persistence_failed", Status: 503, Message: "The video job could not be recorded"}
 		}
 		job.Status = domain.VideoJobPending
@@ -256,12 +258,12 @@ func (s *VideoService) dispatchVideo(ctx context.Context, job domain.VideoJob, g
 		if err := s.store.SetVideoAccountStatus(writeCtx, job.AccountID, domain.VideoAccountReauthRequired, "http_401", now); err != nil {
 			return VideoJobView{}, false, err
 		}
-		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_401")
+		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_401", answer)
 	case response.Status == videoStatusForbidden:
 		if err := s.store.SetVideoAccountStatus(writeCtx, job.AccountID, domain.VideoAccountAccessDenied, "http_403", now); err != nil {
 			return VideoJobView{}, false, err
 		}
-		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_403")
+		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_403", answer)
 	case response.Status == videoStatusTooManyRequests:
 		// An exhausted pool is known from its reading, so a 429 without
 		// Retry-After is treated as a short rate limit, such as too many jobs at
@@ -273,29 +275,29 @@ func (s *VideoService) dispatchVideo(ctx context.Context, job domain.VideoJob, g
 		if err := s.store.SetVideoCooldown(writeCtx, job.AccountID, "http_429", now.Add(cooldown), now); err != nil {
 			return VideoJobView{}, false, err
 		}
-		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_429")
+		return VideoJobView{}, true, s.finishAttempt(ctx, job.ID, domain.VideoJobRefused, "http_429", answer)
 	case response.Status >= 400 && response.Status < 500:
-		if err := s.finishAttempt(ctx, job.ID, domain.VideoJobRejected, "video_request_rejected"); err != nil {
+		if err := s.finishAttempt(ctx, job.ID, domain.VideoJobRejected, "video_request_rejected", answer); err != nil {
 			return VideoJobView{}, false, err
 		}
-		return VideoJobView{}, false, &ProxyError{Code: "video_request_rejected", Status: response.Status, Message: videoUpstreamMessage(response.Body)}
+		return VideoJobView{}, false, &ProxyError{Code: "video_request_rejected", Status: response.Status, Message: videoUpstreamMessage(response.Body, "xAI rejected this request")}
 	default:
-		return VideoJobView{}, false, s.videoMayHaveExecuted(ctx, job.ID, errors.New("upstream server error"))
+		return VideoJobView{}, false, s.videoMayHaveExecuted(ctx, job.ID, errors.New("upstream server error"), answer)
 	}
 }
 
-func (s *VideoService) finishAttempt(ctx context.Context, id string, status domain.VideoJobStatus, code string) error {
+func (s *VideoService) finishAttempt(ctx context.Context, id string, status domain.VideoJobStatus, code string, answer domain.VideoUpstreamAnswer) error {
 	writeCtx, done := videoWriteContext(ctx)
 	defer done()
-	_, err := s.store.FinishVideoJob(writeCtx, id, domain.VideoJobFinish{Status: status, ErrorCode: code, At: s.now().UTC()})
+	_, err := s.store.FinishVideoJob(writeCtx, id, domain.VideoJobFinish{Status: status, ErrorCode: code, Answer: answer, At: s.now().UTC()})
 	return err
 }
 
 // videoMayHaveExecuted ends an attempt whose outcome is unknown: it may be
 // generating at xAI with no id to read it by, so it is neither replayed nor
 // reported as a refusal.
-func (s *VideoService) videoMayHaveExecuted(ctx context.Context, id string, cause error) error {
-	if err := s.finishAttempt(ctx, id, domain.VideoJobUnknown, "video_result_unknown"); err != nil {
+func (s *VideoService) videoMayHaveExecuted(ctx context.Context, id string, cause error, answer domain.VideoUpstreamAnswer) error {
+	if err := s.finishAttempt(ctx, id, domain.VideoJobUnknown, "video_result_unknown", answer); err != nil {
 		return err
 	}
 	if errors.Is(cause, context.Canceled) {
@@ -304,9 +306,26 @@ func (s *VideoService) videoMayHaveExecuted(ctx context.Context, id string, caus
 	return &ProxyError{Code: "video_upstream_error", Status: 502, Message: "xAI did not confirm the video job"}
 }
 
+// videoAnswer is what the job row keeps of one xAI answer.
+func videoAnswer(response VideoUpstreamResponse, now time.Time) domain.VideoUpstreamAnswer {
+	return domain.VideoUpstreamAnswer{HTTPStatus: response.Status, Body: videoBoundedText(string(response.Body), videoAnswerBytes), At: now}
+}
+
+// videoNoAnswer keeps the transport error of a call that got no HTTP answer.
+func videoNoAnswer(err error, now time.Time) domain.VideoUpstreamAnswer {
+	return domain.VideoUpstreamAnswer{Body: videoBoundedText(err.Error(), videoAnswerBytes), At: now}
+}
+
+func videoBoundedText(text string, limit int) string {
+	if len(text) > limit {
+		text = text[:limit]
+	}
+	return strings.ToValidUTF8(text, "")
+}
+
 // videoUpstreamMessage keeps xAI's refusal reason, which is about the request
 // the client just sent, and bounds it.
-func videoUpstreamMessage(body []byte) string {
+func videoUpstreamMessage(body []byte, fallback string) string {
 	var payload struct {
 		Error json.RawMessage `json:"error"`
 	}
@@ -315,7 +334,7 @@ func videoUpstreamMessage(body []byte) string {
 			return message
 		}
 	}
-	return "xAI rejected this request"
+	return fallback
 }
 
 // videoErrorText reads xAI's `error`, a string or an object with a message,
@@ -331,8 +350,5 @@ func videoErrorText(raw json.RawMessage) string {
 		}
 		message = object.Message
 	}
-	if len(message) > videoErrorBytes {
-		message = strings.ToValidUTF8(message[:videoErrorBytes], "")
-	}
-	return message
+	return videoBoundedText(message, videoErrorBytes)
 }

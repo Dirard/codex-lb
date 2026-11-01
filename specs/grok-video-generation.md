@@ -149,7 +149,7 @@ Requirements:
 Before any job row or upstream call it SHALL reject with 400 `invalid_request` and the parameter name: any other field (which also excludes `output`, `storage_options` and `user`), any `file_id`, a model outside the table below, a duration outside 1–15 seconds, more than four keyframes, a keyframe `timestamp_s` not strictly inside the duration, `last_frame`, `keyframes` or references on a model other than `grok-imagine-video-1.5`, and a request with neither `prompt` nor a pinned frame.
 
   R9:
-Selection SHALL take accounts that are `active`, past `cooldown_until` and below four unfinished jobs, ordered by fewest unfinished jobs and then least recently used. A `dispatching` row SHALL be written first, so concurrent requests and overlapping workers count it.
+Selection SHALL take accounts that are `active`, past `cooldown_until`, ordered by fewest unfinished jobs and then least recently used. A `dispatching` row SHALL be written first, so concurrent requests and overlapping workers count it.
 
   R10:
 An upstream 401 after one refresh, 403 or 429 SHALL mark the attempt `refused` and move the same body to another eligible account, at most four accounts per request. A 429 SHALL set `cooldown_until` from `Retry-After`, or one minute without it; a 403 SHALL set `access_denied`. Other 4xx SHALL mark the job `rejected` and return the client error without failover. A 5xx, a transport failure or an unreadable success MAY have executed: the job SHALL become `unknown`, the client SHALL get 502, and it MUST NOT be sent elsewhere.
@@ -198,7 +198,7 @@ internal/adapters/httpapi/video_test.go
    requirements: R7, R11
  - description: each invalid body gets 400 with its parameter and creates no job
    requirements: R8
- - description: three concurrent requests over two accounts spread by unfinished jobs; a fifth job on a full single account gets 503 video_no_accounts without an upstream call
+ - description: three concurrent requests over two accounts spread by unfinished jobs; six jobs on a single account all reach xAI; with no active account the request gets 503 video_no_accounts without an upstream call
    requirements: R9
  - description: a 429 moves the body to the second account, sets the cooldown and keeps the first account out of the next request; a 403 sets access_denied
    requirements: R10
@@ -359,4 +359,6 @@ Deferred:
 - 2026-11-01: The default 429 cooldown without `Retry-After` is one minute instead of one hour. On prod, three simultaneous jobs on one account gave two successes and one 429; exhaustion is now known from the pool reading, so an hour would only block the account for a short rate limit.
 - 2026-11-01: Two jobs of 2 s stayed `pending` on prod for over ten minutes while every 3 s job finished in about 48 s, and the product recorded nothing about xAI's answers; a status read through prod returned no progress. Later a 2 s job finished in 46 s, so duration alone is not the cause, which is not established. xAI documents `respect_moderation`, which the code ignored, so a `done` answer without a URL would hang for an hour. go-v1.10.2 finishes such jobs and logs unfinished due polls so that the next occurrence can be diagnosed.
 - 2026-11-01: The owner decided that the 60-second first-byte bound on the shared upstream transport was wrong and asked for at least three minutes. All 11 image edit 502s on prod ended at 60.6-64.3 s, while the 250 recorded successes of the last six hours peaked at 37.5 s.
+- 2026-11-01: The new log line showed the cause of the hung jobs: xAI answered HTTP 400 to all 84 status reads of four jobs, and the code treated that as temporary. They filled the limit of four unfinished jobs, so every new request got 503 for up to an hour (189 in 23 minutes). The owner asked for the 400 to end the job with xAI's reason, and not to throw xAI's answers and statuses away, since they are what debugging needs. The last answer now stays on the row (migration 47), bodies stay out of logs, and the dashboard hides `url` values.
+- 2026-11-01: The limit of four unfinished jobs was removed. It was chosen without measurement. xAI refused a third simultaneous request by itself twice, and accepted and finished a new job while three hung, so only the local count blocked anything. The owner asked why it existed and no recorded reason was found. The 400 after two minutes is final because hung jobs never recovered within the hour and every finished job took at most 62 s; whether a job can get a passing 400 earlier is unknown, and the new information lines will show it.
 - 2026-11-01: The owner asked for a clear refusal reason in the answer. A finished job without a video now answers `error_message`, stored in migration 46 when xAI gave its own words, and provider failures name their reason in `error.message`, with `upstream_timeout` split from `upstream_unavailable`.

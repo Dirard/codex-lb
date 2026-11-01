@@ -33,6 +33,14 @@ CREATE INDEX idx_video_jobs_finished ON video_jobs(finished_at) WHERE finished_a
 // names its columns and never reads this one.
 const schemaV46 = `ALTER TABLE video_jobs ADD COLUMN error_message TEXT NOT NULL DEFAULT '';`
 
+// schemaV47 keeps xAI's last answer about a job. Additive: older code names its
+// columns and never reads these.
+const schemaV47 = `
+ALTER TABLE video_jobs ADD COLUMN upstream_http_status INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE video_jobs ADD COLUMN upstream_body TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_jobs ADD COLUMN upstream_at INTEGER NOT NULL DEFAULT 0;
+`
+
 // schemaV45 keeps the last read of each video account's subscription pool.
 // Additive: older code selects its own columns and ignores these.
 const schemaV45 = `

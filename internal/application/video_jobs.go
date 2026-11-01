@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
@@ -93,6 +95,10 @@ func videoFailureReason(code, stored string) string {
 	return "The video job ended without a video: " + code
 }
 
+// videoAnswerURL finds a URL in a kept answer, cut off or not: the dashboard
+// shows answers but never a video URL.
+var videoAnswerURL = regexp.MustCompile(`"url"\s*:\s*"(?:[^"\\]|\\.)*"?`)
+
 func videoJobNotFound() error {
 	return &ProxyError{Code: "video_job_not_found", Status: 404, Message: "No such video job"}
 }
@@ -117,19 +123,20 @@ func (s *VideoService) Status(ctx context.Context, keyID, id string) (VideoJobVi
 func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (VideoJobView, error) {
 	token, version, err := s.accessToken(ctx, job.AccountID, -1)
 	if err != nil {
-		return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, 0, "token_unavailable")
+		return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, domain.VideoUpstreamAnswer{}, "token_unavailable")
 	}
 	response, err := s.upstream.GetVideo(ctx, token, job.UpstreamRequestID)
 	if err == nil && response.Status == videoStatusUnauthorized {
 		if token, _, err = s.accessToken(ctx, job.AccountID, version); err != nil {
-			return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, 0, "token_unavailable")
+			return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, domain.VideoUpstreamAnswer{}, "token_unavailable")
 		}
 		response, err = s.upstream.GetVideo(ctx, token, job.UpstreamRequestID)
 	}
 	if err != nil {
-		return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, 0, "read_failed")
+		return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, videoNoAnswer(err, s.now().UTC()), "read_failed")
 	}
 	now := s.now().UTC()
+	answer := videoAnswer(response, now)
 	var payload struct {
 		Status   string   `json:"status"`
 		Progress *float64 `json:"progress"`
@@ -144,12 +151,17 @@ func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (V
 		Error json.RawMessage `json:"error"`
 	}
 	decoded := json.Unmarshal(response.Body, &payload) == nil
-	finish := domain.VideoJobFinish{At: now}
+	finish := domain.VideoJobFinish{Answer: answer, At: now}
 	switch {
 	case response.Status == videoStatusNotFound:
 		finish.Status, finish.ErrorCode = domain.VideoJobExpired, "video_expired"
+	case response.Status == videoStatusBadRequest && now.Sub(job.CreatedAt) > videoPollSoonFor:
+		// xAI will not read this job, and no job on prod came back from it. A
+		// young job keeps polling in case the refusal is only passing.
+		finish.Status, finish.ErrorCode = domain.VideoJobFailed, "video_failed"
+		finish.ErrorMessage = videoUpstreamMessage(response.Body, "xAI refused to read this job")
 	case response.Status >= 300 || !decoded:
-		return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, response.Status, "unexpected_answer")
+		return viewVideoJob(job, nil), s.keepVideoJobPending(ctx, job, answer, "unexpected_answer")
 	case payload.Status == "done" && payload.Video.RespectModeration != nil && !*payload.Video.RespectModeration:
 		finish.Status, finish.ErrorCode = domain.VideoJobFailed, "video_moderated"
 	case payload.Status == "done" && payload.Video.URL == "":
@@ -165,12 +177,16 @@ func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (V
 	case payload.Status == "expired":
 		finish.Status, finish.ErrorCode, finish.ErrorMessage = domain.VideoJobExpired, "video_expired", videoErrorText(payload.Error)
 	default:
-		return viewVideoJob(job, payload.Progress), s.keepVideoJobPending(ctx, job, response.Status, videoStatusWord(payload.Status))
+		return viewVideoJob(job, payload.Progress), s.keepVideoJobPending(ctx, job, answer, videoStatusWord(payload.Status))
 	}
 	writeCtx, done := videoWriteContext(ctx)
 	defer done()
-	if _, err := s.store.FinishVideoJob(writeCtx, job.ID, finish); err != nil {
+	applied, err := s.store.FinishVideoJob(writeCtx, job.ID, finish)
+	if err != nil {
 		return VideoJobView{}, err
+	}
+	if applied {
+		s.log.Info("video job finished", "job", job.ID, "status", string(finish.Status), "error", finish.ErrorCode, "upstream_http_status", response.Status)
 	}
 	finished, err := s.store.GetVideoJob(writeCtx, job.ID)
 	if err != nil {
@@ -179,19 +195,23 @@ func (s *VideoService) pollVideoJob(ctx context.Context, job domain.VideoJob) (V
 	return viewVideoJob(finished, nil), nil
 }
 
-// keepVideoJobPending moves a due job to its next poll and leaves a trace when
-// it is taking long. A poll that is not due, such as a client polling between
-// sweeps, changes and logs nothing, which bounds the warnings per job.
-func (s *VideoService) keepVideoJobPending(ctx context.Context, job domain.VideoJob, httpStatus int, word string) error {
+// keepVideoJobPending moves a due job to its next poll, keeps xAI's answer on
+// the row and logs the status, as a warning once the job is taking long. A poll
+// that is not due, such as a client polling between sweeps, changes and logs
+// nothing, which bounds the lines per job.
+func (s *VideoService) keepVideoJobPending(ctx context.Context, job domain.VideoJob, answer domain.VideoUpstreamAnswer, word string) error {
 	now := s.now().UTC()
 	if job.NextPollAt != nil && now.Before(*job.NextPollAt) {
 		return nil
 	}
-	if age := now.Sub(job.CreatedAt); age > videoPollSoonFor {
-		s.log.Warn("video job is still unfinished", "job", job.ID, "age_seconds", int(age.Seconds()),
-			"upstream_http_status", httpStatus, "upstream_status", word)
+	age := now.Sub(job.CreatedAt)
+	level := slog.LevelInfo
+	if age > videoPollSoonFor {
+		level = slog.LevelWarn
 	}
-	return s.scheduleVideoPoll(ctx, job, now)
+	s.log.Log(ctx, level, "video job is still unfinished", "job", job.ID, "age_seconds", int(age.Seconds()),
+		"upstream_http_status", answer.HTTPStatus, "upstream_status", word)
+	return s.scheduleVideoPoll(ctx, job, now, answer)
 }
 
 // videoStatusWord keeps provider text out of the log.
@@ -207,14 +227,14 @@ func videoStatusWord(status string) string {
 	return "other"
 }
 
-func (s *VideoService) scheduleVideoPoll(ctx context.Context, job domain.VideoJob, now time.Time) error {
+func (s *VideoService) scheduleVideoPoll(ctx context.Context, job domain.VideoJob, now time.Time, answer domain.VideoUpstreamAnswer) error {
 	delay := videoFirstPollDelay
 	if now.Sub(job.CreatedAt) > videoPollSoonFor {
 		delay = videoPollLaterDelay
 	}
 	writeCtx, done := videoWriteContext(ctx)
 	defer done()
-	return s.store.ScheduleVideoPoll(writeCtx, job.ID, now.Add(delay))
+	return s.store.ScheduleVideoPoll(writeCtx, job.ID, now.Add(delay), answer)
 }
 
 // VideoJobPage is one page of jobs with the cursor of the next one.
@@ -318,6 +338,7 @@ func (s *VideoService) Jobs(ctx context.Context, before *domain.VideoJobCursor, 
 	}
 	for index := range entries {
 		entries[index].ErrorMessage = videoFailureReason(entries[index].ErrorCode, entries[index].ErrorMessage)
+		entries[index].Answer.Body = videoAnswerURL.ReplaceAllString(entries[index].Answer.Body, `"url":"(hidden)"`)
 	}
 	if len(entries) <= limit {
 		return entries, nil, nil
