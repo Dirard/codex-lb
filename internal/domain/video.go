@@ -51,6 +51,15 @@ const (
 	VideoJobUnknown     VideoJobStatus = "unknown"
 )
 
+// VideoUpstreamAnswer is xAI's last answer about a job, kept for debugging.
+// HTTPStatus 0 means no HTTP answer came, and Body then holds the transport
+// error. A zero At means xAI was not asked.
+type VideoUpstreamAnswer struct {
+	HTTPStatus int
+	Body       string
+	At         time.Time
+}
+
 // VideoJob is one attempt to create a video on one account. A refused attempt
 // keeps its own row, and the request moves on with a new one.
 type VideoJob struct {
@@ -67,6 +76,7 @@ type VideoJob struct {
 	CostMicrodollars  *int64
 	ErrorCode         string
 	ErrorMessage      string
+	Answer            VideoUpstreamAnswer
 	NextPollAt        *time.Time
 	CreatedAt         time.Time
 	FinishedAt        *time.Time
@@ -80,6 +90,7 @@ type VideoJobFinish struct {
 	CostMicrodollars *int64
 	ErrorCode        string
 	ErrorMessage     string
+	Answer           VideoUpstreamAnswer
 	At               time.Time
 }
 
@@ -112,6 +123,7 @@ type VideoJobEntry struct {
 	CostMicrodollars *int64
 	ErrorCode        string
 	ErrorMessage     string
+	Answer           VideoUpstreamAnswer
 	CreatedAt        time.Time
 	FinishedAt       *time.Time
 }

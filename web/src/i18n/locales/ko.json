@@ -2124,6 +2124,8 @@
   "video.jobs.status": "상태",
   "video.jobs.seconds": "초",
   "video.jobs.cost": "보고된 비용",
+  "video.jobs.upstreamAnswer": "xAI 응답 HTTP {{status}}",
+  "video.jobs.upstreamNoAnswer": "xAI의 HTTP 응답 없음",
   "video.jobs.more": "이전 항목 보기",
   "video.mode.text": "텍스트",
   "video.mode.first_frame": "첫 프레임",

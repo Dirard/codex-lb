@@ -286,6 +286,16 @@ export function VideoPage() {
                     <TableCell>
                       {t(`video.jobStatus.${job.status}`, job.status)}
                       {job.errorMessage ? <div className="text-xs text-muted-foreground">{job.errorMessage}</div> : null}
+                      {job.upstreamAt ? (
+                        <details className="text-xs text-muted-foreground">
+                          <summary className="cursor-pointer">
+                            {job.upstreamHttpStatus
+                              ? t("video.jobs.upstreamAnswer", { status: job.upstreamHttpStatus })
+                              : t("video.jobs.upstreamNoAnswer")}
+                          </summary>
+                          <pre className="mt-1 max-w-md overflow-x-auto whitespace-pre-wrap break-all">{job.upstreamBody}</pre>
+                        </details>
+                      ) : null}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{job.durationSeconds ?? job.requestedSeconds}</TableCell>
                     <TableCell className="text-right tabular-nums">{job.costUsd === null ? "--" : formatCurrency(job.costUsd)}</TableCell>

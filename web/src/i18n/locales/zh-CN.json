@@ -2124,6 +2124,8 @@
   "video.jobs.status": "状态",
   "video.jobs.seconds": "秒",
   "video.jobs.cost": "上报费用",
+  "video.jobs.upstreamAnswer": "xAI 响应 HTTP {{status}}",
+  "video.jobs.upstreamNoAnswer": "xAI 未返回 HTTP 响应",
   "video.jobs.more": "显示更早的任务",
   "video.mode.text": "文本",
   "video.mode.first_frame": "首帧",

@@ -2669,7 +2669,7 @@ Creation SHALL accept `model`, `prompt`, `image`, `last_frame`, `keyframes`, `re
 
 A job row SHALL be written before dispatch, and a successful creation SHALL answer 202 with the local `id`. An upstream 401 after one token refresh, 403 or 429 SHALL mark that attempt refused, take the account out of selection and move the request to another eligible account, trying at most four accounts. Any other failure, or one that may have executed, MUST NOT be sent to another account. When all tried accounts refused, the client SHALL receive 429 `video_pool_exhausted`.
 
-Status reads and a background sweep SHALL query only the job's account. A job SHALL leave `pending` exactly once. `done` SHALL record `usage.cost_in_usd_ticks` at 1e-10 USD per tick and the duration. `failed` and `expired` SHALL record no cost. A finished job without a video SHALL answer `error` with its code and `error_message` with its reason in words, xAI's own text when xAI gave one, and the dashboard job list SHALL show that reason. A `done` answer with `respect_moderation: false` SHALL finish the job as `failed` with `video_moderated`, and a `done` answer without a video URL SHALL finish it as `failed` with `video_failed`; neither SHALL give the client a URL or record a cost. A job still `pending` one hour after creation SHALL become `unknown`, and a job left in `dispatching` for 15 minutes SHALL become `unknown`. Responses SHALL NOT name the account or the upstream request id. A due poll of a job older than two minutes that does not finish it SHALL log a warning with the local job id, its age, xAI's HTTP status and its status word, at most once per minute per job. Logs and diagnostics MUST NOT contain tokens, prompts, image or audio payloads, or video URLs.
+Status reads and a background sweep SHALL query only the job's account. A job SHALL leave `pending` exactly once. `done` SHALL record `usage.cost_in_usd_ticks` at 1e-10 USD per tick and the duration. `failed` and `expired` SHALL record no cost. A finished job without a video SHALL answer `error` with its code and `error_message` with its reason in words, xAI's own text when xAI gave one, and the dashboard job list SHALL show that reason. A `done` answer with `respect_moderation: false` SHALL finish the job as `failed` with `video_moderated`, and a `done` answer without a video URL SHALL finish it as `failed` with `video_failed`; neither SHALL give the client a URL or record a cost. An HTTP 400 answer to a status read of a job older than two minutes SHALL finish it as `failed` with `video_failed` and xAI's text as the reason; a younger job SHALL keep polling. A job still `pending` one hour after creation SHALL become `unknown`, and a job left in `dispatching` for 15 minutes SHALL become `unknown`. Responses SHALL NOT name the account or the upstream request id. Every due poll that does not finish a job SHALL log the local job id, its age, xAI's HTTP status and its status word, as a warning when the job is older than two minutes and otherwise as information, and a finished poll SHALL log the job's outcome and xAI's HTTP status. The job row SHALL keep xAI's last answer to creation or to a due or finishing poll: its HTTP status, its body up to 8 KiB and when it came, or the transport error of a read that got no answer, and SHALL keep it after the job finishes and until the row is pruned. The dashboard job list SHALL show that answer with any `url` value hidden; the REST surface SHALL NOT return it. The runtime SHALL NOT limit how many unfinished jobs an account holds: selection SHALL prefer the account with the fewest, and xAI's own 429 SHALL be the bound. When no account is active, the 503 `video_no_accounts` message SHALL say so. Logs and diagnostics MUST NOT contain tokens, prompts, image or audio payloads, video URLs or xAI's response bodies.
 
 The runtime SHALL read each active or paused account's subscription pool right after a sign-in and every 5 minutes from `https://cli-chat-proxy.grok.com/v1/billing?format=credits`, for which sign-in SHALL request the scope `grok-cli:access`, and SHALL store the usage percentage and period end. A failed read SHALL keep the last value, SHALL be recorded on the account, and MUST NOT change the account's status or stop it from generating. Selection SHALL skip an account at 100% or more until its period ends, SHALL prefer accounts with more left in 10-point bands, SHALL treat an elapsed period as unused, and SHALL place an account without a reading after those with one. The dashboard SHALL show what is left and when it resets, without calling xAI when the page is read.
 
@@ -2725,3 +2725,29 @@ The runtime SHALL read each active or paused account's subscription pool right a
 
 - **WHEN** a job older than two minutes is polled by clients several times within a minute and xAI still answers `pending`
 - **THEN** one warning names the job, its age, the HTTP status and `pending`, and it contains no upstream request id, token or URL
+
+#### Scenario: xAI refuses to read a job
+
+- **WHEN** xAI answers a due status read of a job older than two minutes with HTTP 400 and a body with `error`
+- **THEN** the job becomes `failed` with `video_failed` and that text in `error_message`, without a URL or cost, on that poll
+- **AND** the dashboard job list shows HTTP 400 and the body
+
+#### Scenario: A young job survives a refused read
+
+- **WHEN** xAI answers a due status read of a job younger than two minutes with HTTP 400
+- **THEN** the job stays `pending`, the log records the HTTP status at information level, and the row keeps the answer
+
+#### Scenario: xAI's answers stay on the job and out of the log
+
+- **WHEN** xAI answers creation or a poll with a body that holds text and a `url`
+- **THEN** the row keeps the body, the dashboard shows it with the `url` value hidden, and neither the log nor the REST surface contains it
+
+#### Scenario: Hung jobs do not block new ones
+
+- **WHEN** a request arrives while the only active account holds four or more unfinished jobs
+- **THEN** the job is sent to xAI on that account
+
+#### Scenario: No account is active
+
+- **WHEN** a request arrives and no video account is active, cooling down or exhausted
+- **THEN** the client receives 503 `video_no_accounts` with a message that says no account is active, and xAI is not called

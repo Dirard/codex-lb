@@ -60,6 +60,9 @@ export const VideoJobSchema = z.object({
   costUsd: z.number().nullable(),
   errorCode: z.string(),
   errorMessage: z.string(),
+  upstreamHttpStatus: z.number(),
+  upstreamBody: z.string(),
+  upstreamAt: z.string().nullable(),
   createdAt: z.string(),
   finishedAt: z.string().nullable(),
 });

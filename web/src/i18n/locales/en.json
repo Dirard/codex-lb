@@ -2124,6 +2124,8 @@
   "video.jobs.status": "Status",
   "video.jobs.seconds": "Seconds",
   "video.jobs.cost": "Reported cost",
+  "video.jobs.upstreamAnswer": "xAI answered HTTP {{status}}",
+  "video.jobs.upstreamNoAnswer": "xAI gave no HTTP answer",
   "video.jobs.more": "Show older",
   "video.mode.text": "Text",
   "video.mode.first_frame": "First frame",

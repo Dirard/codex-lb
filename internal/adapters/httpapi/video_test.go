@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"codex-lb/internal/adapters/credentials"
 	"codex-lb/internal/adapters/httpapi"
@@ -414,7 +415,7 @@ func TestVideoPoolStaysOutOfTheAccountPool(t *testing.T) {
 	}
 }
 
-func TestVideoBalancesAcrossAccountsAndRespectsTheBound(t *testing.T) {
+func TestVideoBalancesAcrossAccountsWithoutALocalBound(t *testing.T) {
 	f := newVideoFixture(t, "one", "two")
 	for range 4 {
 		f.createJob(t)
@@ -426,13 +427,108 @@ func TestVideoBalancesAcrossAccountsAndRespectsTheBound(t *testing.T) {
 	if counts["one"] != 2 || counts["two"] != 2 {
 		t.Fatalf("jobs did not spread: %v", counts)
 	}
+	// Jobs xAI holds on to never stop new ones: on prod, four hung jobs answered
+	// every new request with 503 for an hour while xAI would have accepted them.
 	single := newVideoFixture(t, "solo")
-	for range 4 {
+	for range 6 {
 		single.createJob(t)
 	}
-	w := single.request(http.MethodPost, "/video/v1/generations", videoPinnedBody)
-	if code, _ := errorParam(t, w.Body.Bytes()); w.Code != 503 || code != "video_no_accounts" || len(single.stub.createCalls()) != 4 {
-		t.Fatalf("a full account: %d %s calls=%d", w.Code, w.Body.String(), len(single.stub.createCalls()))
+	if calls := len(single.stub.createCalls()); calls != 6 {
+		t.Fatalf("creates on one account: %d", calls)
+	}
+}
+
+func TestVideoWithoutAnActiveAccountSaysSo(t *testing.T) {
+	f := newVideoFixture(t, "solo")
+	account := f.accountStatus(t, "solo")
+	if err := f.store.SetVideoAccountStatus(context.Background(), account.ID, domain.VideoAccountPaused, "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w := f.request(http.MethodPost, "/video/v1/generations", videoPinnedBody)
+	if code, _ := errorParam(t, w.Body.Bytes()); w.Code != 503 || code != "video_no_accounts" || !strings.Contains(w.Body.String(), "No video account is active") || len(f.stub.createCalls()) != 0 {
+		t.Fatalf("no active account: %d %s calls=%d", w.Code, w.Body.String(), len(f.stub.createCalls()))
+	}
+}
+
+// On prod xAI answered 400 to every status read of some jobs. They stayed pending
+// for an hour and the body, the only reason anyone could read, was thrown away.
+func TestVideoStatusRefusalFinishesTheJobAndKeepsTheAnswer(t *testing.T) {
+	f := newVideoFixture(t, "one")
+	var logged bytes.Buffer
+	f.service.ConfigureLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	id := f.createJob(t)
+	var offset atomic.Int64
+	f.service.ConfigureClock(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })
+	const answer = `{"code":"invalid_argument","error":"Blocked by the provider policy"}`
+	f.stub.get = func(string, string) (int, string) { return 400, answer }
+
+	offset.Store(int64(30 * time.Second))
+	young := f.request(http.MethodGet, "/video/v1/generations/"+id, "")
+	if young.Code != 200 || !strings.Contains(young.Body.String(), `"status":"pending"`) {
+		t.Fatalf("a young job: %d %s", young.Code, young.Body.String())
+	}
+	entries, _, err := f.service.Jobs(context.Background(), nil, 10)
+	if err != nil || entries[0].Answer.HTTPStatus != 400 || entries[0].Answer.Body != answer {
+		t.Fatalf("a kept answer: %+v %v", entries, err)
+	}
+
+	offset.Store(int64(3 * time.Minute))
+	w := f.request(http.MethodGet, "/video/v1/generations/"+id, "")
+	var job struct {
+		Status, Error string
+		ErrorMessage  string `json:"error_message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &job); err != nil || w.Code != 200 {
+		t.Fatalf("status: %d %s", w.Code, w.Body.String())
+	}
+	if job.Status != "failed" || job.Error != "video_failed" || job.ErrorMessage != "Blocked by the provider policy" {
+		t.Fatalf("a refused job: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "invalid_argument") {
+		t.Fatalf("the REST surface returned xAI's body: %s", w.Body.String())
+	}
+	entries, _, err = f.service.Jobs(context.Background(), nil, 10)
+	if err != nil || entries[0].Answer.HTTPStatus != 400 || entries[0].Answer.Body != answer || entries[0].Answer.At.IsZero() {
+		t.Fatalf("the final answer: %+v %v", entries, err)
+	}
+	for _, want := range []string{`"level":"INFO"`, `"upstream_http_status":400`, `"msg":"video job finished"`, `"status":"failed"`} {
+		if !strings.Contains(logged.String(), want) {
+			t.Fatalf("log lacks %s: %s", want, logged.String())
+		}
+	}
+	if strings.Contains(logged.String(), "Blocked by") || strings.Contains(logged.String(), "invalid_argument") {
+		t.Fatalf("the log holds xAI's body: %s", logged.String())
+	}
+
+	// A silent refusal still names itself, and a read with no answer keeps its error.
+	silent := f.createJob(t)
+	f.stub.get = func(string, string) (int, string) { return 400, `not json` }
+	offset.Store(int64(6 * time.Minute))
+	if w := f.request(http.MethodGet, "/video/v1/generations/"+silent, ""); !strings.Contains(w.Body.String(), "xAI refused to read this job") {
+		t.Fatalf("a silent refusal: %s", w.Body.String())
+	}
+}
+
+func TestVideoAnswersAreBoundedAndHideURLsOnTheDashboard(t *testing.T) {
+	f := newVideoFixture(t, "one")
+	id := f.createJob(t)
+	f.stub.get = func(string, string) (int, string) {
+		return 200, `{"status":"done","video":{"url":"https://vidgen.example.invalid/\"x.mp4","duration":2},"pad":"` + strings.Repeat("я", 9000) + `"}`
+	}
+	if w := f.request(http.MethodGet, "/video/v1/generations/"+id, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"done"`) {
+		t.Fatalf("status: %d %s", w.Code, w.Body.String())
+	}
+	entries, _, err := f.service.Jobs(context.Background(), nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := entries[0].Answer.Body
+	if strings.Contains(body, "vidgen") || !strings.Contains(body, `"url":"(hidden)"`) || len(body) > 8200 || !utf8.ValidString(body) {
+		t.Fatalf("a dashboard answer of %d bytes: %.120s", len(body), body)
+	}
+	stored, err := f.store.GetVideoJob(context.Background(), id)
+	if err != nil || !strings.Contains(stored.Answer.Body, "vidgen") || stored.Answer.HTTPStatus != 200 {
+		t.Fatalf("the stored answer: %v %.120s", err, stored.Answer.Body)
 	}
 }
 
@@ -550,9 +646,10 @@ func TestVideoUnfinishedJobLeavesOneTracePerDuePoll(t *testing.T) {
 	f.stub.get = func(string, string) (int, string) { return 202, `{"status":"pending"}` }
 	offset.Store(int64(30 * time.Second))
 	f.request(http.MethodGet, "/video/v1/generations/"+id, "")
-	if logged.Len() != 0 {
-		t.Fatalf("a young job logged: %s", logged.String())
+	if !strings.Contains(logged.String(), `"level":"INFO"`) || !strings.Contains(logged.String(), `"upstream_http_status":202`) {
+		t.Fatalf("a young job's poll: %s", logged.String())
 	}
+	logged.Reset()
 	offset.Store(int64(3 * time.Minute))
 	for range 3 {
 		if w := f.request(http.MethodGet, "/video/v1/generations/"+id, ""); w.Code != 200 {
@@ -979,7 +1076,8 @@ func TestVideoAdminRoutes(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	jobs := call(http.MethodGet, "/api/video/jobs?limit=10", "", nil)
-	if jobs.Code != 200 || !strings.Contains(jobs.Body.String(), id) || strings.Contains(jobs.Body.String(), "vidgen") {
+	if jobs.Code != 200 || !strings.Contains(jobs.Body.String(), id) || strings.Contains(jobs.Body.String(), "vidgen") ||
+		!strings.Contains(jobs.Body.String(), `"upstreamHttpStatus":200`) || !strings.Contains(jobs.Body.String(), "(hidden)") {
 		t.Fatalf("jobs: %s", jobs.Body.String())
 	}
 	summary := call(http.MethodGet, "/api/video/summary", "", nil)

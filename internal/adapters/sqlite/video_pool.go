@@ -15,7 +15,7 @@ const videoAccountColumns = `id,xai_user_id,email,label,status,access_token_encr
  usage_percent,usage_period_end,usage_checked_at,usage_error`
 
 const videoJobColumns = `id,api_key_id,account_id,coalesce(upstream_request_id,''),model,mode,requested_seconds,status,
- video_url,duration_seconds,cost_microdollars,error_code,error_message,next_poll_at,created_at,finished_at`
+ video_url,duration_seconds,cost_microdollars,error_code,error_message,upstream_http_status,upstream_body,upstream_at,next_poll_at,created_at,finished_at`
 
 func positiveMillisTime(value int64) *time.Time {
 	if value <= 0 {
@@ -59,9 +59,9 @@ func scanVideoJob(row interface{ Scan(...any) error }) (domain.VideoJob, error) 
 	var j domain.VideoJob
 	var duration sql.NullFloat64
 	var cost, next, finished sql.NullInt64
-	var created int64
+	var created, answered int64
 	err := row.Scan(&j.ID, &j.APIKeyID, &j.AccountID, &j.UpstreamRequestID, &j.Model, &j.Mode, &j.RequestedSeconds, &j.Status,
-		&j.VideoURL, &duration, &cost, &j.ErrorCode, &j.ErrorMessage, &next, &created, &finished)
+		&j.VideoURL, &duration, &cost, &j.ErrorCode, &j.ErrorMessage, &j.Answer.HTTPStatus, &j.Answer.Body, &answered, &next, &created, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, ErrNotFound
 	}
@@ -69,6 +69,9 @@ func scanVideoJob(row interface{ Scan(...any) error }) (domain.VideoJob, error) 
 		return j, err
 	}
 	j.CreatedAt, j.NextPollAt, j.FinishedAt = fromMillis(created), nullableMillisTime(next), nullableMillisTime(finished)
+	if answered != 0 {
+		j.Answer.At = fromMillis(answered)
+	}
 	if duration.Valid {
 		j.DurationSeconds = &duration.Float64
 	}
@@ -308,7 +311,7 @@ func (s *Store) DenyVideoKey(ctx context.Context, keyID string) error {
 // share the work, then by unfinished jobs and least recent use. An account with
 // no reading comes after those with one; an elapsed period counts as unused.
 // It returns ErrNoAccounts when none qualifies.
-func (s *Store) ReserveVideoJob(ctx context.Context, job domain.VideoJob, excluded map[string]bool, maxUnfinished int, now time.Time) (domain.VideoAccount, error) {
+func (s *Store) ReserveVideoJob(ctx context.Context, job domain.VideoJob, excluded map[string]bool, now time.Time) (domain.VideoAccount, error) {
 	var selected domain.VideoAccount
 	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT a.id,
@@ -328,7 +331,7 @@ func (s *Store) ReserveVideoJob(ctx context.Context, job domain.VideoJob, exclud
 				_ = rows.Close()
 				return err
 			}
-			if chosen == "" && !excluded[id] && unfinished < maxUnfinished {
+			if chosen == "" && !excluded[id] {
 				chosen = id
 			}
 		}
@@ -368,10 +371,11 @@ func (s *Store) NearestVideoCooldown(ctx context.Context, now time.Time) (*time.
 }
 
 // MarkVideoJobPending records the upstream id of a created job.
-func (s *Store) MarkVideoJobPending(ctx context.Context, id, upstreamRequestID string, nextPoll time.Time) error {
+func (s *Store) MarkVideoJobPending(ctx context.Context, id, upstreamRequestID string, nextPoll time.Time, answer domain.VideoUpstreamAnswer) error {
+	set, values := videoAnswerSet(answer)
 	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE video_jobs SET status='pending',upstream_request_id=?,next_poll_at=? WHERE id=? AND status='dispatching'`,
-			upstreamRequestID, millis(nextPoll), id)
+		args := append(append([]any{upstreamRequestID, millis(nextPoll)}, values...), id)
+		result, err := tx.ExecContext(ctx, `UPDATE video_jobs SET status='pending',upstream_request_id=?,next_poll_at=?`+set+` WHERE id=? AND status='dispatching'`, args...)
 		if err != nil {
 			return err
 		}
@@ -390,9 +394,11 @@ func (s *Store) MarkVideoJobPending(ctx context.Context, id, upstreamRequestID s
 // when another poll or worker finished the job first, so a cost counts once.
 func (s *Store) FinishVideoJob(ctx context.Context, id string, finish domain.VideoJobFinish) (bool, error) {
 	applied := false
+	set, values := videoAnswerSet(finish.Answer)
 	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE video_jobs SET status=?,video_url=?,duration_seconds=?,cost_microdollars=?,error_code=?,error_message=?,finished_at=?,next_poll_at=NULL
- WHERE id=? AND status IN ('dispatching','pending')`, finish.Status, finish.VideoURL, finish.DurationSeconds, finish.CostMicrodollars, finish.ErrorCode, finish.ErrorMessage, millis(finish.At), id)
+		args := append(append([]any{finish.Status, finish.VideoURL, finish.DurationSeconds, finish.CostMicrodollars, finish.ErrorCode, finish.ErrorMessage, millis(finish.At)}, values...), id)
+		result, err := tx.ExecContext(ctx, `UPDATE video_jobs SET status=?,video_url=?,duration_seconds=?,cost_microdollars=?,error_code=?,error_message=?,finished_at=?,next_poll_at=NULL`+set+`
+ WHERE id=? AND status IN ('dispatching','pending')`, args...)
 		if err != nil {
 			return err
 		}
@@ -403,11 +409,22 @@ func (s *Store) FinishVideoJob(ctx context.Context, id string, finish domain.Vid
 	return applied, err
 }
 
-func (s *Store) ScheduleVideoPoll(ctx context.Context, id string, next time.Time) error {
+func (s *Store) ScheduleVideoPoll(ctx context.Context, id string, next time.Time, answer domain.VideoUpstreamAnswer) error {
+	set, values := videoAnswerSet(answer)
 	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE video_jobs SET next_poll_at=? WHERE id=? AND status='pending'`, millis(next), id)
+		args := append(append([]any{millis(next)}, values...), id)
+		_, err := tx.ExecContext(ctx, `UPDATE video_jobs SET next_poll_at=?`+set+` WHERE id=? AND status='pending'`, args...)
 		return err
 	})
+}
+
+// videoAnswerSet is the SET fragment of one answer. An attempt that asked xAI
+// nothing keeps the answer already on the row.
+func videoAnswerSet(answer domain.VideoUpstreamAnswer) (string, []any) {
+	if answer.At.IsZero() {
+		return "", nil
+	}
+	return ",upstream_http_status=?,upstream_body=?,upstream_at=?", []any{answer.HTTPStatus, answer.Body, millis(answer.At)}
 }
 
 func (s *Store) GetVideoJob(ctx context.Context, id string) (domain.VideoJob, error) {
@@ -474,7 +491,7 @@ func (s *Store) PruneVideoJobs(ctx context.Context, before time.Time, limit int)
 func (s *Store) VideoJobEntries(ctx context.Context, before *domain.VideoJobCursor, limit int) ([]domain.VideoJobEntry, error) {
 	var query strings.Builder
 	query.WriteString(`SELECT j.id,coalesce(k.name,''),coalesce(nullif(a.label,''),a.email,''),j.model,j.mode,j.requested_seconds,j.status,
- j.duration_seconds,j.cost_microdollars,j.error_code,j.error_message,j.created_at,j.finished_at
+ j.duration_seconds,j.cost_microdollars,j.error_code,j.error_message,j.upstream_http_status,j.upstream_body,j.upstream_at,j.created_at,j.finished_at
  FROM video_jobs j LEFT JOIN api_keys k ON k.id=j.api_key_id LEFT JOIN video_accounts a ON a.id=j.account_id WHERE 1=1`)
 	args := []any{}
 	if before != nil {
@@ -493,11 +510,14 @@ func (s *Store) VideoJobEntries(ctx context.Context, before *domain.VideoJobCurs
 		var e domain.VideoJobEntry
 		var duration sql.NullFloat64
 		var cost, finished sql.NullInt64
-		var created int64
-		if err := rows.Scan(&e.ID, &e.KeyName, &e.AccountLabel, &e.Model, &e.Mode, &e.RequestedSeconds, &e.Status, &duration, &cost, &e.ErrorCode, &e.ErrorMessage, &created, &finished); err != nil {
+		var created, answered int64
+		if err := rows.Scan(&e.ID, &e.KeyName, &e.AccountLabel, &e.Model, &e.Mode, &e.RequestedSeconds, &e.Status, &duration, &cost, &e.ErrorCode, &e.ErrorMessage, &e.Answer.HTTPStatus, &e.Answer.Body, &answered, &created, &finished); err != nil {
 			return nil, err
 		}
 		e.CreatedAt, e.FinishedAt = fromMillis(created), nullableMillisTime(finished)
+		if answered != 0 {
+			e.Answer.At = fromMillis(answered)
+		}
 		if duration.Valid {
 			e.DurationSeconds = &duration.Float64
 		}

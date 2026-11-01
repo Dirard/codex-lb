@@ -268,19 +268,24 @@ func (s *Server) denyVideoKey(w http.ResponseWriter, r *http.Request) {
 }
 
 type videoJobEntryView struct {
-	ID               string     `json:"id"`
-	KeyName          string     `json:"keyName"`
-	AccountLabel     string     `json:"accountLabel"`
-	Model            string     `json:"model"`
-	Mode             string     `json:"mode"`
-	RequestedSeconds int        `json:"requestedSeconds"`
-	Status           string     `json:"status"`
-	DurationSeconds  *float64   `json:"durationSeconds"`
-	CostUSD          *float64   `json:"costUsd"`
-	ErrorCode        string     `json:"errorCode"`
-	ErrorMessage     string     `json:"errorMessage"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	FinishedAt       *time.Time `json:"finishedAt"`
+	ID               string   `json:"id"`
+	KeyName          string   `json:"keyName"`
+	AccountLabel     string   `json:"accountLabel"`
+	Model            string   `json:"model"`
+	Mode             string   `json:"mode"`
+	RequestedSeconds int      `json:"requestedSeconds"`
+	Status           string   `json:"status"`
+	DurationSeconds  *float64 `json:"durationSeconds"`
+	CostUSD          *float64 `json:"costUsd"`
+	ErrorCode        string   `json:"errorCode"`
+	ErrorMessage     string   `json:"errorMessage"`
+	// The last answer of xAI about this job, for debugging. Status 0 with a body
+	// is a read that got no HTTP answer.
+	UpstreamHTTPStatus int        `json:"upstreamHttpStatus"`
+	UpstreamBody       string     `json:"upstreamBody"`
+	UpstreamAt         *time.Time `json:"upstreamAt"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	FinishedAt         *time.Time `json:"finishedAt"`
 }
 
 func (s *Server) listVideoJobEntries(w http.ResponseWriter, r *http.Request) {
@@ -297,6 +302,10 @@ func (s *Server) listVideoJobEntries(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries {
 		view := videoJobEntryView{ID: e.ID, KeyName: e.KeyName, AccountLabel: e.AccountLabel, Model: e.Model, Mode: e.Mode, RequestedSeconds: e.RequestedSeconds,
 			Status: string(e.Status), DurationSeconds: e.DurationSeconds, ErrorCode: e.ErrorCode, ErrorMessage: e.ErrorMessage, CreatedAt: e.CreatedAt, FinishedAt: e.FinishedAt}
+		view.UpstreamHTTPStatus, view.UpstreamBody = e.Answer.HTTPStatus, e.Answer.Body
+		if !e.Answer.At.IsZero() {
+			view.UpstreamAt = &e.Answer.At
+		}
 		if e.CostMicrodollars != nil {
 			cost := float64(*e.CostMicrodollars) / 1e6
 			view.CostUSD = &cost

@@ -70,11 +70,11 @@ type VideoStore interface {
 	ListVideoKeys(context.Context) ([]domain.VideoKeyAccess, error)
 	AllowVideoKey(ctx context.Context, keyID string, now time.Time) error
 	DenyVideoKey(ctx context.Context, keyID string) error
-	ReserveVideoJob(ctx context.Context, job domain.VideoJob, excluded map[string]bool, maxUnfinished int, now time.Time) (domain.VideoAccount, error)
+	ReserveVideoJob(ctx context.Context, job domain.VideoJob, excluded map[string]bool, now time.Time) (domain.VideoAccount, error)
 	NearestVideoCooldown(ctx context.Context, now time.Time) (*time.Time, error)
-	MarkVideoJobPending(ctx context.Context, id, upstreamRequestID string, nextPoll time.Time) error
+	MarkVideoJobPending(ctx context.Context, id, upstreamRequestID string, nextPoll time.Time, answer domain.VideoUpstreamAnswer) error
 	FinishVideoJob(ctx context.Context, id string, finish domain.VideoJobFinish) (bool, error)
-	ScheduleVideoPoll(ctx context.Context, id string, next time.Time) error
+	ScheduleVideoPoll(ctx context.Context, id string, next time.Time, answer domain.VideoUpstreamAnswer) error
 	GetVideoJob(context.Context, string) (domain.VideoJob, error)
 	ListVideoJobs(ctx context.Context, keyID string, before *domain.VideoJobCursor, limit int) ([]domain.VideoJob, error)
 	DueVideoJobs(ctx context.Context, now time.Time, limit int) ([]domain.VideoJob, error)
