@@ -31,26 +31,6 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 	if err := application.ValidateCodexRealtimeRequest(request); err != nil {
 		return err
 	}
-	credential, err := a.credentialForAccount(ctx, target.Account)
-	if err != nil {
-		return providerFailure("chatgpt_credential_unavailable", 0, false)
-	}
-	token, err := a.chatgpt.AccessToken(ctx, target.Account, credential)
-	if err != nil {
-		return providerFailure("chatgpt_token_unavailable", 0, false)
-	}
-	headers, err := a.chatGPTHeaders(ctx)
-	if err != nil {
-		return err
-	}
-	headers.Set("Authorization", "Bearer "+token)
-	if target.Account.ChatGPTAccountID != "" {
-		headers.Set("ChatGPT-Account-ID", target.Account.ChatGPTAccountID)
-	}
-	for name, values := range realtimeProtocolHeaders(request.Headers) {
-		headers[name] = values
-	}
-
 	endpoint := liveBaseURL(a.config.ChatGPTBaseURL) + "/live/" + url.PathEscape(request.CallID)
 	queryValues := request.Query
 	if request.Protocol == application.CodexRealtimeLegacy {
@@ -60,18 +40,96 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 	if query := encodeQuery(queryValues); query != "" {
 		endpoint += "?" + query
 	}
-	upstream, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: a.config.HTTPClient, HTTPHeader: headers})
+	upstream, _, err := a.dialRealtime(ctx, target, request.Headers, endpoint)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		var failure *application.ProviderFailure
+		if errors.As(err, &failure) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		return providerFailure("realtime_live_unavailable", 502, true)
 	}
+	return a.relayRealtime(ctx, upstream, downstream, nil, nil)
+}
+
+// RealtimeSession dials the account's own Realtime session for an app, the
+// standard /realtime?model= socket, sends the app's first message ahead of
+// the client and lets observe see every upstream text frame.
+func (a *Adapter) RealtimeSession(ctx context.Context, target application.CodexOperationTarget, request application.CodexRealtimeSessionRequest,
+	downstream application.CodexRealtimeConnection, observe func([]byte)) error {
+	query := append([][2]string{{"model", request.Model}}, request.Query...)
+	endpoint := liveBaseURL(a.config.ChatGPTBaseURL) + "/realtime?" + encodeQuery(query)
+	upstream, refusal, err := a.dialRealtime(ctx, target, request.Headers, endpoint)
+	if err != nil {
+		var failure *application.ProviderFailure
+		if errors.As(err, &failure) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		status := http.StatusBadGateway
+		if refusal == http.StatusTooManyRequests {
+			status = http.StatusTooManyRequests
+		}
+		// Nothing ran before the upgrade, so the session costs nothing.
+		return providerFailure("realtime_session_unavailable", status, false)
+	}
+	return a.relayRealtime(ctx, upstream, downstream, request.FirstMessage, observe)
+}
+
+// dialRealtime opens an upstream Realtime socket with the account's token,
+// ChatGPT account and Codex identity. A failure before the dial is a
+// ProviderFailure; a refused upgrade also gives its HTTP status.
+func (a *Adapter) dialRealtime(ctx context.Context, target application.CodexOperationTarget, protocol application.CodexRealtimeHeaders, endpoint string) (*websocket.Conn, int, error) {
+	credential, err := a.credentialForAccount(ctx, target.Account)
+	if err != nil {
+		return nil, 0, providerFailure("chatgpt_credential_unavailable", 0, false)
+	}
+	token, err := a.chatgpt.AccessToken(ctx, target.Account, credential)
+	if err != nil {
+		return nil, 0, providerFailure("chatgpt_token_unavailable", 0, false)
+	}
+	headers, err := a.chatGPTHeaders(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	headers.Set("Authorization", "Bearer "+token)
+	if target.Account.ChatGPTAccountID != "" {
+		headers.Set("ChatGPT-Account-ID", target.Account.ChatGPTAccountID)
+	}
+	for name, values := range realtimeProtocolHeaders(protocol) {
+		headers[name] = values
+	}
+	upstream, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: a.config.HTTPClient, HTTPHeader: headers})
+	status := 0
+	if response != nil {
+		status = response.StatusCode
+		if response.Body != nil {
+			_ = response.Body.Close() // A refusal body is never read or shown.
+		}
+	}
+	return upstream, status, err
+}
+
+// relayRealtime pumps frames both ways until either side ends. first, when
+// set, reaches the upstream before any client frame; observe sees each
+// upstream text frame before it is delivered.
+func (a *Adapter) relayRealtime(ctx context.Context, upstream *websocket.Conn, downstream application.CodexRealtimeConnection, first []byte, observe func([]byte)) error {
 	defer upstream.Close(websocket.StatusNormalClosure, "")
 	upstream.SetReadLimit(application.MaxRealtimeMessageBytes)
 	requestContext := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	bounds := a.realtime
+	if len(first) != 0 {
+		writeCtx, stop := context.WithTimeout(ctx, bounds.write)
+		err := upstream.Write(writeCtx, websocket.MessageText, first)
+		stop()
+		if err != nil {
+			cancel()
+			_ = downstream.Close(realtimeCloseCode(err), realtimeCloseReason(err))
+			if requestContext.Err() != nil {
+				return requestContext.Err()
+			}
+			return providerFailure("realtime_live_disconnected", 502, true)
+		}
+	}
 	var lastUpstream atomic.Int64
 	var delivering atomic.Bool
 	pingFailed := make(chan error, 1)
@@ -97,6 +155,9 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 				return
 			}
 			lastUpstream.Store(time.Now().UnixNano())
+			if observe != nil && messageType == websocket.MessageText {
+				observe(data)
+			}
 			delivering.Store(true)
 			writeCtx, stop := context.WithTimeout(ctx, bounds.write)
 			err = downstream.Write(writeCtx, application.CodexRealtimeMessage{Binary: messageType == websocket.MessageBinary, Data: data})
@@ -108,7 +169,6 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 			}
 		}
 	}()
-
 	downstreamErr := make(chan error, 1)
 	go func() {
 		for {

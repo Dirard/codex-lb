@@ -181,7 +181,8 @@ func resolveCodexPriceWith(model string, custom func(string) (pricing.Price, boo
 // the settlement transaction so an admitted request cannot write stale cost.
 func priceUsageEventTx(ctx context.Context, tx *sql.Tx, event *domain.UsageEvent) error {
 	if event.AccountID == "" || event.ModelSourceID != "" ||
-		event.RequestKind == "transcription" || event.RequestKind == "reconciled" {
+		event.RequestKind == "transcription" || event.RequestKind == "reconciled" ||
+		event.RequestKind == "realtime_session" {
 		return nil
 	}
 	if event.Usage.InputTokens == 0 && event.Usage.OutputTokens == 0 && event.Usage.CostMicrodollars > 0 {

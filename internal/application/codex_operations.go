@@ -78,6 +78,22 @@ type CodexOperationProvider interface {
 	Realtime(context.Context, CodexOperationTarget, CodexRealtimeRequest, CodexRealtimeConnection) error
 }
 
+// CodexRealtimeSessionRequest is an app's Realtime WebSocket session: the
+// model, bounded query values, negotiation headers and an optional first
+// upstream message (the client secret's session.update).
+type CodexRealtimeSessionRequest struct {
+	Model        string
+	Query        [][2]string
+	Headers      CodexRealtimeHeaders
+	FirstMessage []byte
+}
+
+// CodexRealtimeSessionProvider dials app sessions; observe sees each
+// upstream text frame so the session can add up its usage.
+type CodexRealtimeSessionProvider interface {
+	RealtimeSession(context.Context, CodexOperationTarget, CodexRealtimeSessionRequest, CodexRealtimeConnection, func([]byte)) error
+}
+
 type CodexRealtimeRequest struct {
 	CallID   string
 	Query    [][2]string

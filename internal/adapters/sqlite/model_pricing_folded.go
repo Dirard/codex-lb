@@ -71,7 +71,7 @@ func repriceFoldedChunkTx(ctx context.Context, tx *sql.Tx, model string, after f
 			continue
 		}
 		covered := false
-		if bucket.accountKind == domain.AccountChatGPT && bucket.kind != "transcription" && bucket.kind != "reconciled" {
+		if bucket.accountKind == domain.AccountChatGPT && bucket.kind != "transcription" && bucket.kind != "reconciled" && bucket.kind != "realtime_session" {
 			covered, err = repriceCoveredBucketTx(ctx, tx, bucket, price, limits, totals, limitDeltas, summary, write)
 			if err != nil {
 				return after, false, err

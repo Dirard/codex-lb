@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,15 +66,15 @@ func newerDatabase(t *testing.T, floor int) string {
 	return path
 }
 
-func TestSchemaFloorClassifiesMigrations41To48AsAdditive(t *testing.T) {
-	if SchemaVersion() != 48 || !additiveMigrations[48] || !additiveMigrations[47] || !additiveMigrations[46] || SchemaFloor() != 40 || !additiveMigrations[41] || !additiveMigrations[42] || !additiveMigrations[43] || !additiveMigrations[44] || !additiveMigrations[45] {
+func TestSchemaFloorClassifiesMigrations41To49AsAdditive(t *testing.T) {
+	if SchemaVersion() != 49 || !additiveMigrations[49] || !additiveMigrations[48] || !additiveMigrations[47] || !additiveMigrations[46] || SchemaFloor() != 40 || !additiveMigrations[41] || !additiveMigrations[42] || !additiveMigrations[43] || !additiveMigrations[44] || !additiveMigrations[45] {
 		t.Fatalf("schema %d floor %d", SchemaVersion(), SchemaFloor())
 	}
 	store, path := testStore(t)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if state := readSchemaFingerprint(t, path); state.version != 48 || state.floor != 40 {
+	if state := readSchemaFingerprint(t, path); state.version != 49 || state.floor != 40 {
 		t.Fatalf("fresh database records %+v", state)
 	}
 	// Reopening at the current schema applies nothing and keeps the floor.
@@ -292,5 +293,37 @@ func TestSnapshotOfNewerDatabaseFollowsItsFloor(t *testing.T) {
 	}
 	if err := WriteSnapshot(ctx, store.filePath, filepath.Join(dir, "incompatible.sqlite3"), vault); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("incompatible newer snapshot: %v", err)
+	}
+}
+
+func TestRealtimeClientSecretsExpireAndFollowTheirKey(t *testing.T) {
+	ctx := context.Background()
+	s, _ := testStore(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := s.SaveAPIKey(ctx, testKey("key-voice", nil), now); err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("a", 64)
+	old := domain.RealtimeClientSecret{Hash: strings.Repeat("b", 64), APIKeyID: "key-voice", ExpiresAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour)}
+	if err := s.SaveRealtimeClientSecret(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	secret := domain.RealtimeClientSecret{Hash: hash, APIKeyID: "key-voice", SessionEncrypted: testCiphertext(), ExpiresAt: now.Add(time.Minute), CreatedAt: now}
+	if err := s.SaveRealtimeClientSecret(ctx, secret); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RealtimeClientSecret(ctx, hash, now)
+	if err != nil || got.APIKeyID != "key-voice" || !got.ExpiresAt.Equal(secret.ExpiresAt) || len(got.SessionEncrypted) == 0 {
+		t.Fatalf("secret: %+v %v", got, err)
+	}
+	if _, err := s.RealtimeClientSecret(ctx, hash, now.Add(time.Minute)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired secret served: %v", err)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT count(*) FROM realtime_client_secrets`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expired secret kept: %d %v", count, err)
+	}
+	if err := s.SaveRealtimeClientSecret(ctx, domain.RealtimeClientSecret{Hash: "short", APIKeyID: "key-voice", ExpiresAt: now.Add(time.Minute), CreatedAt: now}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad hash accepted: %v", err)
 	}
 }
