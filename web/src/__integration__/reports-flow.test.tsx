@@ -110,10 +110,12 @@ describe("reports flow (R32)", () => {
     const now = new Date();
     expect(calls.keys.at(-1)?.get("start_date")).toBe(localDateISO(new Date(now.getFullYear(), now.getMonth() - 1, 1)));
 
-    fireEvent.change(screen.getByLabelText("End date"), { target: { value: addDaysISO(localDateISO(), -2) } });
+    // The day before last month's end: today - 2 equals that end on the 2nd of a month.
+    const customEnd = addDaysISO(localDateISO(new Date(now.getFullYear(), now.getMonth(), 0)), -1);
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: customEnd } });
     const custom = new URLSearchParams(window.location.search);
     expect(custom.has("period")).toBe(false);
-    expect(custom.get("to")).toBe(addDaysISO(localDateISO(), -2));
+    expect(custom.get("to")).toBe(customEnd);
     expect(screen.getByRole("button", { name: "Last month" })).toHaveAttribute("aria-pressed", "false");
     for (const path of ["/api/accounts", "/api/request-logs/options", "/api/reports"]) {
       expect(calls.paths).not.toContain(path);
