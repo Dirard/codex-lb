@@ -239,7 +239,7 @@ internal/adapters/httpapi/grok_text_source_test.go
 14. [x] Effort table in the domain; request adapter and event restoration in the provider, with unit tests (R9–R11).
 15. [x] Catalog efforts for new sources and a stub that refuses what xAI refused, with end-to-end tests (R9–R12).
 16. [x] Gates, release notes `go-v1.11.1`, sync and archive the OpenSpec change.
-17. [ ] Publish go-v1.11.1 and stop before the rollout; after the owner's update, check one Codex request end to end with approval.
+17. [x] Publish go-v1.11.1 and stop before the rollout; after the owner's update, check one Codex request end to end with approval.
 
 Deferred:
 - Refreshing a source's model list from xAI after creation. Recreating the source picks up new models.
@@ -265,3 +265,4 @@ Deferred:
 - 2026-11-02: The verification loop ran: completeness and consistency were checked against the owner's request and the probe evidence, without findings that changed the scope.
 - 2026-11-02: The first Codex request through prod failed before dispatch. Codex CLI does not read codex-lb's catalog, and xAI refuses several OpenAI-only fields. The owner approved six probes, and use case 4 adapts the request to what they showed, instead of dropping namespace tools or failing.
 - 2026-11-02: Validation of use case 4: adapter unit tests, a stub that refuses what xAI refused, and an end-to-end test of the Codex CLI request shape. All local gates are green. A mutation that skips restoring names fails `TestGrokSourceTakesTheCodexCLIRequestShape`.
+- 2026-11-02 19:00 UTC, prod on go-v1.11.1 (`NRestarts=0`), owner-approved check: `codex exec -m grok-4.7` from Codex CLI 0.165.4 (fallback metadata, effort `max`, MCP namespaces, cached-only web search) answered `pong`. Codex tried WebSocket first, got 503 `model_source_requires_http_transport` and fell back to HTTP as specified. Prod recorded one `success` event: 68278 input tokens (1152 cached), 38 output (37 reasoning), 5.4 s, $0.135 at list prices. The key reservation was finalized. Before the fix, the 30 attempts refused before dispatch on go-v1.11.0 ended as failed reservations without charge.
