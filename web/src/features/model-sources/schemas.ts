@@ -35,6 +35,7 @@ export const ModelSourceSchema = z.object({
   supportsEmbeddings: z.boolean().default(false),
   timeoutSeconds: z.number().int().positive().nullable().default(null),
   maxConcurrency: z.number().int().positive().nullable().default(null),
+  providerConfig: z.object({ grokAccountId: z.string().optional() }).optional(),
   createdAt: z.iso.datetime({ offset: true }),
   updatedAt: z.iso.datetime({ offset: true }),
   models: z.array(ModelSourceModelSchema).default([]),
@@ -63,7 +64,7 @@ export const ModelSourceModelInputSchema = z.object({
 });
 
 export const ModelSourceCreateRequestSchema = z.object({
-  kind: z.enum(["openai_compatible", "zai"]).optional(),
+  kind: z.enum(["openai_compatible", "zai", "grok_subscription"]).optional(),
   name: z.string().min(1).max(128),
   baseUrl: z.string().min(1).max(2048),
   apiKey: z.string().min(1).nullable().optional(),
@@ -73,6 +74,9 @@ export const ModelSourceCreateRequestSchema = z.object({
   supportsEmbeddings: z.boolean().optional(),
   timeoutSeconds: z.number().int().positive().nullable().optional(),
   maxConcurrency: z.number().int().positive().nullable().optional(),
+  // A Grok subscription source names the signed-in Grok account it borrows
+  // its token from; the server then fills its models from xAI.
+  providerConfig: z.object({ grokAccountId: z.string().min(1) }).optional(),
   models: z.array(ModelSourceModelInputSchema).default([]),
 });
 

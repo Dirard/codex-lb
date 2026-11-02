@@ -30,14 +30,21 @@ func (s *Store) SaveModelSource(ctx context.Context, source domain.ModelSource, 
 		source.UpdatedAt = time.Now().UTC()
 	}
 	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var oldKind, oldURL string
+		var oldKind, oldURL, oldConfigJSON string
 		var oldEnabled, oldChat, oldResponses bool
-		err := tx.QueryRowContext(ctx, `SELECT kind,base_url,is_enabled,supports_chat_completions,supports_responses
- FROM legacy_model_sources WHERE id=? AND deleted_at IS NULL`, source.ID).Scan(&oldKind, &oldURL, &oldEnabled, &oldChat, &oldResponses)
+		err := tx.QueryRowContext(ctx, `SELECT kind,base_url,is_enabled,supports_chat_completions,supports_responses,provider_config_json
+ FROM legacy_model_sources WHERE id=? AND deleted_at IS NULL`, source.ID).Scan(&oldKind, &oldURL, &oldEnabled, &oldChat, &oldResponses, &oldConfigJSON)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		routeChanged := err == nil && (oldKind != string(source.Kind) || oldURL != source.BaseURL || oldChat != source.Chat || oldResponses != source.Responses)
+		// A Grok subscription source that names another account talks to
+		// another xAI user, so it is a new route like a new base URL.
+		var oldConfig domain.ModelSourceProviderConfig
+		if err == nil && json.Unmarshal([]byte(oldConfigJSON), &oldConfig) != nil {
+			return fmt.Errorf("stored provider config: %w", ErrInvalid)
+		}
+		routeChanged := err == nil && (oldKind != string(source.Kind) || oldURL != source.BaseURL || oldChat != source.Chat || oldResponses != source.Responses ||
+			oldConfig.GrokAccountID != source.ProviderConfig.GrokAccountID)
 		enabledTransition := err == nil && !oldEnabled && source.Enabled
 		if routeChanged {
 			for _, table := range []string{"continuations", "codex_resource_owners", "affinity_bindings"} {

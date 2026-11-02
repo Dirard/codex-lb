@@ -4,7 +4,7 @@
 
 ## Title and scope
 
-Video generation is a separate function of codex-lb: several of the owner's SuperGrok accounts form their own pool on a dashboard page, and allowed API keys use it through a separate REST surface `/video/v1/*`, with text, first frame, last frame, keyframes and references as input. The only thing it shares with the ChatGPT pool is the API key, the body budget and the admin dashboard; accounts, routing, accounting and reports stay apart.
+Video generation is a separate function of codex-lb: several of the owner's SuperGrok accounts form their own pool on a dashboard page, and allowed API keys use it through a separate REST surface `/video/v1/*`, with text, first frame, last frame, keyframes and references as input. The only thing it shares with the ChatGPT pool is the API key, the body budget and the admin dashboard; accounts, routing, accounting and reports stay apart. Since go-v1.11.0 a pool account may also lend its token to a text model source of kind `grok_subscription`; that source, not the pool account, is routed and reported ([grok-subscription-text-source](grok-subscription-text-source.md)).
 
 ## Planning anchor
 

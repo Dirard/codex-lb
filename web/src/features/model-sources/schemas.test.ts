@@ -102,3 +102,14 @@ describe("ModelSourceUpdateRequestSchema", () => {
     expect(parsed.isEnabled).toBe(false);
   });
 });
+
+describe("Grok subscription sources", () => {
+  it("keep the account link in both directions", () => {
+    const source = ModelSourceSchema.parse({ ...BASE_SOURCE, kind: "grok_subscription", providerConfig: { grokAccountId: "vacc_alpha" } });
+    expect(source.providerConfig?.grokAccountId).toBe("vacc_alpha");
+    const request = ModelSourceCreateRequestSchema.parse({
+      kind: "grok_subscription", name: "Grok", baseUrl: "https://api.x.ai/v1", providerConfig: { grokAccountId: "vacc_alpha" },
+    });
+    expect(request).toMatchObject({ kind: "grok_subscription", providerConfig: { grokAccountId: "vacc_alpha" }, models: [] });
+  });
+});

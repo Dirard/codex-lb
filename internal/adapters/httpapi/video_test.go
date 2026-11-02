@@ -55,6 +55,10 @@ type xaiStub struct {
 	deviceAnswer map[string]string
 	billing      map[string]videoBilling
 	scopes       map[string]string
+	// responses records text requests; respond and models answer them.
+	responses []videoCreate
+	respond   func(account string, index int) (int, string)
+	models    func() (int, string)
 }
 
 type videoBilling struct {
@@ -71,6 +75,8 @@ func newXAIStub(t *testing.T) *xaiStub {
 	stub.get = func(string, string) (int, string) {
 		return 200, `{"status":"done","video":{"url":"https://vidgen.example.invalid/a.mp4","duration":2},"usage":{"cost_in_usd_ticks":1800000000},"progress":100}`
 	}
+	stub.respond = func(string, int) (int, string) { return 200, grokTextStream }
+	stub.models = func() (int, string) { return 200, grokLanguageModels }
 	stub.server = httptest.NewServer(http.HandlerFunc(stub.serve))
 	t.Cleanup(stub.server.Close)
 	return stub
@@ -157,6 +163,21 @@ func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(answer.status)
 		_, _ = io.WriteString(w, answer.body)
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/language-models":
+		status, payload := x.models()
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, payload)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/responses":
+		x.mu.Lock()
+		index := len(x.responses)
+		x.responses = append(x.responses, videoCreate{account: account, body: string(body)})
+		x.mu.Unlock()
+		status, payload := x.respond(account, index)
+		if status == http.StatusOK {
+			w.Header().Set("Content-Type", "text/event-stream")
+		}
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, payload)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/videos/generations":
 		x.mu.Lock()
 		index := len(x.creates)

@@ -1,4 +1,5 @@
-// Package xai talks to the xAI video API and token endpoint for the video pool.
+// Package xai talks to the xAI video API, language model list and token
+// endpoint for the Grok pool.
 package xai
 
 import (
@@ -10,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -257,6 +259,52 @@ func (c *Client) Usage(ctx context.Context, accessToken string) (application.Vid
 		usage.Percent = *payload.Config.Percent
 	}
 	return usage, nil
+}
+
+// LanguageModels lists the text models the token's subscription serves, with
+// xAI's list prices in 1e-4 USD per 1M tokens.
+func (c *Client) LanguageModels(ctx context.Context, accessToken string) ([]application.GrokTextModel, error) {
+	answer, err := c.video(ctx, http.MethodGet, "/v1/language-models", accessToken, nil)
+	if err != nil {
+		return nil, err
+	}
+	if answer.Status == http.StatusUnauthorized {
+		return nil, application.ErrGrokUnauthorized
+	}
+	if answer.Status != http.StatusOK {
+		return nil, fmt.Errorf("xai language models status %d", answer.Status)
+	}
+	var payload struct {
+		Models []struct {
+			ID              string   `json:"id"`
+			Aliases         []string `json:"aliases"`
+			InputModalities []string `json:"input_modalities"`
+			Input           *int64   `json:"prompt_text_token_price"`
+			Cached          *int64   `json:"cached_prompt_text_token_price"`
+			Output          *int64   `json:"completion_text_token_price"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(answer.Body, &payload) != nil {
+		return nil, errors.New("xai language models answer is not readable")
+	}
+	perMillion := func(value *int64) *float64 {
+		if value == nil || *value < 0 {
+			return nil
+		}
+		price := float64(*value) / 10000
+		return &price
+	}
+	models := make([]application.GrokTextModel, 0, len(payload.Models))
+	for _, model := range payload.Models {
+		if strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		models = append(models, application.GrokTextModel{
+			ID: model.ID, Aliases: model.Aliases, Vision: slices.Contains(model.InputModalities, "image"),
+			InputPerMillion: perMillion(model.Input), CachedPerMillion: perMillion(model.Cached), OutputPerMillion: perMillion(model.Output),
+		})
+	}
+	return models, nil
 }
 
 // CreateVideo posts a validated body unchanged.

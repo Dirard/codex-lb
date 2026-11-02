@@ -152,7 +152,10 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	catalogClient := chatgpt.NewModelCatalogClient("", "", &oauthClient)
 	catalogClient.ResolveClientVersion = data.store.LoadCodexClientVersion
 	catalog := application.NewModelCatalogService(data.store, catalogClient, tokens, application.ModelCatalogConfig{})
-	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client, UpstreamWebSocketSessions: capacity.UpstreamWebSockets,
+	// The Grok pool exists before the provider: Grok subscription sources
+	// borrow its account tokens.
+	videos := application.NewVideoService(data.store, data.vault, xai.New(xai.Config{HTTPClient: client}))
+	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client, UpstreamWebSocketSessions: capacity.UpstreamWebSockets, GrokTokens: videos,
 		ResolveClientVersion: data.store.LoadCodexClientVersion, ChatGPTReasoningFallback: catalog.SubscriptionReasoningFallback})
 	if err := catalog.Load(ctx); err != nil {
 		_ = accounts.Close()
@@ -208,7 +211,6 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	warmups.Diagnostics = proxy.Diagnostics
 	warmups.ConfigureAccountAdmission(proxy)
 	api.ConfigureWarmups(warmups)
-	videos := application.NewVideoService(data.store, data.vault, xai.New(xai.Config{HTTPClient: client}))
 	videos.ConfigureAdmission(proxy)
 	videos.ConfigureLogger(logger)
 	api.ConfigureVideo(videos)

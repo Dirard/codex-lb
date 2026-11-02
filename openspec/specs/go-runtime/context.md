@@ -870,3 +870,19 @@ The answer is 202 with an `id`. Poll `GET /video/v1/generations/{id}` until `sta
 - `cost_usd` is the cost xAI reports, not money charged to a subscription.
 
 Probe evidence and design: [grok-video-generation](../../../../specs/grok-video-generation.md).
+
+## Grok text models from the subscription (go-v1.11.0)
+
+A signed-in Grok account can also serve text. On **Settings → Model sources** choose **Add source → Grok subscription (SuperGrok)** and pick the account. The source fills its models and list prices from xAI's `GET /v1/language-models` and appears in the Codex catalog like any model source. Key access, allowlists, reservations, settlement, concurrency and route fencing work as for other sources.
+
+**Credential.** The source stores no key. Each request takes the account's current access token from the Grok pool, whose single-flight, claim-guarded refresh is the only place a rotating refresh token is renewed. A 401 before anything reaches the client is retried once with a newer token. The token is sent only to the provider's configured xAI base (`https://api.x.ai/v1` in production), never to a URL stored in the source; the source's base URL is fixed for the same reason. A missing account, one that needs a new sign-in or one denied access fails before dispatch with `grok_account_unavailable`. A pause on the Video page stops only video. Changing the linked account is a route change: continuations, owners and affinity of the old account are dropped.
+
+**Billing.** Text draws on the same weekly pool as video; the probe of 2026-11-02 left `prepaidBalance` at 0. Settlement uses xAI's list prices, although xAI reported about a third of that for the probe request.
+
+**Limits.**
+- Context window defaults to 256000 tokens, the smallest of current Grok text models; raise it per source if needed.
+- Reasoning efforts are not advertised, because xAI's handling of Codex's `reasoning.effort` is unverified.
+- New xAI models need a new source; the model list is read only at creation.
+- xAI's answer at an exhausted weekly pool has not been observed.
+
+Design: [grok-subscription-text-source](../../../../specs/grok-subscription-text-source.md).

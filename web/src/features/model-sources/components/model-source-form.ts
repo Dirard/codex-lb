@@ -27,8 +27,23 @@ export type ModelSourceFormValues = z.infer<typeof modelSourceFormSchema>;
 // Per-model settings the dialogs apply uniformly across every model ID entered
 // for the source. Pricing is USD per 1M tokens; blank means "unknown" (cost
 // settles at $0 for that model).
+export type ModelSourceKind = "openai_compatible" | "zai" | "grok_subscription";
+
+// A Grok subscription source always talks to xAI; the server rejects any other URL.
+export const GROK_TEXT_BASE_URL = "https://api.x.ai/v1";
+
+// A Grok account is named by its label, else its e-mail, else its id.
+export function grokAccountName(account: { label: string; email: string; id: string }): string {
+  return account.label || account.email || account.id;
+}
+
+export function modelSourceKind(value: string): ModelSourceKind {
+  return value === "zai" || value === "grok_subscription" ? value : "openai_compatible";
+}
+
 export type ModelSourceDraft = {
-  kind: "openai_compatible" | "zai";
+  kind: ModelSourceKind;
+  grokAccountId: string;
   timeoutSeconds: string;
   maxConcurrency: string;
   supportsChatCompletions: boolean;
@@ -52,6 +67,7 @@ export type ModelSourceDraft = {
 
 export const initialModelSourceDraft: ModelSourceDraft = {
   kind: "openai_compatible",
+  grokAccountId: "",
   timeoutSeconds: "",
   maxConcurrency: "",
   supportsChatCompletions: true,
@@ -79,6 +95,16 @@ export function modelSourceDraftReducer(
 ): ModelSourceDraft {
   if (patch.kind === "zai") {
     return { ...state, ...patch, supportsAudioTranscriptions: false, supportsEmbeddings: false };
+  }
+  if (patch.kind === "grok_subscription") {
+    return {
+      ...state,
+      ...patch,
+      supportsChatCompletions: false,
+      supportsResponses: true,
+      supportsAudioTranscriptions: false,
+      supportsEmbeddings: false,
+    };
   }
   return { ...state, ...patch };
 }
@@ -273,7 +299,8 @@ export function draftFromSource(source: ModelSource): ModelSourceDraft {
   const firstModel = source.models[0];
   const reasoningMetadata = parseReasoningMetadata(firstModel?.rawMetadataJson);
   return {
-    kind: source.kind === "zai" ? "zai" : "openai_compatible",
+    kind: modelSourceKind(source.kind),
+    grokAccountId: source.providerConfig?.grokAccountId ?? "",
     timeoutSeconds: numberToInput(source.timeoutSeconds),
     maxConcurrency: numberToInput(source.maxConcurrency),
     supportsChatCompletions: source.supportsChatCompletions,
