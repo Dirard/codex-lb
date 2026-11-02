@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex-lb/internal/application"
+	"codex-lb/internal/domain"
 )
 
 const defaultUsageBaseURL = "https://chatgpt.com"
@@ -24,6 +25,9 @@ type UsageConfig struct {
 // UsageClient calls the ChatGPT backend-api usage and reset-credit endpoints.
 type UsageClient struct {
 	config UsageConfig
+	// ResolveClientVersion supplies the Codex client version of the
+	// subscription read's identity; nil uses the default version.
+	ResolveClientVersion func(context.Context) (string, error)
 }
 
 func NewUsageClient(config UsageConfig) *UsageClient {
@@ -80,7 +84,26 @@ func (c *UsageClient) FetchSubscription(ctx context.Context, accessToken, chatgp
 		ActiveUntil *string `json:"active_until"`
 		WillRenew   *bool   `json:"will_renew"`
 	}
-	if err := c.get(ctx, accessToken, chatgptAccountID, "/subscriptions?account_id="+url.QueryEscape(chatgptAccountID), &payload); err != nil {
+	version := domain.DefaultCodexClientVersion
+	if c.ResolveClientVersion != nil {
+		var err error
+		if version, err = c.ResolveClientVersion(ctx); err != nil {
+			return application.Subscription{}, usageError("invalid_request", "Codex client version could not be read", 0)
+		}
+	}
+	if !domain.ValidCodexClientVersion(version) {
+		return application.Subscription{}, usageError("invalid_request", "Codex client version is invalid", 0)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/subscriptions?account_id="+url.QueryEscape(chatgptAccountID)), nil)
+	if err != nil {
+		return application.Subscription{}, usageError("invalid_request", "usage request could not be built", 0)
+	}
+	c.headers(req, accessToken, chatgptAccountID)
+	// Without the Codex client identity Cloudflare answers this web endpoint
+	// with a 403 challenge page; the /wham paths accept any client.
+	req.Header.Set("Originator", "codex_cli_rs")
+	req.Header.Set("User-Agent", "codex_cli_rs/"+version)
+	if err := c.do(req, &payload); err != nil {
 		return application.Subscription{}, err
 	}
 	if payload.ActiveUntil == nil {

@@ -195,6 +195,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	api.ConfigureModelCatalog(catalog)
 	api.ConfigureModelPricing(data.store)
 	usageClient := chatgpt.NewUsageClient(chatgpt.UsageConfig{HTTPClient: &oauthClient})
+	usageClient.ResolveClientVersion = data.store.LoadCodexClientVersion
 	registry := metrics.NewRegistry()
 	reporter := newBackgroundReporter(logger, registry)
 	usage := application.NewAccountUsageService(data.store, tokens, usageClient, data.store, time.Now)

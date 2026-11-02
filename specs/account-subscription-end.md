@@ -46,7 +46,7 @@ Requirements:
 The usage poller SHALL attempt a subscription read for each usage-eligible ChatGPT account at most once per 15 minutes per account incarnation, counting failed attempts.
 
   R2:
-A read SHALL send `GET /backend-api/subscriptions?account_id=<ChatGPT account id>` with the account's access token and `chatgpt-account-id`, and SHALL be retried once after the usage token refresh on a definitive 401. An account with a synthetic ChatGPT account id SHALL NOT be read.
+A read SHALL send `GET /backend-api/subscriptions?account_id=<ChatGPT account id>` with the account's access token, `chatgpt-account-id`, `Originator: codex_cli_rs` and `User-Agent: codex_cli_rs/<saved Codex client version>`, and SHALL be retried once after the usage token refresh on a definitive 401. An account with a synthetic ChatGPT account id SHALL NOT be read.
 
   R3:
 A successful read SHALL keep in memory `active_until`, `will_renew`, the time of the read and the ChatGPT account id it was taken for. An answer without a valid `active_until` SHALL count as a failed read.
@@ -68,7 +68,7 @@ AccountSubscription
 
 Data:
 subscription_read:
-- request: `GET {usage base}/backend-api/subscriptions?account_id=<query-escaped ChatGPT account id>`, headers as for `/wham/usage`;
+- request: `GET {usage base}/backend-api/subscriptions?account_id=<query-escaped ChatGPT account id>`, headers as for `/wham/usage` plus the Codex client identity of model catalog reads (`Originator`, `User-Agent` with the saved version);
 - interval: 15 minutes per account incarnation, measured from the start of the last attempt;
 - answer fields used: `active_until` (RFC 3339), `will_renew` (boolean); all others are ignored.
 
@@ -91,6 +91,8 @@ internal/adapters/chatgpt/usage_test.go
    requirements: R2, R3
  - description: an answer without `active_until` is `invalid_response`; a 401 keeps its status; a synthetic id sends no request
    requirements: R2, R3
+ - description: regression for go-v1.10.5 — an upstream that answers other clients with a 403 challenge page answers the read, which carries the saved version in `User-Agent`; without a valid version nothing is sent
+   requirements: R2
 internal/application/account_subscription_test.go
  - description: a read is kept, served for the same incarnation and ChatGPT account id only, and not repeated within 15 minutes
    requirements: R1, R3, R5
@@ -155,8 +157,9 @@ web/src/features/accounts/components/subscription-remaining.test.tsx
 6. [x] Show the read in `SubscriptionRemaining` with locales and vitest cases (R7–R9).
 7. [x] Update operating notes: `openspec/specs/go-runtime/context.md` (the endpoint and the probe) and `openspec/specs/account-identity/context.md` (a refresh does not update the claim).
 8. [x] Run all gates.
-9. [ ] Archive the change, sync the deltas, write `openspec/specs/go-runtime/releases/go-v1.10.5.md` and publish the release.
-10. [ ] After the owner updates prod: check that skolcov shows the paid end.
+9. [x] Archive the change, sync the deltas, write `openspec/specs/go-runtime/releases/go-v1.10.5.md` and publish the release.
+10. [-] After the owner updates prod: check that skolcov shows the paid end. On go-v1.10.5 every read got Cloudflare's 403 challenge; fixed by task 11.
+11. [x] Send the Codex client identity on the read (OpenSpec change `fix-subscription-read-identity`, release go-v1.10.6) with an adapter regression test (R2).
 
 ## Open questions
 
@@ -172,3 +175,4 @@ None blocking. Non-blocking, under the stated assumption: the answer of `/subscr
 - The token-date fallback and `subscriptionActiveUntil` stay for compatibility and for accounts without a read.
 - Workflow verification loop: skipped; the slice is narrow and every decision comes from the owner's request or the probe.
 - Spec status: `specs/dashboard-redesign.md` reused unchanged.
+- 2026-11-02, after go-v1.10.5 on prod: every read got Cloudflare's 403 challenge because the Go client sent its default `User-Agent`; the owner's probe had sent the Codex identity. An owner-approved diagnostic from prod confirmed it, and the read now sends `Originator` and `User-Agent` like model catalog reads. Usage and reset-credit reads keep their headers.

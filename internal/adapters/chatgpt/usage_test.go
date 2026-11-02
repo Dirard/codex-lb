@@ -303,3 +303,52 @@ func TestFetchSubscriptionRejectsAnswersWithoutAnEnd(t *testing.T) {
 		t.Fatalf("requests = %d, want one per answer and none for synthetic ids", requests)
 	}
 }
+
+// Regression for go-v1.10.5 on prod: Cloudflare answered the subscription read
+// without the Codex client identity with a 403 challenge page, so no account
+// got its live end.
+func TestFetchSubscriptionSendsTheCodexClientIdentity(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("Originator") != "codex_cli_rs" || !strings.HasPrefix(r.Header.Get("User-Agent"), "codex_cli_rs/") {
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			w.Header().Set("cf-mitigated", "challenge")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("<!DOCTYPE html><title>Just a moment...</title>"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"active_until":"2026-11-05T18:27:39Z","will_renew":true,"user_agent":"` + r.Header.Get("User-Agent") + `"}`))
+	}))
+	defer server.Close()
+	client := NewUsageClient(UsageConfig{BaseURL: server.URL, HTTPClient: server.Client()})
+	if _, err := client.FetchSubscription(context.Background(), "token-1", "acct-1"); err != nil {
+		t.Fatalf("default identity: %v", err)
+	}
+
+	var agent string
+	identity := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agent = r.Header.Get("User-Agent")
+		server.Config.Handler.ServeHTTP(w, r)
+	}))
+	defer identity.Close()
+	client = NewUsageClient(UsageConfig{BaseURL: identity.URL, HTTPClient: identity.Client()})
+	client.ResolveClientVersion = func(context.Context) (string, error) { return "0.165.4", nil }
+	if _, err := client.FetchSubscription(context.Background(), "token-1", "acct-1"); err != nil || agent != "codex_cli_rs/0.165.4" {
+		t.Fatalf("configured identity %q: %v", agent, err)
+	}
+
+	before := requests
+	for _, resolve := range []func(context.Context) (string, error){
+		func(context.Context) (string, error) { return "", errors.New("settings unavailable") },
+		func(context.Context) (string, error) { return "not a version", nil },
+	} {
+		client.ResolveClientVersion = resolve
+		if _, err := client.FetchSubscription(context.Background(), "token-1", "acct-1"); err == nil {
+			t.Fatal("read without a valid Codex client version")
+		}
+	}
+	if requests != before {
+		t.Fatalf("%d reads sent without a valid version", requests-before)
+	}
+}
