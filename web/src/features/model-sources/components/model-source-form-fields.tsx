@@ -10,7 +10,10 @@ import type {
   ModelSourceDraft,
   ModelSourceFormValues,
 } from "@/features/model-sources/components/model-source-form";
-import { parseReasoningEffortsInput } from "@/features/model-sources/components/model-source-form";
+import {
+  modelSourceKind,
+  parseReasoningEffortsInput,
+} from "@/features/model-sources/components/model-source-form";
 
 type ModelSourceFormFieldsProps = {
   control: Control<ModelSourceFormValues>;
@@ -34,6 +37,30 @@ const CAPABILITY_TOGGLES = [
 
 const DEFAULT_REASONING_EFFORTS = ["low", "medium", "high"];
 
+type ModelSourceKindSelectProps = {
+  draft: ModelSourceDraft;
+  updateDraft: (patch: Partial<ModelSourceDraft>) => void;
+  readOnly?: boolean;
+};
+
+export function ModelSourceKindSelect({ draft, updateDraft, readOnly = false }: ModelSourceKindSelectProps) {
+  const { t } = useTranslation();
+  const fieldId = useId();
+  return (
+    <div className="space-y-1">
+      <label htmlFor={`${fieldId}-kind`} className="text-sm font-medium">{t("modelSources.fields.provider", { defaultValue: "Provider" })}</label>
+      <Select value={draft.kind} disabled={readOnly} onValueChange={(value) => updateDraft({ kind: modelSourceKind(value) })}>
+        <SelectTrigger id={`${fieldId}-kind`} className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="openai_compatible">OpenAI-compatible API</SelectItem>
+          <SelectItem value="zai">Z.AI / GLM</SelectItem>
+          <SelectItem value="grok_subscription">{t("modelSources.grok.provider")}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 export function ModelSourceFormFields({
   control,
   draft,
@@ -44,18 +71,12 @@ export function ModelSourceFormFields({
 }: ModelSourceFormFieldsProps) {
   const { t } = useTranslation();
   const fieldId = useId();
+  // A Grok subscription source borrows its account's token for xAI's fixed
+  // endpoint, so it has no key to enter and no URL to change.
+  const grok = draft.kind === "grok_subscription";
   return (
     <>
-      <div className="space-y-1">
-        <label htmlFor={`${fieldId}-kind`} className="text-sm font-medium">{t("modelSources.fields.provider", { defaultValue: "Provider" })}</label>
-        <Select value={draft.kind} disabled={kindReadOnly} onValueChange={(value) => updateDraft({ kind: value === "zai" ? "zai" : "openai_compatible" })}>
-          <SelectTrigger id={`${fieldId}-kind`} className="w-full"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="openai_compatible">OpenAI-compatible API</SelectItem>
-            <SelectItem value="zai">Z.AI / GLM</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      <ModelSourceKindSelect draft={draft} updateDraft={updateDraft} readOnly={kindReadOnly} />
       <div className="grid gap-3 sm:grid-cols-2">
         <FormField
           control={control}
@@ -78,7 +99,7 @@ export function ModelSourceFormFields({
             <FormItem>
 	              <FormLabel>{t("modelSources.fields.baseUrl")}</FormLabel>
               <FormControl>
-                <Input {...field} placeholder="https://api.example.com/v1" autoComplete="off" />
+                <Input {...field} placeholder="https://api.example.com/v1" autoComplete="off" readOnly={grok} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -86,19 +107,21 @@ export function ModelSourceFormFields({
         />
       </div>
 
-      <FormField
-        control={control}
-        name="apiKey"
-        render={({ field }) => (
-          <FormItem>
-            <FormLabel>{apiKeyLabel}</FormLabel>
-            <FormControl>
-              <Input {...field} type="password" autoComplete="new-password" placeholder={apiKeyPlaceholder} />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
+      {grok ? null : (
+        <FormField
+          control={control}
+          name="apiKey"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{apiKeyLabel}</FormLabel>
+              <FormControl>
+                <Input {...field} type="password" autoComplete="new-password" placeholder={apiKeyPlaceholder} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
 
       <FormField
         control={control}
@@ -205,7 +228,7 @@ export function ModelSourceFormFields({
           <label key={key} className="flex items-center gap-2 rounded-md border p-2 text-sm">
             <Checkbox
               checked={draft[key]}
-              disabled={draft.kind === "zai" && ["supportsAudioTranscriptions", "supportsEmbeddings"].includes(key)}
+              disabled={draft.kind !== "openai_compatible" && ["supportsAudioTranscriptions", "supportsEmbeddings"].includes(key)}
               onCheckedChange={(checked) =>
                 updateDraft({
                   [key]: checked === true,

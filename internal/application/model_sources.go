@@ -105,7 +105,20 @@ type ModelSourceService struct {
 	// AllowPrivateDestinations accepts base URLs on non-public addresses for
 	// self-hosted sources; otherwise such URLs are rejected when set.
 	AllowPrivateDestinations bool
+	// Grok is the Grok pool that subscription sources borrow tokens from;
+	// without it such sources cannot be created.
+	Grok GrokSourceAccounts
 }
+
+// GrokSourceAccounts is the Grok pool as model source creation sees it.
+type GrokSourceAccounts interface {
+	GrokAccountExists(ctx context.Context, accountID string) (bool, error)
+	GrokTextModels(ctx context.Context, accountID string) ([]GrokTextModel, error)
+}
+
+// grokContextWindow is the smallest context of the current Grok text models
+// (grok-code-fast-1), so Codex compacts before any of them overflows.
+const grokContextWindow = 256000
 
 func NewModelSourceService(store ModelSourceRepository, cipher SecretCipher) *ModelSourceService {
 	return &ModelSourceService{store: store, cipher: cipher}
@@ -130,6 +143,11 @@ func (s *ModelSourceService) Create(ctx context.Context, request ModelSourceCrea
 	}
 	if source.Kind == "" {
 		source.Kind = domain.ModelSourceOpenAICompatible
+	}
+	if source.Kind == domain.ModelSourceGrokSubscription {
+		if err := s.prepareGrokSource(ctx, &source, request); err != nil {
+			return domain.ModelSource{}, err
+		}
 	}
 	credential, err := s.credential(source.ID, request.APIKey, false)
 	if err != nil {
@@ -208,6 +226,16 @@ func (s *ModelSourceService) Update(ctx context.Context, id string, request Mode
 	if request.Models != nil {
 		source.Models = modelsFromInputs(*request.Models, source.Models)
 	}
+	if source.Kind == domain.ModelSourceGrokSubscription {
+		if hasAPIKey(request.APIKey) {
+			return domain.ModelSource{}, errGrokSourceKey
+		}
+		if request.ProviderConfig != nil {
+			if err := s.requireGrokAccount(ctx, source.ProviderConfig.GrokAccountID); err != nil {
+				return domain.ModelSource{}, err
+			}
+		}
+	}
 	source.UpdatedAt = time.Now().UTC()
 	credential, err := s.credential(source.ID, request.APIKey, false)
 	if err != nil {
@@ -225,6 +253,93 @@ func (s *ModelSourceService) Update(ctx context.Context, id string, request Mode
 		return domain.ModelSource{}, err
 	}
 	return s.store.GetModelSource(ctx, id)
+}
+
+var errGrokSourceKey = fmt.Errorf("%w: Grok subscription sources use the account's token, not an API key", domain.ErrInvalid)
+
+// prepareGrokSource checks the account link and fixed endpoint of a new Grok
+// subscription source and, when no models are given, fills them from xAI.
+func (s *ModelSourceService) prepareGrokSource(ctx context.Context, source *domain.ModelSource, request ModelSourceCreateRequest) error {
+	if hasAPIKey(request.APIKey) {
+		return errGrokSourceKey
+	}
+	if strings.TrimSpace(source.BaseURL) == "" {
+		source.BaseURL = domain.GrokTextBaseURL
+	}
+	source.Chat = boolOrDefault(request.Chat, false)
+	source.Responses = boolOrDefault(request.Responses, true)
+	accountID := source.ProviderConfig.GrokAccountID
+	if err := s.requireGrokAccount(ctx, accountID); err != nil {
+		return err
+	}
+	if len(source.Models) != 0 {
+		return nil
+	}
+	// Everything but the models is checked before xAI is asked for them.
+	draft := *source
+	draft.Models = []domain.ModelSourceModel{{Model: "pending", Enabled: true}}
+	if err := draft.Validate(); err != nil {
+		return err
+	}
+	listed, err := s.Grok.GrokTextModels(ctx, accountID)
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil || len(listed) == 0 {
+		return &ProxyError{Code: "grok_models_unavailable", Status: 502,
+			Message: "xAI did not list the Grok account's text models; check that the account is signed in"}
+	}
+	source.Models = grokSourceModels(listed, source.CreatedAt)
+	return nil
+}
+
+func (s *ModelSourceService) requireGrokAccount(ctx context.Context, accountID string) error {
+	if s.Grok == nil {
+		return fmt.Errorf("%w: Grok accounts are not available", domain.ErrInvalid)
+	}
+	if strings.TrimSpace(accountID) == "" {
+		return fmt.Errorf("%w: Grok subscription sources need a Grok account", domain.ErrInvalid)
+	}
+	exists, err := s.Grok.GrokAccountExists(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: unknown Grok account", domain.ErrInvalid)
+	}
+	return nil
+}
+
+// grokSourceModels turns xAI's list into enabled source models. An alias that
+// repeats a model id or an earlier alias is dropped, as the source needs
+// unique names.
+func grokSourceModels(listed []GrokTextModel, now time.Time) []domain.ModelSourceModel {
+	seen := make(map[string]bool, len(listed))
+	for _, model := range listed {
+		seen[model.ID] = true
+	}
+	models := make([]domain.ModelSourceModel, 0, len(listed))
+	for _, model := range listed {
+		aliases := make([]string, 0, len(model.Aliases))
+		for _, alias := range model.Aliases {
+			alias = strings.TrimSpace(alias)
+			if alias != "" && !seen[alias] {
+				seen[alias] = true
+				aliases = append(aliases, alias)
+			}
+		}
+		models = append(models, domain.ModelSourceModel{
+			Model: model.ID, Aliases: aliases, DisplayName: model.ID, ContextWindow: grokContextWindow,
+			Streaming: true, Tools: true, Vision: model.Vision,
+			InputPerMillion: model.InputPerMillion, CachedPerMillion: model.CachedPerMillion, OutputPerMillion: model.OutputPerMillion,
+			Enabled: true, CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	return models
+}
+
+func hasAPIKey(value NullableString) bool {
+	return value.Set && value.Value != nil && strings.TrimSpace(*value.Value) != ""
 }
 
 func (s *ModelSourceService) Price(ctx context.Context, account domain.Account, model string) (pricing.Price, error) {

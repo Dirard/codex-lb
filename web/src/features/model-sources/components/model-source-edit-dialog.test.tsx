@@ -1,7 +1,9 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 
+import { server } from "@/test/mocks/server";
 import { renderWithProviders } from "@/test/utils";
 import type { ModelSource } from "@/features/model-sources/schemas";
 
@@ -433,5 +435,53 @@ describe("ModelSourceCreateDialog", () => {
       kind: "zai", baseUrl: "https://api.z.ai/api/v1", apiKey: "synthetic-only-key",
       supportsResponses: true, supportsChatCompletions: false,
     });
+  });
+
+  it("creates a Grok subscription source from a signed-in account without URL, key or models", async () => {
+    const account = (id: string, label: string, status: string) => ({
+      id, email: `${label}@example.invalid`, label, status, cooldownUntil: null, lastRefusalCode: "", lastUsedAt: null,
+      createdAt: "2026-11-01T00:00:00Z", unfinishedJobs: 0, doneJobs: 0, costUsd: 0, usagePercent: 8, usagePeriodEnd: null,
+      usageCheckedAt: null, usageError: "",
+    });
+    server.use(http.get("/api/video/accounts", () => HttpResponse.json({
+      accounts: [account("vacc_alpha", "alpha", "active"), account("vacc_beta", "beta", "reauth_required")],
+    })));
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <ModelSourceCreateDialog open busy={false} onOpenChange={vi.fn()} onSubmit={onSubmit} />,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("option", { name: "Grok subscription (SuperGrok)" }));
+    expect(screen.queryByLabelText("Upstream API key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Models")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Grok account" })).toBeEnabled());
+    await user.click(screen.getByRole("combobox", { name: "Grok account" }));
+    expect(screen.getByRole("option", { name: "beta (needs a new sign-in)" })).toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("option", { name: "alpha" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toEqual({
+      kind: "grok_subscription", timeoutSeconds: null, maxConcurrency: null, name: "Grok", baseUrl: "https://api.x.ai/v1",
+      supportsChatCompletions: false, supportsResponses: true, providerConfig: { grokAccountId: "vacc_alpha" }, models: [],
+    });
+  });
+});
+
+describe("ModelSourceEditDialog for a Grok subscription source", () => {
+  it("shows no key field and keeps the xAI endpoint", () => {
+    renderWithProviders(
+      <ModelSourceEditDialog
+        open
+        busy={false}
+        source={createModelSource({ kind: "grok_subscription", baseUrl: "https://api.x.ai/v1", supportsChatCompletions: false, supportsResponses: true, providerConfig: { grokAccountId: "vacc_alpha" } })}
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(screen.queryByLabelText("Upstream API key")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Base URL")).toHaveAttribute("readonly");
+    expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
   });
 });

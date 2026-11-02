@@ -14,7 +14,14 @@ type ModelSourceKind string
 const (
 	ModelSourceOpenAICompatible ModelSourceKind = "openai_compatible"
 	ModelSourceZAI              ModelSourceKind = "zai"
+	// ModelSourceGrokSubscription serves text through a Grok account of the
+	// video pool, with that account's OAuth token instead of an API key.
+	ModelSourceGrokSubscription ModelSourceKind = "grok_subscription"
 )
+
+// GrokTextBaseURL is the only endpoint of a Grok subscription source; the
+// subscription token is never sent anywhere else.
+const GrokTextBaseURL = "https://api.x.ai/v1"
 
 type ModelSource struct {
 	ID             string                    `json:"id"`
@@ -42,6 +49,9 @@ type ModelSourceProviderConfig struct {
 	EnableGLMThinking  bool                       `json:"enableGlmThinking,omitempty"`
 	AllowNoSSEDone     bool                       `json:"allowNoSseDone,omitempty"`
 	AllowMissingUsage  bool                       `json:"allowMissingUsage,omitempty"`
+	// GrokAccountID names the video-pool account a Grok subscription source
+	// borrows its token from; other kinds leave it empty.
+	GrokAccountID string `json:"grokAccountId,omitempty"`
 }
 
 type ModelSourceModel struct {
@@ -77,8 +87,21 @@ func (source ModelSource) Validate() error {
 		if source.Audio || source.Embeddings {
 			return fmt.Errorf("%w: Z.AI sources support Chat Completions and Responses only", ErrInvalid)
 		}
+	case ModelSourceGrokSubscription:
+		if source.Audio || source.Embeddings {
+			return fmt.Errorf("%w: Grok subscription sources support Chat Completions and Responses only", ErrInvalid)
+		}
+		if strings.TrimSpace(source.BaseURL) != GrokTextBaseURL {
+			return fmt.Errorf("%w: Grok subscription sources use %s", ErrInvalid, GrokTextBaseURL)
+		}
+		if id := source.ProviderConfig.GrokAccountID; strings.TrimSpace(id) == "" || id != strings.TrimSpace(id) || len(id) > 128 {
+			return fmt.Errorf("%w: Grok subscription sources need a Grok account", ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("%w: unsupported model source kind", ErrInvalid)
+	}
+	if source.Kind != ModelSourceGrokSubscription && source.ProviderConfig.GrokAccountID != "" {
+		return fmt.Errorf("%w: only Grok subscription sources name a Grok account", ErrInvalid)
 	}
 	if !source.Chat && !source.Responses && !source.Audio && !source.Embeddings {
 		return fmt.Errorf("%w: model source needs at least one protocol", ErrInvalid)

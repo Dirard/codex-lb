@@ -35,6 +35,13 @@ type ChatGPTTokenSource interface {
 	ForceRefresh(context.Context, domain.Account, string) (string, error)
 }
 
+// GrokTokenSource lends a Grok pool account's current access token to a
+// Grok subscription source. rejectedVersion, when not negative, asks for a
+// token newer than the one xAI rejected.
+type GrokTokenSource interface {
+	GrokAccessToken(ctx context.Context, accountID string, rejectedVersion int64) (string, int64, error)
+}
+
 type Config struct {
 	HTTPClient               *http.Client
 	ChatGPTBaseURL           string
@@ -44,6 +51,12 @@ type Config struct {
 	ChatGPTReasoningFallback func(string) string
 	// UpstreamWebSocketSessions bounds live ChatGPT WebSocket sessions; 0 keeps the default.
 	UpstreamWebSocketSessions int
+	// GrokTokens serves Grok subscription sources; without it they fail
+	// before dispatch.
+	GrokTokens GrokTokenSource
+	// GrokBaseURL is where Grok subscription tokens go, whatever a source
+	// stores; tests replace it.
+	GrokBaseURL string
 }
 
 type Adapter struct {
@@ -75,6 +88,9 @@ func New(store SourceStore, tokens ChatGPTTokenSource, cipher application.Secret
 	}
 	if config.CodexVersion == "" {
 		config.CodexVersion = domain.DefaultCodexClientVersion
+	}
+	if config.GrokBaseURL == "" {
+		config.GrokBaseURL = domain.GrokTextBaseURL
 	}
 	client := upstream.New(config.HTTPClient, config.Continuations)
 	client.SetWebSocketSessionLimit(config.UpstreamWebSocketSessions)
@@ -139,7 +155,16 @@ func (a *Adapter) respondExternal(
 	if err != nil {
 		return application.ResponseResult{}, providerFailure("model_source_credential_unavailable", 0, false)
 	}
-	key, err := a.plainCredential(credential.ExternalKeyEncrypted)
+	grok := source.Kind == domain.ModelSourceGrokSubscription
+	var key string
+	var tokenVersion int64
+	baseURL := source.BaseURL
+	if grok {
+		key, tokenVersion, err = a.grokToken(ctx, source, -1)
+		baseURL = a.config.GrokBaseURL
+	} else {
+		key, err = a.plainCredential(credential.ExternalKeyEncrypted)
+	}
 	if err != nil {
 		return application.ResponseResult{}, err
 	}
@@ -167,9 +192,41 @@ func (a *Adapter) respondExternal(
 		ProviderID: string(source.Kind), AccountID: source.ID, KeyID: target.KeyID,
 		AccountGeneration: target.Account.Generation, RouteRevision: target.Account.RouteRevision,
 		SessionID: target.SessionID, RequiredCapability: target.RequiredCapability,
-		BaseURL: source.BaseURL, Credential: key, Capabilities: capabilities,
+		BaseURL: baseURL, Credential: key, Capabilities: capabilities,
+	}
+	result, callErr := a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
+	if !grok || !retryableAuthRejection(result, callErr) {
+		return result, callErr
+	}
+	// The subscription token expired or was revoked before xAI did anything:
+	// the same account may answer once more with a newer token.
+	if upstreamTarget.Credential, _, err = a.grokToken(ctx, source, tokenVersion); err != nil {
+		return result, err
 	}
 	return a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
+}
+
+// grokToken takes the Grok account's current token for a subscription source.
+func (a *Adapter) grokToken(ctx context.Context, source domain.ModelSource, rejectedVersion int64) (string, int64, error) {
+	if a.config.GrokTokens == nil {
+		return "", 0, providerFailure("grok_account_unavailable", 0, false)
+	}
+	token, version, err := a.config.GrokTokens.GrokAccessToken(ctx, source.ProviderConfig.GrokAccountID, rejectedVersion)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", 0, ctx.Err()
+		}
+		return "", 0, providerFailure("grok_account_unavailable", 0, false)
+	}
+	return token, version, nil
+}
+
+// retryableAuthRejection is a definitive 401 that left no trace for the
+// client: no output, usage or failed terminal event.
+func retryableAuthRejection(result application.ResponseResult, err error) bool {
+	var failure *application.ProviderFailure
+	return !result.OutputObserved && !result.UsageReported && !result.UsageKnown &&
+		errors.As(err, &failure) && failure.Status == http.StatusUnauthorized
 }
 
 func (a *Adapter) respondChatGPT(

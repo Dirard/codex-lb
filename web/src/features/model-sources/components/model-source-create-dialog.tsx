@@ -15,6 +15,11 @@ import {
 import { Form } from "@/components/ui/form";
 import { ModelSourceFormFields } from "@/features/model-sources/components/model-source-form-fields";
 import {
+  GrokSourceCreateForm,
+  type GrokSourceValues,
+} from "@/features/model-sources/components/grok-source-fields";
+import {
+  GROK_TEXT_BASE_URL,
   initialModelSourceDraft,
   createModelSourceFormSchema,
   modelInputsFromForm,
@@ -66,6 +71,21 @@ export function ModelSourceCreateDialog({
     onOpenChange(false);
   };
 
+  // The server fills a Grok source's models and prices from xAI.
+  const handleGrokSubmit = async (values: GrokSourceValues) => {
+    await onSubmit({
+      kind: "grok_subscription",
+      ...sourceRuntimeOptions(draft),
+      name: values.name.trim(),
+      baseUrl: GROK_TEXT_BASE_URL,
+      supportsChatCompletions: false,
+      supportsResponses: true,
+      providerConfig: { grokAccountId: values.grokAccountId },
+      models: [],
+    });
+    onOpenChange(false);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
@@ -74,21 +94,25 @@ export function ModelSourceCreateDialog({
 	          <DialogDescription>{t("modelSources.createDialog.description")}</DialogDescription>
         </DialogHeader>
 
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
-            <ModelSourceFormFields
-              control={form.control}
-              draft={draft}
-              updateDraft={updateDraft}
-	              apiKeyLabel={t("modelSources.fields.upstreamApiKey")}
-            />
-            <DialogFooter>
-              <Button type="submit" disabled={busy || form.formState.isSubmitting}>
-	                {t("common.actions.create")}
-              </Button>
-            </DialogFooter>
-          </form>
-        </Form>
+        {draft.kind === "grok_subscription" ? (
+          <GrokSourceCreateForm busy={busy} draft={draft} updateDraft={updateDraft} onSubmit={handleGrokSubmit} />
+        ) : (
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+              <ModelSourceFormFields
+                control={form.control}
+                draft={draft}
+                updateDraft={updateDraft}
+                apiKeyLabel={t("modelSources.fields.upstreamApiKey")}
+              />
+              <DialogFooter>
+                <Button type="submit" disabled={busy || form.formState.isSubmitting}>
+                  {t("common.actions.create")}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        )}
       </DialogContent>
     </Dialog>
   );

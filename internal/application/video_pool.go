@@ -49,6 +49,7 @@ type VideoUpstream interface {
 	PollDeviceLogin(ctx context.Context, clientID, deviceCode string) (VideoTokens, error)
 	Identity(ctx context.Context, accessToken string) (VideoIdentity, error)
 	Usage(ctx context.Context, accessToken string) (VideoUsage, error)
+	LanguageModels(ctx context.Context, accessToken string) ([]GrokTextModel, error)
 	CreateVideo(ctx context.Context, token string, body []byte) (VideoUpstreamResponse, error)
 	GetVideo(ctx context.Context, token, requestID string) (VideoUpstreamResponse, error)
 }

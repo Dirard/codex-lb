@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"codex-lb/internal/application"
@@ -23,7 +24,21 @@ func (s *Server) modelSources() (*application.ModelSourceService, bool) {
 	}
 	service := application.NewModelSourceService(store, s.cipher)
 	service.AllowPrivateDestinations = s.config.AllowPrivateModelSources
+	if s.video != nil {
+		service.Grok = s.video
+	}
 	return service, true
+}
+
+// failModelSource answers a source edit; a Grok model list failure keeps its
+// own code so the dashboard can explain it.
+func (s *Server) failModelSource(w http.ResponseWriter, err error) {
+	var proxyErr *application.ProxyError
+	if errors.As(err, &proxyErr) {
+		writeError(w, proxyErr.Status, proxyErr.Code, proxyErr.Message)
+		return
+	}
+	s.fail(w, err)
 }
 
 func (s *Server) listModelSources(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +72,7 @@ func (s *Server) createModelSource(w http.ResponseWriter, r *http.Request) {
 	}
 	source, err := service.Create(r.Context(), request)
 	if err != nil {
-		s.fail(w, err)
+		s.failModelSource(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, source)
@@ -75,7 +90,7 @@ func (s *Server) updateModelSource(w http.ResponseWriter, r *http.Request) {
 	}
 	source, err := service.Update(r.Context(), r.PathValue("id"), request)
 	if err != nil {
-		s.fail(w, err)
+		s.failModelSource(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, source)

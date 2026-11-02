@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Database, Pencil, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -8,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ModelSourceCreateDialog } from "@/features/model-sources/components/model-source-create-dialog";
 import { ModelSourceEditDialog } from "@/features/model-sources/components/model-source-edit-dialog";
+import { grokAccountName } from "@/features/model-sources/components/model-source-form";
+import { listVideoAccounts } from "@/features/video/api";
 import { useModelSources } from "@/features/model-sources/hooks/use-model-sources";
 import type {
   ModelSource,
@@ -52,6 +55,16 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
   const editDialog = useDialogState<ModelSource>();
   const deleteDialog = useDialogState<ModelSource>();
   const sources = modelSourcesQuery.data?.sources ?? [];
+  const grokAccounts = useQuery({
+    queryKey: ["video", "accounts"],
+    queryFn: listVideoAccounts,
+    enabled: sources.some((source) => source.kind === "grok_subscription"),
+  });
+  const grokAccountLabel = (source: ModelSource) => {
+    const id = source.providerConfig?.grokAccountId ?? "";
+    const account = grokAccounts.data?.accounts.find((entry) => entry.id === id);
+    return account ? grokAccountName(account) : id;
+  };
   const busy =
     disabled ||
     modelSourcesQuery.isFetching ||
@@ -115,7 +128,11 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
                       </Badge>
                     ))}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">{source.baseUrl}</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {source.kind === "grok_subscription"
+                      ? t("modelSources.grok.listAccount", { account: grokAccountLabel(source) })
+                      : source.baseUrl}
+                  </div>
                   <div className="flex flex-wrap items-center gap-1 pt-1">
                     {source.models.map((model) => (
                       <Badge key={model.id} variant={model.isEnabled ? "outline" : "secondary"}>

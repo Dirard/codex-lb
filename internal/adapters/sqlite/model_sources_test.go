@@ -125,3 +125,48 @@ func TestModelSourceProtocolChangeAdvancesRouteRevision(t *testing.T) {
 		t.Fatalf("route edit removed operator policy: %+v %v", account, err)
 	}
 }
+
+func TestGrokSourceAccountChangeIsANewRoute(t *testing.T) {
+	ctx := context.Background()
+	s, _ := testStore(t)
+	now := time.Now().UTC()
+	source := domain.ModelSource{ID: "source-grok", Name: "Grok", Kind: domain.ModelSourceGrokSubscription,
+		BaseURL: domain.GrokTextBaseURL, Enabled: true, Responses: true, CreatedAt: now, UpdatedAt: now,
+		ProviderConfig: domain.ModelSourceProviderConfig{GrokAccountID: "vacc_one"},
+		Models:         []domain.ModelSourceModel{{Model: "grok-4.7", Streaming: true, Enabled: true}}}
+	if err := s.SaveModelSource(ctx, source, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveAPIKey(ctx, testKey("key-grok", nil), now); err != nil {
+		t.Fatal(err)
+	}
+	c := domain.Continuation{ResponseID: "response", KeyID: "key-grok", AccountID: source.ID, ProviderID: source.ID,
+		Model: "grok-4.7", CreatedAt: now, ExpiresAt: now.Add(time.Hour), ContextEncrypted: testCiphertext()}
+	if err := s.SaveContinuation(ctx, c, domain.ContinuationBounds{MaxRecords: 10, MaxContextBytes: 10000}); err != nil {
+		t.Fatal(err)
+	}
+	source.Name = "Grok renamed"
+	if err := s.SaveModelSource(ctx, source, nil); err != nil {
+		t.Fatal(err)
+	}
+	if account, err := s.GetAccount(ctx, source.ID); err != nil || account.RouteRevision != 0 {
+		t.Fatalf("rename changed the route: %+v %v", account, err)
+	}
+	if _, err := s.GetContinuation(ctx, "key-grok", "response", time.Now()); err != nil {
+		t.Fatalf("rename dropped the continuation: %v", err)
+	}
+	source.ProviderConfig.GrokAccountID = "vacc_two"
+	if err := s.SaveModelSource(ctx, source, nil); err != nil {
+		t.Fatal(err)
+	}
+	if account, err := s.GetAccount(ctx, source.ID); err != nil || account.RouteRevision != 1 {
+		t.Fatalf("another account kept the route: %+v %v", account, err)
+	}
+	if _, err := s.GetContinuation(ctx, "key-grok", "response", time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("continuation of the previous account survived: %v", err)
+	}
+	got, err := s.GetModelSource(ctx, source.ID)
+	if err != nil || got.ProviderConfig.GrokAccountID != "vacc_two" {
+		t.Fatalf("account link roundtrip: %+v %v", got.ProviderConfig, err)
+	}
+}

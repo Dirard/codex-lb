@@ -2661,7 +2661,7 @@ When a dashboard (admin API) request fails because its client cancelled it, so t
 
 ### Requirement: Grok video generation is a separate pool and REST surface
 
-The runtime SHALL keep Grok accounts in a video pool separate from `accounts`, added only through a device sign-in started from the dashboard at `https://auth.x.ai`, with tokens encrypted at rest, refreshed through that issuer's token endpoint, and revoked on a best-effort basis when the account is deleted. The device code MUST stay in process memory. Signing in to the same xAI user SHALL replace its tokens instead of adding an account. Video accounts MUST NOT be visible to any other proxy route, routing decision or usage report, and video jobs MUST NOT consume API-key limits or appear in usage events.
+The runtime SHALL keep Grok accounts in a video pool separate from `accounts`, added only through a device sign-in started from the dashboard at `https://auth.x.ai`, with tokens encrypted at rest, refreshed through that issuer's token endpoint, and revoked on a best-effort basis when the account is deleted. The device code MUST stay in process memory. Signing in to the same xAI user SHALL replace its tokens instead of adding an account. Video accounts MUST NOT be visible to any other proxy route, routing decision or usage report, and video jobs MUST NOT consume API-key limits or appear in usage events. The only exception is a model source of kind `grok_subscription` that names an account: that source may borrow the account's current access token for its own text requests, while the source, not the video account, is the routed account and the subject of usage reports.
 
 The runtime SHALL serve `POST /video/v1/generations`, `GET /video/v1/generations/{id}` and `GET /video/v1/generations` to an active API key on the video allow list. Any other active key SHALL receive 403 `video_access_denied` before dispatch, and a request without a valid bearer key, including keyless local access, SHALL receive 401. A key SHALL see only its own jobs, and another key's job id SHALL answer 404.
 
@@ -2794,3 +2794,34 @@ The usage poller SHALL attempt to read the subscription of each ChatGPT account 
 - **WHEN** a due read is sent with the saved Codex client version `0.165.4`
 - **THEN** it carries `Originator: codex_cli_rs` and `User-Agent: codex_cli_rs/0.165.4`
 - **AND** an upstream that refuses other clients with a 403 challenge page answers it with the subscription
+
+### Requirement: A Grok subscription account can back a model source
+
+A model source of kind `grok_subscription` SHALL name an existing Grok video-pool account in `providerConfig.grokAccountId`, SHALL use the base URL `https://api.x.ai/v1`, SHALL take no API key and SHALL support only Responses and Chat Completions. A create or update request that gives an API key, another base URL, no account or an unknown account SHALL be rejected with 422 and change nothing, and a source of another kind SHALL NOT carry `grokAccountId`. A create request of this kind without models SHALL fill them from the account's `GET https://api.x.ai/v1/language-models`. Each listed id SHALL become an enabled model with xAI's aliases, with input, cached-input and output prices converted from 1e-4 USD to USD per 1M tokens, with vision when the input modalities include `image`, with streaming and tools on, and with a context window of 256000. A failed read SHALL answer 502 `grok_models_unavailable` and create nothing. Explicit models SHALL be stored as given. Responses SHALL default to on and Chat Completions to off.
+
+A request routed to such a source SHALL carry the named account's current access token, obtained through the video pool's guarded refresh, and SHALL be sent only to the provider's configured xAI base URL. The token MUST NOT be stored in the source, returned by an API or logged. When the account is missing, needs a new sign-in or was denied access, the request SHALL fail before dispatch with `grok_account_unavailable`, with no upstream call and no charge. Pausing the account on the Video page SHALL NOT stop its text source. An upstream 401 that arrives before any output, usage or client-visible event SHALL be retried once on the same account with a token newer than the rejected one. Every other outcome SHALL follow the external-source rules, and the request MUST NOT move to another account. Changing `grokAccountId` SHALL retire the source's routing identity as a base URL change does. Catalog visibility, key scopes, model allowlists, pricing, reservation and settlement, concurrency, timeouts and enable/disable SHALL apply exactly as to other model sources.
+
+#### Scenario: The signed-in account becomes a text source
+
+- **WHEN** an administrator creates a `grok_subscription` source for a signed-in Grok account without models
+- **THEN** the source lists the account's xAI text models with their aliases and converted prices, and stores no API key
+
+#### Scenario: A Codex request uses the account's token
+
+- **WHEN** an allowed key sends a Responses request for one of the source's models
+- **THEN** xAI receives it at `/v1/responses` with the account's current access token, the client receives xAI's stream, and usage settles at the source's prices
+
+#### Scenario: A rejected token is renewed once
+
+- **WHEN** xAI answers 401 before any output
+- **THEN** the request is sent once more with a refreshed token of the same account, and a second 401 is returned without a third attempt
+
+#### Scenario: An account that lost its session
+
+- **WHEN** the named account needs a new sign-in
+- **THEN** the request fails with `grok_account_unavailable` before any upstream call and nothing is charged
+
+#### Scenario: The subscription token stays on xAI's endpoint
+
+- **WHEN** a create or update request gives a base URL other than `https://api.x.ai/v1` or an API key for this kind
+- **THEN** it is rejected with 422 and the source is unchanged
