@@ -23,6 +23,20 @@ const (
 // subscription token is never sent anywhere else.
 const GrokTextBaseURL = "https://api.x.ai/v1"
 
+// GrokReasoningEfforts lists the reasoning efforts xAI accepts for a Grok
+// text model, lowest first; nil means the model refuses reasoning.effort
+// (xAI's reasoning guide and probes of 2026-11-02).
+func GrokReasoningEfforts(model string) []string {
+	switch model {
+	case "grok-4.7", "grok-4.6":
+		return []string{"low", "medium", "high", "xhigh"}
+	case "grok-4.5":
+		return []string{"low", "medium", "high"}
+	default:
+		return nil
+	}
+}
+
 type ModelSource struct {
 	ID             string                    `json:"id"`
 	Name           string                    `json:"name"`

@@ -20,6 +20,7 @@ A Grok account already signed in on the Video page can back a model source of th
   - billing read before and after: pool 8.0 %, product `Api`, `prepaidBalance` 0, so the request was not paid from API credits.
 - Why a static key does not work: the access token expires after six hours and the refresh token rotates on each refresh, so only the pool's guarded refresh may renew it.
 - Non-local: domain model source rules, xAI client, Grok pool service, model source service, SQLite source save, provider adapter, runtime wiring, admin API, dashboard form and list, locales, OpenSpec `go-runtime` and `frontend-architecture`, release notes.
+- OpenSpec change `adapt-codex-requests-for-grok` (use case 4), archived as `openspec/changes/archive/2026-11-02-adapt-codex-requests-for-grok/`; it modifies «A Grok subscription account can back a model source».
 - OpenSpec change `add-grok-subscription-text-source`, archived as `openspec/changes/archive/2026-11-02-add-grok-subscription-text-source/`:
   - `go-runtime`: ADDED «A Grok subscription account can back a model source»; MODIFIED «Grok video generation is a separate pool and REST surface» (the pool's token may serve such a source);
   - `frontend-architecture`: ADDED «Dashboard creates a Grok subscription model source».
@@ -164,6 +165,62 @@ web/src/features/model-sources/schemas.test.ts
  - description: a source with `providerConfig.grokAccountId` parses
    requirements: R8
 
+### 4. Adapt Codex requests to what xAI accepts
+
+Codex request routed to a Grok source --flatten namespace tools and their history calls--> request without namespaces --keep only xAI's web search fields--> request with supported tools --fit the reasoning effort to the model--> xAI request --restore namespaced calls in every answer event--> Codex-shaped answer
+
+Requirements:
+
+  R9:
+A Responses request routed to a `grok_subscription` source SHALL declare each child function of a `namespace` tool to xAI as a function named `<namespace>-<child>`, or that name cut to 55 characters plus `-` and 8 hexadecimal characters of its SHA-256 when it is longer than 64 characters. A history `function_call` with a `namespace` SHALL carry the same flat name and no `namespace`. Every `function_call` item in the answer, whether in an output-item event, the terminal response or a non-streaming body, whose name is such a flat name SHALL reach the client with the child name and its `namespace`. A child that is not a function, or two declarations with the same flat name, SHALL be rejected before dispatch.
+
+  R10:
+A `web_search` tool SHALL be sent with only `type`, `filters`, `enable_image_understanding` and `enable_image_search`. A `web_search` tool with `external_web_access: false` SHALL be left out, since xAI searches only the live web, and the hosted `web_search` tool SHALL be allowed for this kind.
+
+  R11:
+`reasoning.effort` SHALL be fitted to the model: `grok-4.7` and `grok-4.6` take `low`, `medium`, `high` and `xhigh`; `grok-4.5` takes `low`, `medium` and `high`. A higher effort (`xhigh`, `max`, `ultra`) SHALL be sent as the model's highest, and a lower one (`none`, `minimal`) as `low`. For every other model the whole `reasoning` object SHALL be left out. Other fields, among them `include`, `store`, `prompt_cache_key` and `client_metadata`, SHALL be forwarded unchanged.
+
+  R12:
+A new Grok source SHALL advertise in the catalog the efforts of R11 for those three models, with default `high`.
+
+Observed Existing Logic:
+- Codex CLI 0.165.4 with an API-key provider does not read `/backend-api/codex/models`. It uses fallback metadata for unknown slugs and sends `reasoning: {effort: <config>, summary: <config>}`, `include: ["reasoning.encrypted_content"]`, `namespace` tools for MCP servers and agents, `{"type":"web_search","external_web_access":false}`, `client_metadata` and `prompt_cache_key`.
+- The native Responses path forwards the body unchanged apart from model mapping, `DropBodyFields` and `ExtraBody`, so xAI received these fields as they were. codex-lb itself rejected the first prod attempt before dispatch with `unsupported_capability`, because the source had no reasoning metadata and no allowed hosted tools. Codex retried 12 times.
+- Owner-approved probes, 2026-11-02 18:3x UTC, from prod with the Grok account; the body was Codex's own, trimmed in size:
+  - `namespace` tools: 422 `unknown variant namespace`;
+  - `external_web_access`: 400 `Argument not supported`;
+  - `effort: "max"`: 400 `Invalid reasoning effort`;
+  - `effort: "xhigh"` with `summary: "detailed"` on `grok-4.7`: 200, `pong`, 25010400 ticks;
+  - `effort: "high"` on `grok-build-0.1`: 400 `does not support parameter reasoningEffort`;
+  - a history `function_call` with `namespace`: 200, so xAI ignores the field;
+  - `client_metadata` and `prompt_cache_key` were accepted.
+- xAI's reasoning guide lists `grok-4.7` and `grok-4.6` with low to xhigh and `grok-4.5` with low to high, where xhigh is treated as high; the default is high.
+
+Logic Details:
+- Restoring names needs the request's map from flat names to (namespace, child); it is built while flattening and applied to each event by wrapping the client callback, so no other event is decoded.
+- Codex's tool order and fields are kept; only namespace entries are replaced in place by their children.
+- Leaving out a cached-only web search, and dropping an effort the model cannot take, are deliberate translations of this kind: the request would otherwise fail at xAI.
+
+Files And Functions:
+ - planned: internal/domain/model_source.go#GrokReasoningEfforts - xAI's effort table
+ - planned: internal/adapters/provider/grok_request.go#adaptGrokRequest - workflow steps "flatten namespace tools", "keep only xAI's web search fields", "fit the reasoning effort"
+ - planned: internal/adapters/provider/grok_request.go#grokToolNames.restore - workflow step "restore namespaced calls in every answer event"
+ - existing: internal/adapters/provider/provider.go#Adapter.respondExternal - applies both for Grok Responses sources
+ - existing: internal/adapters/provider/capabilities.go#sourceCapabilities - reasoning and hosted web search for the kind
+ - existing: internal/application/model_sources.go#grokSourceModels - catalog efforts
+
+Tests:
+internal/adapters/provider/grok_request_test.go
+ - description: namespaces flatten in tools and history, long names are hashed, collisions and non-function children are rejected; web search fields are cut or the tool left out; efforts are fitted per model or removed
+   requirements: R9, R10, R11
+ - description: output-item, terminal and non-streaming function calls get their child name and namespace back; other events are untouched
+   requirements: R9
+internal/adapters/httpapi/grok_text_source_test.go
+ - description: the captured Codex request shape reaches a stub that refuses what xAI refused, and the client gets the namespaced call back
+   requirements: R9, R10, R11
+ - description: new sources advertise efforts for grok-4.7, grok-4.6 and grok-4.5 only
+   requirements: R12
+
 ## Implementation checklist
 
 1. [x] Write this spec and the OpenSpec change `add-grok-subscription-text-source`; validate both.
@@ -176,19 +233,25 @@ web/src/features/model-sources/schemas.test.ts
 8. [x] Dashboard provider option, Grok creation fields, edit and list changes, locales and tests (R8).
 9. [x] Gates: `make check`, `make web-check`, `make build`, `make test-web-contract`.
 10. [x] Release notes `go-v1.11.0`, context notes, sync OpenSpec into `openspec/specs/`, archive the change, amend `specs/grok-video-generation.md`.
-11. [ ] Publish go-v1.11.0 and stop before the rollout; the owner updates prod.
-12. [ ] After the update, with the owner's approval, create the source on prod and verify one Codex request end to end.
+11. [x] Publish go-v1.11.0 and stop before the rollout; the owner updates prod.
+12. [x] After the update, with the owner's approval, create the source on prod and verify one Codex request end to end. The source was created; the Codex request was refused before dispatch, which led to use case 4.
+13. [x] OpenSpec change `adapt-codex-requests-for-grok` for R9–R12.
+14. [x] Effort table in the domain; request adapter and event restoration in the provider, with unit tests (R9–R11).
+15. [x] Catalog efforts for new sources and a stub that refuses what xAI refused, with end-to-end tests (R9–R12).
+16. [x] Gates, release notes `go-v1.11.1`, sync and archive the OpenSpec change.
+17. [ ] Publish go-v1.11.1 and stop before the rollout; after the owner's update, check one Codex request end to end with approval.
 
 Deferred:
 - Refreshing a source's model list from xAI after creation. Recreating the source picks up new models.
 - Settling at xAI's reported `cost_in_usd_ticks` instead of list prices.
-- Advertising reasoning efforts for Grok models.
 - Failover between several Grok accounts serving the same model. Each source names one account, and existing rules forbid implicit cross-provider switching.
 
 ## Open questions
 
 - non-blocking: xAI's reported cost for the probe request was about one third of the list-price estimate (4032400 ticks against roughly 11.9 M at list prices). Settlement uses list prices, which errs toward higher reported spend. Compare with real traffic after release.
 - non-blocking: The answer xAI gives when the weekly pool is exhausted is unknown. It is handled by the generic external-source rules.
+- non-blocking: Whether `grok-build-0.1`, `grok-4.3` and `grok-4.20` accept `include: ["reasoning.encrypted_content"]` was not probed; it is forwarded.
+- non-blocking: Server-side web searches are billed by xAI per call and are not counted in codex-lb's settlement.
 
 ## Decision log
 
@@ -200,3 +263,5 @@ Deferred:
 - 2026-11-02: Spec actions: `specs/grok-video-generation.md` is amended with a scope pointer; OpenSpec `go-runtime` and `frontend-architecture` receive the deltas of `add-grok-subscription-text-source`.
 - 2026-11-02: Validation: domain, SQLite, xAI-stub end-to-end and dashboard tests; all local gates green (vet, lint, test, race in four shards, govulncheck, web-check, build, web contract, OpenSpec). A mutation that disables the 401 retry fails `TestGrokSourceRenewsARejectedTokenOnce`.
 - 2026-11-02: The verification loop ran: completeness and consistency were checked against the owner's request and the probe evidence, without findings that changed the scope.
+- 2026-11-02: The first Codex request through prod failed before dispatch. Codex CLI does not read codex-lb's catalog, and xAI refuses several OpenAI-only fields. The owner approved six probes, and use case 4 adapts the request to what they showed, instead of dropping namespace tools or failing.
+- 2026-11-02: Validation of use case 4: adapter unit tests, a stub that refuses what xAI refused, and an end-to-end test of the Codex CLI request shape. All local gates are green. A mutation that skips restoring names fails `TestGrokSourceTakesTheCodexCLIRequestShape`.

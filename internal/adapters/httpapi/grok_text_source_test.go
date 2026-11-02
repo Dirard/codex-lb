@@ -37,6 +37,41 @@ var grokTextStream = strings.Join([]string{
 
 const grokCodexRequest = `{"model":"grok-4.7","instructions":"You are a coding agent.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Run the command: echo pong"}]}],"tools":[{"type":"function","name":"shell_command","description":"Runs a shell command.","strict":false,"parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}],"tool_choice":"auto","parallel_tool_calls":true,"store":false,"stream":true,"include":["reasoning.encrypted_content"],"prompt_cache_key":"synthetic-conversation"}`
 
+// xaiRefusal answers as xAI did on 2026-11-02 to the request fields it does
+// not take, so tests fail where production would.
+func xaiRefusal(body []byte) (int, string) {
+	var request struct {
+		Model     string `json:"model"`
+		Tools     []map[string]json.RawMessage
+		Reasoning *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return http.StatusUnprocessableEntity, `{"error":"Failed to deserialize the JSON body"}`
+	}
+	for i, tool := range request.Tools {
+		var kind string
+		_ = json.Unmarshal(tool["type"], &kind)
+		if kind == "namespace" {
+			return http.StatusUnprocessableEntity, fmt.Sprintf(`{"error":"tools[%d].type: unknown variant namespace"}`, i)
+		}
+		if _, ok := tool["external_web_access"]; ok && kind == "web_search" {
+			return http.StatusBadRequest, `{"code":"400","error":"Argument not supported: external_web_access"}`
+		}
+	}
+	if request.Reasoning != nil && request.Reasoning.Effort != "" {
+		levels := map[string]string{"grok-4.7": "low medium high xhigh", "grok-4.6": "low medium high xhigh", "grok-4.5": "low medium high xhigh"}[request.Model]
+		if levels == "" {
+			return http.StatusBadRequest, fmt.Sprintf(`{"code":"invalid-argument","error":"Model %s does not support parameter reasoningEffort."}`, request.Model)
+		}
+		if !strings.Contains(" "+levels+" ", " "+request.Reasoning.Effort+" ") {
+			return http.StatusBadRequest, `{"code":"invalid-argument","error":"Invalid reasoning effort."}`
+		}
+	}
+	return 0, ""
+}
+
 type grokTextFixture struct {
 	video  videoFixture
 	server *httptest.Server
@@ -301,5 +336,74 @@ func TestGrokSourceNeedsAnAccountThatCanLendItsToken(t *testing.T) {
 	}
 	if got := f.video.stub.refreshCount("alpha"); got != 0 {
 		t.Fatalf("refreshes: %d", got)
+	}
+}
+
+// grokCLIRequest is what Codex CLI 0.165.4 sends without catalog metadata:
+// its own reasoning settings, MCP tools as a namespace and a cached-only search.
+const grokCLIRequest = `{"model":"grok-4.7","stream":true,"store":false,"include":["reasoning.encrypted_content"],"prompt_cache_key":"thread","client_metadata":{"session_id":"thread"},"tool_choice":"auto","parallel_tool_calls":true,"reasoning":{"effort":"max","summary":"detailed"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"List the agents."}]},{"type":"function_call","call_id":"call_0","name":"list_agents","namespace":"agents","arguments":"{}"},{"type":"function_call_output","call_id":"call_0","output":"[]"}],"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}},{"type":"namespace","name":"agents","description":"Agents","tools":[{"type":"function","name":"list_agents","description":"List agents","parameters":{"type":"object","properties":{}}}]},{"type":"web_search","external_web_access":false}]}`
+
+func TestGrokSourceTakesTheCodexCLIRequestShape(t *testing.T) {
+	f := newGrokTextFixture(t, "alpha")
+	f.createSource(t, f.video.accountStatus(t, "alpha").ID)
+	call := `{"id":"fc_grok","type":"function_call","status":"completed","call_id":"call_1","name":"agents-list_agents","arguments":"{}"}`
+	f.video.stub.mu.Lock()
+	f.video.stub.respond = func(string, int) (int, string) {
+		return 200, strings.Join([]string{
+			`event: response.created` + "\n" + `data: {"type":"response.created","response":{"id":"resp_ns","object":"response","status":"in_progress","model":"grok-4.7","output":[]}}`,
+			`event: response.output_item.done` + "\n" + `data: {"type":"response.output_item.done","output_index":0,"item":` + call + `}`,
+			`event: response.completed` + "\n" + `data: {"type":"response.completed","response":{"id":"resp_ns","object":"response","status":"completed","model":"grok-4.7","output":[` + call + `],"usage":{"input_tokens":50,"output_tokens":5,"total_tokens":55}}}`,
+		}, "\n\n") + "\n\n"
+	}
+	f.video.stub.mu.Unlock()
+	status, body := f.codexRequest(t, grokCLIRequest)
+	if status != http.StatusOK {
+		t.Fatalf("Codex CLI request: %d %s", status, body)
+	}
+	for _, want := range []string{`"name":"list_agents"`, `"namespace":"agents"`} {
+		if strings.Count(body, want) < 2 {
+			t.Fatalf("the namespaced call did not come back in both events (%s): %s", want, body)
+		}
+	}
+	if strings.Contains(body, "agents-list_agents") {
+		t.Fatalf("the flat name reached the client: %s", body)
+	}
+	calls := f.video.stub.responseCalls()
+	if len(calls) != 1 {
+		t.Fatalf("xAI calls: %d", len(calls))
+	}
+	var sent struct {
+		Tools     []map[string]any `json:"tools"`
+		Input     []map[string]any `json:"input"`
+		Reasoning map[string]any   `json:"reasoning"`
+		Metadata  map[string]any   `json:"client_metadata"`
+	}
+	if err := json.Unmarshal([]byte(calls[0].body), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent.Tools) != 2 || sent.Tools[1]["name"] != "agents-list_agents" || sent.Input[1]["name"] != "agents-list_agents" ||
+		sent.Reasoning["effort"] != "xhigh" || sent.Reasoning["summary"] != "detailed" || sent.Metadata == nil {
+		t.Fatalf("xAI body: %s", calls[0].body)
+	}
+}
+
+func TestGrokSourceAdvertisesTheEffortsXAITakes(t *testing.T) {
+	f := newGrokTextFixture(t, "alpha")
+	source := f.createSource(t, f.video.accountStatus(t, "alpha").ID)
+	for _, model := range source.Models {
+		switch model.Model {
+		case "grok-4.7":
+			if model.RawMetadataJSON != `{"default_reasoning_level":"high","supported_reasoning_levels":["low","medium","high","xhigh"],"supports_reasoning":true}` {
+				t.Fatalf("grok-4.7 metadata: %s", model.RawMetadataJSON)
+			}
+		default:
+			if model.RawMetadataJSON != "" {
+				t.Fatalf("%s advertises efforts: %s", model.Model, model.RawMetadataJSON)
+			}
+		}
+	}
+	status, body := f.codexRequest(t, strings.Replace(grokCodexRequest, `"model":"grok-4.7"`, `"model":"grok-code-fast-1","reasoning":{"effort":"high"}`, 1))
+	if status != http.StatusOK {
+		t.Fatalf("a model without efforts refused the request: %d %s", status, body)
 	}
 }

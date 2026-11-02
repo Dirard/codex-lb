@@ -148,14 +148,21 @@ func (a *Adapter) respondExternal(
 	if stream && !model.Streaming {
 		return application.ResponseResult{}, providerFailure("streaming_unsupported", 0, false)
 	}
-	if err := validateReasoningEffort(body, model); err != nil {
+	grok := source.Kind == domain.ModelSourceGrokSubscription
+	// A Grok Responses request is reshaped to what xAI accepts, which
+	// includes fitting its reasoning effort to the model.
+	var names grokToolNames
+	if grok && source.Responses {
+		if body, names, err = adaptGrokRequest(body, upstreamModelName(model)); err != nil {
+			return application.ResponseResult{}, err
+		}
+	} else if err := validateReasoningEffort(body, model); err != nil {
 		return application.ResponseResult{}, err
 	}
 	credential, err := a.credentialForAccount(ctx, target.Account)
 	if err != nil {
 		return application.ResponseResult{}, providerFailure("model_source_credential_unavailable", 0, false)
 	}
-	grok := source.Kind == domain.ModelSourceGrokSubscription
 	var key string
 	var tokenVersion int64
 	baseURL := source.BaseURL
@@ -194,16 +201,32 @@ func (a *Adapter) respondExternal(
 		SessionID: target.SessionID, RequiredCapability: target.RequiredCapability,
 		BaseURL: baseURL, Credential: key, Capabilities: capabilities,
 	}
+	if len(names) != 0 && emit != nil {
+		clientEmit := emit
+		emit = func(event application.ResponseEvent) error {
+			event.Data = names.restoreEvent(event.Type, event.Data)
+			return clientEmit(event)
+		}
+	}
 	result, callErr := a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
-	if !grok || !retryableAuthRejection(result, callErr) {
-		return result, callErr
+	if grok && retryableAuthRejection(result, callErr) {
+		// The subscription token expired or was revoked before xAI did
+		// anything: the same account may answer once more with a newer token.
+		if upstreamTarget.Credential, _, err = a.grokToken(ctx, source, tokenVersion); err != nil {
+			return result, err
+		}
+		result, callErr = a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
 	}
-	// The subscription token expired or was revoked before xAI did anything:
-	// the same account may answer once more with a newer token.
-	if upstreamTarget.Credential, _, err = a.grokToken(ctx, source, tokenVersion); err != nil {
-		return result, err
+	result.Response = names.restoreResponse(result.Response)
+	return result, callErr
+}
+
+// upstreamModelName is the provider's own name for a source model.
+func upstreamModelName(model domain.ModelSourceModel) string {
+	if target := strings.TrimSpace(model.UpstreamModel); target != "" {
+		return target
 	}
-	return a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
+	return model.Model
 }
 
 // grokToken takes the Grok account's current token for a subscription source.

@@ -55,6 +55,12 @@ func sourceCapabilities(source domain.ModelSource, model domain.ModelSourceModel
 		}
 	}
 	capabilities.Reasoning = metadata.SupportsReasoning
+	if source.Kind == domain.ModelSourceGrokSubscription && protocol == upstream.ProtocolResponses {
+		// Grok models always reason; the request adapter fits or removes the
+		// effort, and xAI runs web searches itself.
+		capabilities.Reasoning = true
+		capabilities.AllowedHostedTools = append(capabilities.AllowedHostedTools, "web_search")
+	}
 	if source.Kind == domain.ModelSourceZAI && protocol == upstream.ProtocolChatCompletions {
 		capabilities.EnableGLMThinking = true
 		capabilities.AllowedHostedTools = nil
