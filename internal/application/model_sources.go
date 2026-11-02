@@ -328,12 +328,20 @@ func grokSourceModels(listed []GrokTextModel, now time.Time) []domain.ModelSourc
 				aliases = append(aliases, alias)
 			}
 		}
-		models = append(models, domain.ModelSourceModel{
+		entry := domain.ModelSourceModel{
 			Model: model.ID, Aliases: aliases, DisplayName: model.ID, ContextWindow: grokContextWindow,
 			Streaming: true, Tools: true, Vision: model.Vision,
 			InputPerMillion: model.InputPerMillion, CachedPerMillion: model.CachedPerMillion, OutputPerMillion: model.OutputPerMillion,
 			Enabled: true, CreatedAt: now, UpdatedAt: now,
-		})
+		}
+		// The catalog offers Codex the efforts xAI takes for the model.
+		if levels := domain.GrokReasoningEfforts(model.ID); levels != nil {
+			metadata, _ := json.Marshal(map[string]any{
+				"supports_reasoning": true, "supported_reasoning_levels": levels, "default_reasoning_level": "high",
+			})
+			entry.RawMetadataJSON = string(metadata)
+		}
+		models = append(models, entry)
 	}
 	return models
 }

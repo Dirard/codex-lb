@@ -877,11 +877,16 @@ A signed-in Grok account can also serve text. On **Settings → Model sources** 
 
 **Credential.** The source stores no key. Each request takes the account's current access token from the Grok pool, whose single-flight, claim-guarded refresh is the only place a rotating refresh token is renewed. A 401 before anything reaches the client is retried once with a newer token. The token is sent only to the provider's configured xAI base (`https://api.x.ai/v1` in production), never to a URL stored in the source; the source's base URL is fixed for the same reason. A missing account, one that needs a new sign-in or one denied access fails before dispatch with `grok_account_unavailable`. A pause on the Video page stops only video. Changing the linked account is a route change: continuations, owners and affinity of the old account are dropped.
 
+**Codex request shape (go-v1.11.1).** Codex CLI with an API-key provider does not read codex-lb's catalog. It sends its config's reasoning settings, MCP and agent tools as `namespace` tools and `{"type":"web_search","external_web_access":false}` for every model. Probes from prod on 2026-11-02 found that xAI refuses `namespace` tools (422), `external_web_access` (400), effort `max` (400) and any effort on `grok-build-0.1` (400). It accepts `summary`, `client_metadata`, `prompt_cache_key` and a `namespace` field on history calls. The provider therefore:
+- flattens namespace tools to `<namespace>-<child>` functions, hashing names over 64 characters, and restores the namespace on answer calls;
+- keeps only xAI's web search fields and leaves out a cached-only search;
+- fits the effort to `domain.GrokReasoningEfforts`, or removes `reasoning` for models outside it.
+
 **Billing.** Text draws on the same weekly pool as video; the probe of 2026-11-02 left `prepaidBalance` at 0. Settlement uses xAI's list prices, although xAI reported about a third of that for the probe request.
 
 **Limits.**
 - Context window defaults to 256000 tokens, the smallest of current Grok text models; raise it per source if needed.
-- Reasoning efforts are not advertised, because xAI's handling of Codex's `reasoning.effort` is unverified.
+- Live web searches xAI runs on the server are billed by xAI per call and are not in codex-lb's settlement.
 - New xAI models need a new source; the model list is read only at creation.
 - xAI's answer at an exhausted weekly pool has not been observed.
 

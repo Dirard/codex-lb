@@ -168,6 +168,11 @@ func (x *xaiStub) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, payload)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/responses":
+		if status, refusal := xaiRefusal(body); status != 0 {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, refusal)
+			return
+		}
 		x.mu.Lock()
 		index := len(x.responses)
 		x.responses = append(x.responses, videoCreate{account: account, body: string(body)})
