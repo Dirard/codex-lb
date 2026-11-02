@@ -246,3 +246,60 @@ func TestFetchResetCreditsRejectsMalformedSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchSubscriptionReadsTheCurrentPeriod(t *testing.T) {
+	var observedAuth, observedAccount, observedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/subscriptions" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		observedAuth, observedAccount, observedQuery = r.Header.Get("Authorization"), r.Header.Get("chatgpt-account-id"), r.URL.Query().Get("account_id")
+		_, _ = w.Write([]byte(`{"plan_type":"pro","is_active":true,"active_start":"2026-09-05T18:27:39Z","active_until":"2026-11-05T18:27:39Z","will_renew":true}`))
+	}))
+	defer server.Close()
+	client := NewUsageClient(UsageConfig{BaseURL: server.URL, HTTPClient: server.Client()})
+	subscription, err := client.FetchSubscription(context.Background(), "token-1", "acct 1&x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observedAuth != "Bearer token-1" || observedAccount != "acct 1&x" || observedQuery != "acct 1&x" {
+		t.Fatalf("auth %q header %q query %q", observedAuth, observedAccount, observedQuery)
+	}
+	if !subscription.ActiveUntil.Equal(time.Date(2026, 11, 5, 18, 27, 39, 0, time.UTC)) || subscription.WillRenew == nil || !*subscription.WillRenew {
+		t.Fatalf("subscription = %+v", subscription)
+	}
+}
+
+func TestFetchSubscriptionRejectsAnswersWithoutAnEnd(t *testing.T) {
+	requests := 0
+	for _, answer := range []struct {
+		status int
+		body   string
+		code   string
+	}{
+		{200, `{"will_renew":true}`, "invalid_response"}, {200, `{"active_until":null}`, "invalid_response"},
+		{200, `{"active_until":"soon"}`, "invalid_response"}, {200, `[]`, "invalid_response"},
+		{401, `{"error":{"code":"token_expired","message":"expired"}}`, "token_expired"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			w.WriteHeader(answer.status)
+			_, _ = w.Write([]byte(answer.body))
+		}))
+		client := NewUsageClient(UsageConfig{BaseURL: server.URL, HTTPClient: server.Client()})
+		_, err := client.FetchSubscription(context.Background(), "token-1", "acct-1")
+		var usageErr *application.UsageError
+		if !errors.As(err, &usageErr) || usageErr.Code != answer.code || answer.status == 401 && usageErr.Status != 401 {
+			t.Errorf("%d %s: err = %v", answer.status, answer.body, err)
+		}
+		for _, synthetic := range []string{"", "email_abc", "local_abc"} {
+			if _, err := client.FetchSubscription(context.Background(), "token-1", synthetic); err == nil {
+				t.Errorf("synthetic id %q read", synthetic)
+			}
+		}
+		server.Close()
+	}
+	if requests != 5 {
+		t.Fatalf("requests = %d, want one per answer and none for synthetic ids", requests)
+	}
+}

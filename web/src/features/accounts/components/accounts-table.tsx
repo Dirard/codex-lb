@@ -234,7 +234,11 @@ export function AccountsTable({
                     ) : null}
                   </span>
                   <span className="block text-[11px] text-muted-foreground">
-                    <SubscriptionRemaining activeUntil={account.subscriptionActiveUntil} displayFormat={dateDisplayFormat} />
+                    <SubscriptionRemaining
+                      activeUntil={account.subscriptionActiveUntil}
+                      subscription={account.subscription}
+                      displayFormat={dateDisplayFormat}
+                    />
                   </span>
                 </td>
                 <td className="px-2 py-2">

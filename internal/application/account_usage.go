@@ -121,12 +121,17 @@ type AccountUsageService struct {
 	now           func() time.Time
 	limitWarmup   *LimitWarmupService
 	quotaRecovery AccountQuotaRecovery
+	subscriptions SubscriptionClient
 
 	mu          sync.Mutex
 	snapshots   map[accountGenerationKey]ResetCredits
 	creditEpoch map[accountGenerationKey]uint64
 	usageSeen   map[accountGenerationKey]UsageSnapshot
 	redeeming   map[accountGenerationKey]*sync.Mutex
+	// subscriptionTried and subscriptionSeen hold the start of the last
+	// subscription attempt and the last successful read.
+	subscriptionTried map[accountGenerationKey]time.Time
+	subscriptionSeen  map[accountGenerationKey]AccountSubscription
 }
 
 // ConfigureLimitWarmups wires automatic evaluation into successful background
@@ -142,6 +147,7 @@ func NewAccountUsageService(accounts AccountUsageAccounts, tokens UsageTokenSour
 	return &AccountUsageService{
 		accounts: accounts, tokens: tokens, usage: usage, pins: pins, now: now,
 		snapshots: make(map[accountGenerationKey]ResetCredits), creditEpoch: make(map[accountGenerationKey]uint64), usageSeen: make(map[accountGenerationKey]UsageSnapshot), redeeming: make(map[accountGenerationKey]*sync.Mutex),
+		subscriptionTried: make(map[accountGenerationKey]time.Time), subscriptionSeen: make(map[accountGenerationKey]AccountSubscription),
 	}
 }
 
@@ -390,6 +396,7 @@ func (s *AccountUsageService) RefreshAll(ctx context.Context) error {
 			_, _ = s.limitWarmup.RunAfterUsageRefresh(ctx, account.ID, account.Generation, before, after, refreshStarted)
 		}
 		_ = s.RefreshResetCredits(ctx, account.ID)
+		_ = s.RefreshSubscription(ctx, account.ID)
 	}
 	return nil
 }

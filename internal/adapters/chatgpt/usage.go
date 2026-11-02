@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -67,6 +68,29 @@ func (c *UsageClient) FetchResetCredits(ctx context.Context, accessToken, chatgp
 		credits = append(credits, credit.value())
 	}
 	return application.ResetCredits{AvailableCount: *payload.AvailableCount, Credits: credits}, nil
+}
+
+// FetchSubscription reads the account's current paid period. The ID token keeps
+// the period of its last interactive sign-in, so this is the live source.
+func (c *UsageClient) FetchSubscription(ctx context.Context, accessToken, chatgptAccountID string) (application.Subscription, error) {
+	if chatgptAccountID == "" || strings.HasPrefix(chatgptAccountID, "email_") || strings.HasPrefix(chatgptAccountID, "local_") {
+		return application.Subscription{}, usageError("invalid_request", "subscription needs a ChatGPT account id", 0)
+	}
+	var payload struct {
+		ActiveUntil *string `json:"active_until"`
+		WillRenew   *bool   `json:"will_renew"`
+	}
+	if err := c.get(ctx, accessToken, chatgptAccountID, "/subscriptions?account_id="+url.QueryEscape(chatgptAccountID), &payload); err != nil {
+		return application.Subscription{}, err
+	}
+	if payload.ActiveUntil == nil {
+		return application.Subscription{}, usageError("invalid_response", "Subscription response has no active_until", 0)
+	}
+	activeUntil, err := time.Parse(time.RFC3339Nano, *payload.ActiveUntil)
+	if err != nil {
+		return application.Subscription{}, usageError("invalid_response", "Subscription response has an invalid active_until", 0)
+	}
+	return application.Subscription{ActiveUntil: activeUntil.UTC(), WillRenew: payload.WillRenew}, nil
 }
 
 func (c *UsageClient) ConsumeResetCredit(ctx context.Context, accessToken, chatgptAccountID, creditID, redeemRequestID string) (application.ResetCreditConsume, error) {
