@@ -198,6 +198,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	registry := metrics.NewRegistry()
 	reporter := newBackgroundReporter(logger, registry)
 	usage := application.NewAccountUsageService(data.store, tokens, usageClient, data.store, time.Now)
+	usage.ConfigureSubscriptions(usageClient)
 	usage.ConfigureBackground(application.BackgroundSchedule{InitialDelay: startupJitter(10*time.Second, 20*time.Second), Report: reporter.report})
 	usage.ConfigureQuotaRecovery(data.store)
 	api.ConfigureUsage(usage)

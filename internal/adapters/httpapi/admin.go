@@ -294,6 +294,14 @@ type accountListView struct {
 	Groups                   []string           `json:"groups"`
 	Usage7d                  accountUsage7dView `json:"usage7d"`
 	ResetCreditsObservedAt   *time.Time         `json:"resetCreditsObservedAt"`
+	Subscription             *subscriptionView  `json:"subscription"`
+}
+
+// subscriptionView is the account's last subscription read from ChatGPT.
+type subscriptionView struct {
+	ActiveUntil time.Time `json:"activeUntil"`
+	WillRenew   *bool     `json:"willRenew"`
+	ObservedAt  time.Time `json:"observedAt"`
 }
 
 // listAccounts is GET /api/accounts (dashboard redesign use case 8): one
@@ -347,6 +355,9 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 				if !observed.IsZero() {
 					view.ResetCreditsObservedAt = &observed
 				}
+			}
+			if read := s.usage.CachedSubscription(account); read != nil {
+				view.Subscription = &subscriptionView{read.ActiveUntil, read.WillRenew, read.ObservedAt}
 			}
 		}
 		rows = append(rows, view)

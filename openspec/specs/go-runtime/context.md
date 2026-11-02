@@ -323,6 +323,27 @@ the old mislabeled weekly primary and its seven-day history labels are repaired
 atomically for that account. Observed values and financial records are retained.
 This repair uses normal polling, not a paid probe or an in-place schema migration.
 
+The saved ID token's `chatgpt_subscription_active_until` is not a current
+subscription end. OpenAI fills it, with `chatgpt_subscription_last_checked`,
+at an interactive sign-in and keeps it when the token is refreshed. On
+2026-11-02 four of six active prod accounts showed an elapsed period while they
+worked, and one account carried 2026-10-05 in its prod token and 2026-08-23 in
+the owner's local Codex login, the ends of the billing periods current at
+those two sign-ins.
+An owner-approved read-only probe the same day found the current end at
+`GET https://chatgpt.com/backend-api/subscriptions?account_id=<id>` with the
+Codex bearer token: `active_until` 2026-11-05, `will_renew: true`, plus
+`active_start`, `is_active`, `plan_type`, `billing_period` and
+`entitlement.{expires_at,renews_at,cancels_at}` (`expires_at` was six hours
+after `renews_at`, which equalled `active_until`). The endpoint is undocumented.
+`/backend-api/accounts/check/v4-2023-04-27` carries the same entitlement for
+every workspace of the user; `/wham/usage` and `/wham/accounts/check` carry no
+dates. Answers for free accounts, cancelled subscriptions and team seats were
+not observed, so an answer without `active_until` counts as a failed read and
+the Accounts page keeps the token date for that account. The read is kept in
+memory like the reset-credit snapshot, so an update shows the token date until
+the first poll of the new process.
+
 ## Prices and history
 
 Settings → Model prices allows a new Codex tariff or a bundled-price override

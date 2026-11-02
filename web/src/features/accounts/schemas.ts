@@ -75,6 +75,15 @@ export const AccountAdditionalQuotaSchema = z.object({
   secondaryWindow: AccountAdditionalWindowSchema.nullable().optional(),
 });
 
+/** The last subscription end ChatGPT reported for the account. */
+export const AccountSubscriptionSchema = z.object({
+  activeUntil: z.iso.datetime({ offset: true }),
+  willRenew: z.boolean().nullable().optional(),
+  observedAt: z.iso.datetime({ offset: true }),
+});
+
+export type AccountSubscription = z.infer<typeof AccountSubscriptionSchema>;
+
 export const AccountSummarySchema = z.object({
   accountId: z.string(),
   chatgptAccountId: z.string().nullable().optional(),
@@ -86,6 +95,7 @@ export const AccountSummarySchema = z.object({
   seatType: z.string().nullable().optional(),
   planType: z.string(),
   subscriptionActiveUntil: z.iso.datetime({ offset: true }).nullable().optional(),
+  subscription: AccountSubscriptionSchema.nullable().optional(),
   routingPolicy: z.enum(["normal", "burn_first", "preserve"]).optional(),
   status: z.string(),
   deactivationReason: z.string().nullable().optional(),

@@ -160,6 +160,12 @@ func (u *accountsListUsage) FetchResetCredits(context.Context, string, string) (
 		{ID: "credit-1", Status: "available", ExpiresAt: &u.expires}, {ID: "credit-2", Status: "available"}}}, nil
 }
 
+func (u *accountsListUsage) FetchSubscription(context.Context, string, string) (application.Subscription, error) {
+	u.calls.Add(1)
+	renews := false
+	return application.Subscription{ActiveUntil: u.expires, WillRenew: &renews}, nil
+}
+
 func (u *accountsListUsage) ConsumeResetCredit(context.Context, string, string, string, string) (application.ResetCreditConsume, error) {
 	u.calls.Add(1)
 	return application.ResetCreditConsume{}, nil
@@ -346,17 +352,21 @@ func seedAccountsListFixture(t *testing.T, server *Server, store *sqlite.Store, 
 		t.Fatal(err)
 	}
 	service := application.NewAccountUsageService(store, cipherTokenSource{cipher: server.cipher}, usage, &noPins{}, time.Now)
+	service.ConfigureSubscriptions(usage)
 	for _, id := range []string{"acct-alpha", "acct-beta"} {
 		if err := service.RefreshResetCredits(ctx, id); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := service.RefreshSubscription(ctx, "acct-alpha"); err != nil {
+		t.Fatal(err)
+	}
 	server.ConfigureUsage(service)
 }
 
 // GET /api/accounts from the batch read keeps every field of the per-account
-// reads with its value, adds groups, usage7d, resetCreditsObservedAt and the
-// shell status, and calls no provider (R42, R43).
+// reads with its value, adds groups, usage7d, resetCreditsObservedAt, the
+// subscription read and the shell status, and calls no provider (R42, R43).
 func TestAccountsListKeepsEveryExistingField(t *testing.T) {
 	server, store, cookie := newAccountsListServer(t, nil)
 	usage := &accountsListUsage{expires: time.Now().Add(5 * 24 * time.Hour).UTC().Truncate(time.Second)}
@@ -387,7 +397,7 @@ func TestAccountsListKeepsEveryExistingField(t *testing.T) {
 	if len(got) != 6 || len(got) != len(want) {
 		t.Fatalf("%d accounts, oracle %d", len(got), len(want))
 	}
-	added := []string{"groups", "resetCreditsObservedAt", "usage7d"}
+	added := []string{"groups", "resetCreditsObservedAt", "subscription", "usage7d"}
 	for i := range want {
 		id := want[i]["accountId"]
 		if got[i]["accountId"] != id {
@@ -441,6 +451,13 @@ func TestAccountsListKeepsEveryExistingField(t *testing.T) {
 		if !reflect.DeepEqual(check.got, check.want) {
 			t.Errorf("%s = %#v, want %#v", check.name, check.got, check.want)
 		}
+	}
+	subscription, _ := alpha["subscription"].(map[string]any)
+	if subscription == nil || subscription["activeUntil"] != usage.expires.Format(time.RFC3339) || subscription["willRenew"] != false || subscription["observedAt"] == nil {
+		t.Errorf("alpha subscription = %v", alpha["subscription"])
+	}
+	if byID["acct-beta"]["subscription"] != nil {
+		t.Errorf("beta has no read but subscription %v", byID["acct-beta"]["subscription"])
 	}
 	if byID["acct-gamma"]["resetCreditsObservedAt"] != nil {
 		t.Errorf("gamma has no snapshot but observed %v", byID["acct-gamma"]["resetCreditsObservedAt"])

@@ -107,6 +107,91 @@ describe("SubscriptionRemaining", () => {
     }
   });
 
+  it("counts down to the end ChatGPT reported instead of the recorded end", () => {
+    const subscription = {
+      activeUntil: "2026-01-05T12:00:00.000Z",
+      willRenew: true,
+      observedAt: "2026-01-01T11:50:00.000Z",
+    };
+
+    render(
+      <SubscriptionRemaining activeUntil="2025-12-01T12:00:00.000Z" subscription={subscription} displayFormat="default" />,
+    );
+
+    const element = screen.getByTestId("subscription-remaining");
+    expect(element).toHaveTextContent("Subscription: 4d / +14d: 18d");
+    expect(element).toHaveAttribute("title", expect.stringContaining(
+      `End from ChatGPT: ${formatDateTimeInline(subscription.activeUntil, "default")}`,
+    ));
+    expect(element).toHaveAttribute("title", expect.stringContaining(
+      `Renews automatically, checked ${formatDateTimeInline(subscription.observedAt, "default")}`,
+    ));
+    expect(element).toHaveAttribute("title", expect.stringContaining(formatDateTimeInline("2026-01-19T12:00:00.000Z", "default")));
+    expect(element).not.toHaveAttribute("title", expect.stringContaining("may lag renewal"));
+  });
+
+  it.each([
+    [false, "Will not renew"],
+    [null, "Renewal unknown"],
+  ])("names renewal %s in the tooltip", (willRenew, renewal) => {
+    render(
+      <SubscriptionRemaining
+        activeUntil={null}
+        subscription={{ activeUntil: "2026-01-03T12:00:00.000Z", willRenew, observedAt: "2026-01-01T11:00:00.000Z" }}
+        displayFormat="default"
+      />,
+    );
+
+    expect(screen.getByTestId("subscription-remaining")).toHaveTextContent("Subscription: 2d / +14d: 16d");
+    expect(screen.getByTestId("subscription-remaining")).toHaveAttribute("title", expect.stringContaining(renewal));
+  });
+
+  it.each([
+    ["2025-12-31T12:30:00.000Z", "Subscription ended / +14d: 13d"],
+    ["2025-12-31T11:30:00.000Z", "Recorded period ended / +14d: 13d"],
+  ])("says the subscription ended only when a read at %s confirms it", (observedAt, text) => {
+    render(
+      <SubscriptionRemaining
+        activeUntil="2026-02-01T12:00:00.000Z"
+        subscription={{ activeUntil: "2025-12-31T12:00:00.000Z", willRenew: true, observedAt }}
+        displayFormat="default"
+      />,
+    );
+
+    expect(screen.getByTestId("subscription-remaining")).toHaveTextContent(text);
+  });
+
+  it("falls back to the recorded end when the read has no valid date", () => {
+    render(
+      <SubscriptionRemaining
+        activeUntil="2026-01-03T12:00:00.000Z"
+        subscription={{ activeUntil: "not-a-date", willRenew: true, observedAt: "2026-01-01T11:00:00.000Z" }}
+        displayFormat="default"
+      />,
+    );
+
+    expect(screen.getByTestId("subscription-remaining")).toHaveTextContent("Subscription: 2d / +14d: 16d");
+    expect(screen.getByTestId("subscription-remaining")).toHaveAttribute("title", expect.stringContaining("may lag renewal"));
+  });
+
+  it("localizes the confirmed end", async () => {
+    await i18n.changeLanguage("ko");
+    try {
+      render(
+        <SubscriptionRemaining
+          activeUntil={null}
+          subscription={{ activeUntil: "2025-12-17T12:00:00.000Z", willRenew: false, observedAt: "2025-12-18T12:00:00.000Z" }}
+          displayFormat="default"
+        />,
+      );
+
+      expect(screen.getByTestId("subscription-remaining")).toHaveTextContent("구독 종료 / +14일: 경과");
+      expect(screen.getByTestId("subscription-remaining")).toHaveAttribute("title", expect.stringContaining("갱신되지 않음"));
+    } finally {
+      await act(async () => { await i18n.changeLanguage("en"); });
+    }
+  });
+
   it("updates when new subscription metadata arrives", () => {
     const { rerender } = render(<SubscriptionRemaining activeUntil={null} displayFormat="default" />);
     expect(screen.getByTestId("subscription-remaining")).toHaveTextContent("Subscription: unknown");
