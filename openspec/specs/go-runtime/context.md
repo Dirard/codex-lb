@@ -344,6 +344,15 @@ the Accounts page keeps the token date for that account. The read is kept in
 memory like the reset-credit snapshot, so an update shows the token date until
 the first poll of the new process.
 
+The probe sent `User-Agent: codex_cli_rs/0.165.4` and `Originator:
+codex_cli_rs`; go-v1.10.5 sent neither, and on prod Cloudflare answered every
+read with 403 `text/html` and `cf-mitigated: challenge`. A diagnostic from prod
+on 2026-11-02 with one pool account's token got that challenge with the Go
+default `User-Agent` and 200 with `active_until` with the Codex identity, so the
+read now carries the identity of model catalog reads. `/wham/*` paths accept the
+Go client. Failed reads are not logged, so a future refusal shows only as
+`subscription: null` in `GET /api/accounts`.
+
 ## Prices and history
 
 Settings → Model prices allows a new Codex tariff or a bundled-price override
