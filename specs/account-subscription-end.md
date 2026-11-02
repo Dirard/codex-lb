@@ -158,7 +158,7 @@ web/src/features/accounts/components/subscription-remaining.test.tsx
 7. [x] Update operating notes: `openspec/specs/go-runtime/context.md` (the endpoint and the probe) and `openspec/specs/account-identity/context.md` (a refresh does not update the claim).
 8. [x] Run all gates.
 9. [x] Archive the change, sync the deltas, write `openspec/specs/go-runtime/releases/go-v1.10.5.md` and publish the release.
-10. [-] After the owner updates prod: check that skolcov shows the paid end. On go-v1.10.5 every read got Cloudflare's 403 challenge; fixed by task 11.
+10. [x] After the owner updates prod: check that skolcov shows the paid end. On go-v1.10.5 every read got Cloudflare's 403 challenge; fixed by task 11. Verified on go-v1.10.6 on 2026-11-02: within 30 s of the update all six active accounts had a read (skolcov: end 2026-11-22, renews, against 2026-10-22 in its token), and the Accounts page showed "Subscription: 20d / +14d: 34d" with the read time in the tooltip. The two paused accounts and the re-login account keep the token date, as designed.
 11. [x] Send the Codex client identity on the read (OpenSpec change `fix-subscription-read-identity`, release go-v1.10.6) with an adapter regression test (R2).
 
 ## Open questions
