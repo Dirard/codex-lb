@@ -66,7 +66,18 @@ func authenticateBearerKey(r *http.Request, store interface {
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || len(parts[1]) > 4096 {
 		return domain.APIKey{}, invalidKey()
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(parts[1])))
+	return authenticateKeyValue(r, store, parts[1])
+}
+
+// authenticateKeyValue accepts a credential that hashes to an active,
+// unexpired API key.
+func authenticateKeyValue(r *http.Request, store interface {
+	FindAPIKeyByHash(context.Context, string) (domain.APIKey, error)
+}, value string) (domain.APIKey, error) {
+	if value == "" || len(value) > 4096 {
+		return domain.APIKey{}, invalidKey()
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
 	key, err := store.FindAPIKeyByHash(r.Context(), hash)
 	if errors.Is(err, domain.ErrNotFound) || err == nil && (!key.IsActive || key.ExpiresAt != nil && !key.ExpiresAt.After(time.Now())) {
 		return domain.APIKey{}, invalidKey()

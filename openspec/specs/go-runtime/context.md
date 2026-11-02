@@ -891,3 +891,24 @@ A signed-in Grok account can also serve text. On **Settings → Model sources** 
 - xAI's answer at an exhausted weekly pool has not been observed.
 
 Design: [grok-subscription-text-source](../../../../specs/grok-subscription-text-source.md).
+
+## Voice for third-party apps (go-v1.12.0)
+
+Apps use the standard OpenAI Realtime API on the subscription pool:
+- **WebSocket.** `wss://<host>/v1/realtime?model=…` without `call_id` is an app session. codex-lb picks the first active ChatGPT account the key may use, as Codex call creation does. It dials `wss://api.openai.com/v1/realtime?model=…` with that account's token, `ChatGPT-Account-ID` and the Codex identity headers, and relays frames unchanged.
+- **WebRTC.** `POST /v1/realtime/calls` turns raw SDP, multipart or JSON offers into the JSON `{sdp, session}` the ChatGPT backend accepts, and binds the call to the key like Codex calls.
+- **Browser keys.** `POST /v1/realtime/client_secrets` issues `ek_` secrets. They are stored as SHA-256 with the key, the encrypted session and the expiry, in `realtime_client_secrets` (migration 49, additive). Browsers present them as a bearer value or as the `openai-insecure-api-key.` WebSocket subprotocol offered with `realtime`.
+
+**Evidence.** Owner-approved probes of 2026-11-03 used account `9f6ee091`'s token:
+- the standard WebSocket accepted `session.update` and answered with `response.done` usage split into text and audio;
+- the backend created a call from JSON with a standard session (`gpt-realtime`, voice `marin`);
+- the backend refused raw SDP and multipart offers with 400 `Unsupported content type`.
+
+**Metering.** One reservation per WebSocket session ($1.28: 20000 input and 10000 output audio tokens at `gpt-realtime` rates) is taken after the client's upgrade and settled once with the summed `response.done` usage. Text, audio and cached tokens are priced apart (`domain.RealtimeUsage.Amount`), and the event has `request_kind = realtime_session`. That kind is left out of token repricing, like transcription. An upstream refusal closes the client with 1011 `realtime_session_unavailable` and charges nothing. Sessions are account-neutral. WebRTC calls stay content-free because media bypasses codex-lb.
+
+**Limits.**
+- No live WebRTC media call and no session on the released version had been run at release.
+- The effect on Codex usage limits is unmeasured.
+- Accounts are not balanced across sessions.
+
+Design: [realtime-voice-for-apps](../../../../specs/realtime-voice-for-apps.md).

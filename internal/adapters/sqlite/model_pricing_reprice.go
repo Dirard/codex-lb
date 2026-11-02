@@ -223,7 +223,7 @@ func unknownRawPriceRequestsTx(ctx context.Context, tx *sql.Tx, model string) (i
 	var unknown int64
 	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_events e
 	 LEFT JOIN accounts a ON a.id=e.account_id WHERE e.model=?
-	 AND (a.id IS NULL OR (a.kind='chatgpt' AND e.request_kind IN ('transcription','reconciled')))
+	 AND (a.id IS NULL OR (a.kind='chatgpt' AND e.request_kind IN ('transcription','reconciled','realtime_session')))
  AND e.model_source_id IS NULL AND (e.legacy_request_id IS NULL OR
  e.requested_at>=coalesce((SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))`, model).Scan(&unknown)
 	return unknown, err
@@ -314,7 +314,7 @@ func repriceRawChunkTx(ctx context.Context, tx *sql.Tx, model, after string, pri
  e.input_tokens,e.output_tokens,e.cached_input_tokens,e.cost_microdollars,e.legacy_deleted
  FROM usage_events e JOIN accounts a ON a.id=e.account_id
  WHERE e.model=? AND e.request_id>? AND a.kind='chatgpt' AND e.model_source_id IS NULL
- AND e.request_kind NOT IN ('transcription','reconciled')
+ AND e.request_kind NOT IN ('transcription','reconciled','realtime_session')
  AND (e.legacy_request_id IS NULL OR e.requested_at>=coalesce(
  (SELECT hourly_folded_through FROM legacy_import_state WHERE id=1),-9223372036854775808))
  ORDER BY e.request_id LIMIT ?`, model, after, repriceRawChunk)

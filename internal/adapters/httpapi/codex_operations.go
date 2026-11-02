@@ -74,6 +74,10 @@ func (h *CodexOperationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/live/{call_id}", h.realtimeLive)
 	mux.HandleFunc("GET /v1/realtime", h.realtimeLive)
 	mux.HandleFunc("GET /v1/realtime/{$}", h.realtimeLive)
+	mux.HandleFunc("POST /v1/realtime/calls", h.createAppRealtimeCall)
+	mux.HandleFunc("POST /v1/realtime/calls/{$}", h.createAppRealtimeCall)
+	mux.HandleFunc("POST /v1/realtime/client_secrets", h.createRealtimeClientSecret)
+	mux.HandleFunc("POST /v1/realtime/client_secrets/{$}", h.createRealtimeClientSecret)
 }
 
 func (h *CodexOperationsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +233,11 @@ func (h *CodexOperationsHandler) createRealtimeCall(w http.ResponseWriter, r *ht
 }
 
 func (h *CodexOperationsHandler) realtimeLive(w http.ResponseWriter, r *http.Request) {
+	// Without a call selector the socket is an app's own Realtime session.
+	if r.PathValue("call_id") == "" && !r.URL.Query().Has("call_id") {
+		h.realtimeSession(w, r)
+		return
+	}
 	key, err := authenticateBearerKey(r, h.store)
 	if err != nil {
 		writeProxyError(w, err)
