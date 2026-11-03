@@ -914,3 +914,39 @@ Apps use the standard OpenAI Realtime API on the subscription pool:
 **Browsers on other origins (go-v1.12.1).** The app session WebSocket accepts any `Origin`. `POST /v1/realtime/calls` bypasses `http.CrossOriginProtection` and answers CORS: a preflight, `Access-Control-Allow-Origin: *` and an exposed `Location`. This is safe because these routes never authenticate by cookie; the credential is always an explicit key or `ek_` secret. The sideband, Codex realtime, client secret issuance and all other proxy routes keep same-origin rules.
 
 Design: [realtime-voice-for-apps](../../../../specs/realtime-voice-for-apps.md).
+
+## GPT-Live for third-party apps (go-v1.13.0)
+
+GPT-Live is OpenAI's full-duplex voice model: it listens and speaks at once and hands work to a backend instead of calling tools itself. Codex voice uses it as `gpt-live-1-codex` / `gpt-live-1.1-codex` over the "frameless" protocol (`OpenAI-Alpha: quicksilver=v2`).
+
+**What the subscription serves.** Owner-approved probes of 2026-11-03 with account `9f6ee091`'s ChatGPT token:
+- WebSocket-only Live sessions are refused with `error forbidden "Voice session access denied."`. This holds for the public `/v1/live/sessions` (`gpt-live-1` and `gpt-live-1.1-codex`) and for the alpha `/v1/live?model=`.
+- A WebRTC call created like Codex creates it works: `POST https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas` with the alpha and JSON `{sdp, session}` answers 201, an SDP body and `Location: /v1/realtime/calls/rtc_u24_…`.
+- A pion peer sending synthetic speech got the model's audio back. `delegation.created` carried the user's words, an answer sent as `delegation.context.append` on the `oai-events` data channel was spoken, and `session.close` on the data channel ended the call.
+- Two sidebands at `wss://api.openai.com/v1/live/<id>` coexisted, and closing one left the call running. Usage arrives as `session.usage.updated {usage:{audio_duration_ms, backend_model_usage}, usage_limit}` about every 15 s and in `session.closed`. `expires_at` is creation plus two hours.
+
+**Shape.**
+- `POST /v1/live/calls` takes raw SDP, multipart or JSON offers with a key or an `ek_` secret.
+- It completes the session: model from the query or `gpt-live-1.1-codex`, delegation `client`.
+- It creates the call on the first active ChatGPT account the key may use and answers SDP with `Location: /v1/live/<id>`, which is the existing sideband path.
+- `POST /v1/live/client_secrets` is an alias of the Realtime secret route.
+- The call route answers CORS like Realtime calls.
+- A v3 sideband without `OpenAI-Alpha` gets `quicksilver=v2`.
+
+**Metering.**
+- Before dispatch, a reservation covers 10 minutes at the public $0.05 per minute, plus one input and one output token so token-limited keys hold the call too.
+- After creation, codex-lb attaches its own read-only sideband. Until media connects it retries a 404 for 30 s; after a drop it reattaches with a backoff from 200 ms to 5 s. It keeps the largest `audio_duration_ms`, and when the call ends it settles once as `live_session`.
+- Settlement outcomes:
+  - success after `session.closed`;
+  - `cancelled`/`live_usage_incomplete` when the worker stops;
+  - error `live_usage_incomplete` when the call ends otherwise;
+  - error `live_call_unobserved` with no charge when the sideband never attached.
+- Observers hold no admission slot. They are bounded per worker by the upstream WebSocket capacity, refusing extra calls with 503 `live_calls_busy`, and are closed before storage. They never block an update, so the part of a call after its worker stops is not charged.
+- The cost has no tokens, so token repricing never recomputes it.
+
+**Limits.**
+- The app's events (`turn.*`, `*_transcript.added`, `delegation.*`) are the alpha dialect, not the public GA Live events. Media and the data channel bypass codex-lb, so it cannot translate them.
+- The subscription's voice limits (`usage_limit.status: approaching`) are not used for account selection.
+- No browser call through the released version had been run at release.
+
+Design: [gpt-live-for-apps](../../../../specs/gpt-live-for-apps.md).

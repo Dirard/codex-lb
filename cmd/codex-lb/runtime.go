@@ -36,6 +36,7 @@ type runtime struct {
 	accounts       *application.AccountsService
 	tokens         *application.TokenService
 	provider       *provider.Adapter
+	operations     *application.CodexOperations
 	proxy          *application.Proxy
 	transport      *http.Transport
 	server         *http.Server
@@ -254,6 +255,9 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	operations.ConfigureAccountSelection(proxy)
 	proxy.ConfigureCompaction(operations)
 	operations.ConfigureDiagnostics(proxy.Diagnostics)
+	// Each GPT-Live call holds one metering sideband for its whole duration.
+	operations.ConfigureLiveCalls(application.LiveCallConfig{Observers: capacity.UpstreamWebSockets})
+	r.operations = operations
 	operations.ConfigurePrice(func(ctx context.Context, account domain.Account, model string) (pricing.Price, error) {
 		price, err := proxy.ResolvePrice(ctx, account, model)
 		if errors.Is(err, pricing.ErrUnpriced) && account.Kind == domain.AccountChatGPT && model == "gpt-4o-transcribe" {
@@ -538,6 +542,10 @@ func (r *runtime) close() error {
 	r.cancel()
 	r.stopBackground()
 	r.background.Wait()
+	// GPT-Live observers settle what they know before storage closes.
+	if r.operations != nil {
+		r.operations.CloseLiveCalls()
+	}
 	// All callers of the database have finished before closing it.
 	err := errors.Join(r.accounts.Close(), r.tokens.Close(), r.provider.Close())
 	r.transport.CloseIdleConnections()

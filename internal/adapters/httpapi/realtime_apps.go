@@ -172,6 +172,33 @@ func (h *CodexOperationsHandler) createAppRealtimeCall(w http.ResponseWriter, r 
 	h.writeResult(w, result, err, false)
 }
 
+// createAppLiveCall creates a GPT-Live WebRTC call for an app from a raw SDP,
+// multipart or JSON offer; codex-lb meters it through its own sideband.
+func (h *CodexOperationsHandler) createAppLiveCall(w http.ResponseWriter, r *http.Request) {
+	allowRealtimeCallOrigin(w)
+	credential, _, err := h.realtimeCredential(r, false)
+	if err != nil {
+		writeProxyError(w, err)
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))) {
+	case "", "identity":
+	default:
+		writeProxyError(w, &application.ProxyError{Code: "unsupported_content_encoding", Status: 415, Message: "Unsupported request encoding"})
+		return
+	}
+	lease := h.bodies.lease(credential.KeyID)
+	defer lease.release()
+	body, err := readOperationBody(w, r, lease, application.MaxRealtimeCallBytes)
+	if err != nil {
+		writeProxyError(w, err)
+		return
+	}
+	result, err := h.ops.CreateAppLiveCall(r.Context(), h.operationOptions(r, credential.KeyID), credential,
+		r.Header.Get("Content-Type"), body, r.URL.Query().Get("model"))
+	h.writeResult(w, result, err, false)
+}
+
 // createRealtimeClientSecret issues a client secret to a server that holds a
 // real API key; a client secret cannot mint another.
 func (h *CodexOperationsHandler) createRealtimeClientSecret(w http.ResponseWriter, r *http.Request) {
