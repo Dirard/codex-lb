@@ -18,6 +18,7 @@ Third-party apps reach voice through codex-lb with the standard OpenAI Realtime 
   - `POST https://chatgpt.com/backend-api/codex/realtime/calls` with JSON `{sdp, session}` and a standard session (`model: gpt-realtime`, voice `marin`) returned 201, an SDP answer and `Location: /v1/realtime/calls/rtc_…`. Its legacy sideband opened (101) and closed at once, because the hand-made offer never connected media;
   - the same backend refused raw `application/sdp` and `multipart/form-data` with 400 `Unsupported content type`.
 - Non-local: domain pricing, SQLite migration, application operations, provider relay, HTTP routes and authentication, runtime wiring, OpenSpec `go-runtime`, release notes.
+- OpenSpec change `allow-browser-realtime-origins` (use case 5), archived as `openspec/changes/archive/2026-11-03-allow-browser-realtime-origins/`.
 - OpenSpec change `add-realtime-voice-for-apps`, archived as `openspec/changes/archive/2026-11-03-add-realtime-voice-for-apps/`: `go-runtime` ADDED «Third-party apps open Realtime WebSocket sessions», «Third-party apps create WebRTC calls» and «Realtime client secrets for browser apps».
 - Impacted specs in `specs/`: none describes realtime; `specs/request-body-budget.md` (`reuse`, call bodies keep using the shared budget).
 
@@ -170,6 +171,38 @@ internal/domain/realtime_test.go
  - description: text, audio and cached tokens are priced apart for both families; malformed counts are refused
    requirements: R11
 
+### 5. Serve browser pages on other origins
+
+browser request from another origin --answer the CORS preflight of a call--> allowed request --skip cross-origin protection for calls and accept any origin on sessions--> served browser request
+
+Requirements:
+
+  R12:
+The app session route SHALL accept a WebSocket upgrade from any `Origin`, because its credential is always explicit and never a cookie. The call sideband and Codex realtime routes SHALL keep accepting only their own origin.
+
+  R13:
+`POST /v1/realtime/calls` and `/v1/realtime/calls/` SHALL be exempt from cross-origin request protection. Their answers, refusals included, SHALL carry `Access-Control-Allow-Origin: *` and `Access-Control-Expose-Headers: Location`. `OPTIONS` on these paths SHALL answer a CORS preflight with 204, `POST` as the allowed method, `Authorization, Content-Type` as the allowed headers and a 600-second max age, without authentication. Every other proxy route, `/v1/realtime/client_secrets` included, SHALL keep its cross-origin protection.
+
+Observed Existing Logic:
+- `Server.Handler` wraps every route in `http.CrossOriginProtection`, which refuses cross-origin unsafe methods with 403 `cross_origin_request`. Proxy routes send no CORS headers.
+- `websocket.Accept` without options admits only an `Origin` whose host equals the request host.
+- Proxy authentication never uses cookies; Realtime always requires an explicit key or client secret.
+
+Logic Details:
+- `Access-Control-Allow-Origin: *` without credentials suffices, because the credential travels in `Authorization`. That header must be listed by name; the wildcard does not cover it.
+- Client secrets stay server-side to issue, so only the routes that accept them open up.
+
+Files And Functions:
+ - existing: internal/adapters/httpapi/server.go#Server.Handler - cross-origin bypass for calls
+ - existing: internal/adapters/httpapi/realtime_apps.go#CodexOperationsHandler.realtimeSession - any origin
+ - existing: internal/adapters/httpapi/realtime_apps.go#CodexOperationsHandler.createAppRealtimeCall - CORS headers
+ - planned: internal/adapters/httpapi/realtime_apps.go#CodexOperationsHandler.realtimeCallPreflight - workflow step "answer the CORS preflight of a call"
+
+Tests:
+internal/adapters/httpapi/realtime_apps_test.go
+ - description: through the full server handler, a foreign page opens a session with a client secret in the subprotocol, passes the call preflight and creates a call it can read, while the sideband, client secrets and Responses stay refused for it
+   requirements: R12, R13
+
 ## Implementation checklist
 
 1. [x] Write this spec and the OpenSpec change `add-realtime-voice-for-apps`; validate both.
@@ -181,6 +214,8 @@ internal/domain/realtime_test.go
 7. [x] End-to-end tests against loopback stubs (R1–R10).
 8. [x] Gates, release notes `go-v1.12.0`, context notes, sync and archive the OpenSpec change.
 9. [x] Publish go-v1.12.0 and stop before the rollout; after the owner's update, check one app session with approval.
+10. [x] OpenSpec change `allow-browser-realtime-origins`; any origin on sessions, CORS and a protection bypass on calls, with tests through the full server handler (R12, R13).
+11. [x] Gates, release notes `go-v1.12.1`, sync and archive the change; publish and stop before the rollout.
 
 Deferred:
 - Metering WebRTC media, which flows directly between the app and OpenAI; codex-lb would have to keep its own sideband open for every call.
@@ -206,3 +241,5 @@ Deferred:
   - `session.updated` carried the secret's instructions and text output before any client message, and a text question got `Pong.`;
   - prod recorded one `realtime_session` success on account `3241176f`: 17 input and 5 output tokens, 148 microdollars (17 × $4 + 5 × $16 per million), 1.7 s, reservation finalized.
   - A WebRTC call with real media remains unrun.
+- 2026-11-03: After go-v1.12.0 the instruction for app developers showed that browsers on other origins could not use client secrets. Cross-origin protection refused call offers, and the WebSocket accepted only its own origin. The owner asked to fix it, which adds use case 5. Only the routes that accept client secrets open up.
+- 2026-11-03: Validation of use case 5: a test through the full server handler, all local gates green. Mutations that drop the bypass or the origin pattern each fail `TestRealtimeAppServesPagesOnOtherOrigins`.

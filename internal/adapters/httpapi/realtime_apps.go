@@ -15,7 +15,7 @@ import (
 // realtimeSubprotocol is the WebSocket protocol Realtime browser clients
 // offer; the credential rides in a second, prefixed protocol value.
 const (
-	realtimeSubprotocol       = "realtime"
+	realtimeSubprotocol        = "realtime"
 	realtimeCredentialProtocol = "openai-insecure-api-key."
 )
 
@@ -89,7 +89,9 @@ func (h *CodexOperationsHandler) realtimeSession(w http.ResponseWriter, r *http.
 		writeProxyError(w, err)
 		return
 	}
-	accept := &websocket.AcceptOptions{}
+	// A page on any origin may open an app session: its credential is always
+	// explicit, never a cookie, so a foreign page gains nothing without one.
+	accept := &websocket.AcceptOptions{OriginPatterns: []string{"*"}}
 	if subprotocol != "" {
 		accept.Subprotocols = []string{subprotocol}
 	}
@@ -127,9 +129,26 @@ func realtimeCloseCode(err error) string {
 	}
 }
 
+// allowRealtimeCallOrigin lets a browser page on any origin read a call's
+// answer, refusals included; the credential travels in Authorization.
+func allowRealtimeCallOrigin(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Expose-Headers", "Location")
+}
+
+// realtimeCallPreflight answers the CORS preflight of a browser's call offer.
+func (h *CodexOperationsHandler) realtimeCallPreflight(w http.ResponseWriter, _ *http.Request) {
+	allowRealtimeCallOrigin(w)
+	w.Header().Set("Access-Control-Allow-Methods", "POST")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	w.Header().Set("Access-Control-Max-Age", "600")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // createAppRealtimeCall creates a WebRTC call for an app from a raw SDP,
 // multipart or JSON offer.
 func (h *CodexOperationsHandler) createAppRealtimeCall(w http.ResponseWriter, r *http.Request) {
+	allowRealtimeCallOrigin(w)
 	credential, _, err := h.realtimeCredential(r, false)
 	if err != nil {
 		writeProxyError(w, err)

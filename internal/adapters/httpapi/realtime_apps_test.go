@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"codex-lb/internal/adapters/credentials"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/adapters/provider"
 	"codex-lb/internal/adapters/sqlite"
@@ -131,7 +133,13 @@ func newRealtimeAppFixture(t *testing.T) realtimeAppFixture {
 	if err := store.SaveAPIKey(ctx, key, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.NewCodexOperationsHandler(store, ops, nil))
+	vault, err := credentials.Open(filepath.Join(t.TempDir(), "admin-key"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The full server handler applies the cross-origin protection of prod.
+	api := httpapi.New(store, vault, httpapi.Config{BootstrapToken: "synthetic-bootstrap-token-0123456789abcdef"}, nil)
+	server := httptest.NewServer(api.Handler(httpapi.NewCodexOperationsHandler(store, ops, nil), nil))
 	t.Cleanup(server.Close)
 	return realtimeAppFixture{stub: stub, store: store, server: server}
 }
@@ -385,5 +393,72 @@ func TestRealtimeAppCallsConvertOffers(t *testing.T) {
 	owner, err := f.store.GetCodexResourceOwner(context.Background(), application.CodexResourceRealtime, "rtc_app", "wire-key", time.Now())
 	if err != nil || owner.AccountID != "wire-account" {
 		t.Fatalf("call owner: %+v %v", owner, err)
+	}
+}
+
+// browserRequest is a request as a page on https://app.example sends it.
+func (f realtimeAppFixture) browserRequest(t *testing.T, method, path, contentType, body string, header http.Header) *http.Response {
+	t.Helper()
+	r, err := http.NewRequest(method, f.server.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, values := range header {
+		r.Header[name] = values
+	}
+	r.Header.Set("Origin", "https://app.example")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	if contentType != "" {
+		r.Header.Set("Content-Type", contentType)
+	}
+	res, err := f.server.Client().Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = res.Body.Close() })
+	return res
+}
+
+func TestRealtimeAppServesPagesOnOtherOrigins(t *testing.T) {
+	f := newRealtimeAppFixture(t)
+	res := f.post(t, "/v1/realtime/client_secrets", "application/json", `{"session":{"type":"realtime","instructions":"Be brief."}}`, "synthetic-key")
+	var secret struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&secret); err != nil || res.StatusCode != 200 {
+		t.Fatalf("secret: %d %v", res.StatusCode, err)
+	}
+	page := http.Header{"Origin": {"https://app.example"}}
+	conn, response, err := f.dial(t, "?model=gpt-realtime", page, "realtime", "openai-insecure-api-key."+secret.Value)
+	if err != nil {
+		t.Fatalf("a foreign page could not open a session: %v %v", response, err)
+	}
+	if got := readRealtimeEvent(t, conn); got != "session.created" || conn.Subprotocol() != "realtime" {
+		t.Fatalf("foreign page session: %q %q", got, conn.Subprotocol())
+	}
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	preflight := f.browserRequest(t, http.MethodOptions, "/v1/realtime/calls", "", "", http.Header{
+		"Access-Control-Request-Method": {"POST"}, "Access-Control-Request-Headers": {"authorization,content-type"},
+	})
+	if preflight.StatusCode != http.StatusNoContent || preflight.Header.Get("Access-Control-Allow-Origin") != "*" ||
+		preflight.Header.Get("Access-Control-Allow-Methods") != "POST" || preflight.Header.Get("Access-Control-Allow-Headers") != "Authorization, Content-Type" {
+		t.Fatalf("preflight: %d %v", preflight.StatusCode, preflight.Header)
+	}
+	call := f.browserRequest(t, http.MethodPost, "/v1/realtime/calls", "application/sdp", "v=offer\r\n", http.Header{"Authorization": {"Bearer " + secret.Value}})
+	if call.StatusCode != 201 || call.Header.Get("Access-Control-Allow-Origin") != "*" || call.Header.Get("Access-Control-Expose-Headers") != "Location" ||
+		call.Header.Get("Location") != "/v1/realtime/calls/rtc_app" {
+		t.Fatalf("foreign page call: %d %v", call.StatusCode, call.Header)
+	}
+	if refused := f.browserRequest(t, http.MethodPost, "/v1/realtime/calls", "application/sdp", "v=offer\r\n", nil); refused.StatusCode != 401 ||
+		refused.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("a refusal the page cannot read: %d %v", refused.StatusCode, refused.Header)
+	}
+	for _, path := range []string{"/v1/realtime/client_secrets", "/v1/responses"} {
+		if res := f.browserRequest(t, http.MethodPost, path, "application/json", `{}`, http.Header{"Authorization": {"Bearer synthetic-key"}}); res.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s accepted a foreign page: %d", path, res.StatusCode)
+		}
+	}
+	if _, res, err := f.dial(t, "?call_id=rtc_app", http.Header{"Origin": {"https://app.example"}, "Authorization": {"Bearer synthetic-key"}}); err == nil || res == nil || res.StatusCode != http.StatusForbidden {
+		t.Fatalf("the sideband accepted a foreign page: %v %v", res, err)
 	}
 }
