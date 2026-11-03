@@ -952,3 +952,28 @@ GPT-Live is OpenAI's full-duplex voice model: it listens and speaks at once and 
 **Prod check (2026-11-03, go-v1.13.0).** A browser-style call from another origin with an `ek_` secret was created (201, CORS), connected media, had its delegation answered on the data channel and spoken, and closed after 15 s of audio. Prod settled one `live_session` for 12500 microdollars and finalized the reservation.
 
 Design: [gpt-live-for-apps](../../../../specs/gpt-live-for-apps.md).
+
+## Voice account balancing (go-v1.13.1)
+
+Until go-v1.13.0 every voice request took the first active ChatGPT account in id order. Voice requests here are GPT-Live calls, Realtime calls (app and Codex routes) and app Realtime sessions. Now, when the conversation pins no owner, `voiceAccounts` ranks the key's active ChatGPT accounts:
+1. accounts without a current voice warning;
+2. then accounts without a Codex window at 100% with a future reset;
+3. then the fewest voice calls and sessions this worker serves on the account;
+4. then the lowest window use;
+5. then the id.
+
+**Failover.**
+- A request tries at most three accounts.
+- Only an HTTP 429 moves it: at call creation, or at the session dial before anything is relayed. A 429 means the subscription created nothing.
+- The refused account cools down for voice for its `Retry-After` (1 to 86400 s), else 15 minutes.
+- Each attempt keeps its own reservation and releases it on refusal.
+- The last refusal reaches the client with the upstream `Retry-After`. When every account is cooling down, a request gets 429 `voice_limit_reached` with `Retry-After` before anything is reserved.
+
+**Warnings.** A Live usage event with a non-null `usage_limit.status` warns its account for `reset_seconds`, else 15 minutes. A warning only ranks the account last; it neither refuses calls nor changes account health.
+
+**Limits.**
+- Counts, cooldowns and warnings live in each worker's memory, so a replacement worker relearns them.
+- Realtime WebRTC calls and Codex calls are not counted as load, because their media bypasses codex-lb.
+- How the subscription refuses an exhausted voice limit has never been observed; 429 is assumed.
+
+Design: [voice-account-balancing](../../../../specs/voice-account-balancing.md).

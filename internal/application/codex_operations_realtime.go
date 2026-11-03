@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"mime"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"codex-lb/internal/domain"
@@ -33,13 +35,23 @@ func (s *CodexOperations) CreateRealtimeCall(ctx context.Context, options CodexO
 	if err != nil {
 		return CodexOperationResult{}, err
 	}
-	account, err := s.accountForOwner(ctx, options.KeyID, resolved.Owner, nil)
+	candidates, err := s.voiceAccounts(ctx, options.KeyID, resolved.Owner)
 	if err != nil {
 		return CodexOperationResult{}, err
 	}
-	target := CodexOperationTarget{Account: account, KeyID: options.KeyID,
-		SessionID: options.upstreamSessionID(account.ID), TurnState: resolved.UpstreamTurnState}
-	return s.dispatchRealtimeCall(ctx, options, target, request)
+	var result CodexOperationResult
+	for _, account := range candidates[:min(voiceAttempts, len(candidates))] {
+		target := CodexOperationTarget{Account: account, KeyID: options.KeyID,
+			SessionID: options.upstreamSessionID(account.ID), TurnState: resolved.UpstreamTurnState}
+		result, err = s.dispatchRealtimeCall(ctx, options, target, request)
+		cooldown, refused := voiceQuotaRefusal(err)
+		if !refused {
+			return result, err
+		}
+		// A limit refusal created nothing, so the next account may try.
+		s.voice.refuse(account.ID, s.now().Add(cooldown))
+	}
+	return result, err
 }
 
 // dispatchRealtimeCall creates a call on the target account and binds its
@@ -60,7 +72,15 @@ func (s *CodexOperations) dispatchRealtimeCall(ctx context.Context, options Code
 			if status < 400 || status > 599 {
 				status = 502
 			}
-			return CodexOperationResult{}, &ProviderFailure{Code: "realtime_call_unavailable", Status: status, Dispatched: true}
+			failure = &ProviderFailure{Code: "realtime_call_unavailable", Status: status, Dispatched: true}
+			if status == http.StatusTooManyRequests {
+				// The subscription refused for a limit and created no call.
+				failure.QuotaRefused = true
+				if seconds, err := strconv.Atoi(resultHeaderValue(result.Headers, "Retry-After")); err == nil && seconds > 0 && seconds <= 86400 {
+					failure.LimitHeaders = map[string][]string{"Retry-After": {strconv.Itoa(seconds)}}
+				}
+			}
+			return CodexOperationResult{}, failure
 		}
 		callID := realtimeCallID(resultHeaderValue(result.Headers, "Location"))
 		if callID == "" {

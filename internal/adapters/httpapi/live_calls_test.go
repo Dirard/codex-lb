@@ -72,6 +72,13 @@ type liveStub struct {
 	dials      []*liveDial
 	scripts    []liveScript // per accepted connection; the last one repeats
 	written    chan struct{}
+	// refuseAccounts answers calls and Realtime sessions of these ChatGPT
+	// accounts with a status, and retryAfter with that Retry-After.
+	refuseAccounts map[string]int
+	retryAfter     string
+	callAccounts   []string
+	sessions       []string
+	created        int
 }
 
 func newLiveStub(t *testing.T, scripts ...liveScript) *liveStub {
@@ -86,20 +93,38 @@ func (x *liveStub) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/codex/realtime/calls":
 		body, _ := io.ReadAll(r.Body)
+		account := r.Header.Get("ChatGPT-Account-ID")
 		x.mu.Lock()
 		x.calls, x.bodies = append(x.calls, r.Clone(context.Background())), append(x.bodies, string(body))
-		refuse := x.refuseCall
+		x.callAccounts = append(x.callAccounts, account)
+		refuse, status, retry := x.refuseCall, x.refuseAccounts[account], x.retryAfter
 		x.mu.Unlock()
+		if status != 0 {
+			if retry != "" {
+				w.Header().Set("Retry-After", retry)
+			}
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"detail":"private refusal text"}`)
+			return
+		}
 		if refuse {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, `{"detail":"private refusal text"}`)
 			return
 		}
-		w.Header().Set("Location", "/v1/realtime/calls/rtc_live")
+		// Each created call has its own id: an owner binds to one account.
+		x.mu.Lock()
+		x.created++
+		id := "rtc_live"
+		if x.created > 1 {
+			id = "rtc_live_" + strconv.Itoa(x.created)
+		}
+		x.mu.Unlock()
+		w.Header().Set("Location", "/v1/realtime/calls/"+id)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, "v=answer\r\n")
-	case r.URL.Path == "/v1/live/rtc_live":
+	case strings.HasPrefix(r.URL.Path, "/v1/live/rtc_live"):
 		x.mu.Lock()
 		if x.gone || x.refuse > 0 {
 			x.refuse--
@@ -148,9 +173,38 @@ func (x *liveStub) serve(w http.ResponseWriter, r *http.Request) {
 		case liveHolds:
 			<-read
 		}
+	case r.URL.Path == "/v1/realtime":
+		account := r.Header.Get("ChatGPT-Account-ID")
+		x.mu.Lock()
+		x.sessions = append(x.sessions, account)
+		status := x.refuseAccounts[account]
+		x.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"session.created","session":{"type":"realtime"}}`))
+		for {
+			if _, _, err := conn.Read(r.Context()); err != nil {
+				return
+			}
+		}
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// accounts returns the ChatGPT accounts that call creation and Realtime
+// session dials reached, in order.
+func (x *liveStub) accounts() (calls, sessions []string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return append([]string(nil), x.callAccounts...), append([]string(nil), x.sessions...)
 }
 
 // set changes the stub's behavior under its lock.

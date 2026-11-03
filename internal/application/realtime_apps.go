@@ -247,11 +247,11 @@ func realtimeOffer(contentType string, body []byte) (string, json.RawMessage, er
 }
 
 // RealtimeSessionPlan is an app session checked before the client's upgrade:
-// its key, the subscription account and the upstream request.
+// its key, the ranked subscription accounts and the upstream request.
 type RealtimeSessionPlan struct {
-	key     domain.APIKey
-	account domain.Account
-	request CodexRealtimeSessionRequest
+	key      domain.APIKey
+	accounts []domain.Account
+	request  CodexRealtimeSessionRequest
 }
 
 // PrepareRealtimeSession checks an app session before the client's upgrade:
@@ -274,28 +274,44 @@ func (s *CodexOperations) PrepareRealtimeSession(ctx context.Context, options Co
 			Session json.RawMessage `json:"session"`
 		}{"session.update", credential.Session})
 	}
-	account, err := s.accountForOwner(ctx, key.ID, nil, nil)
+	accounts, err := s.voiceAccounts(ctx, key.ID, nil)
 	if err != nil {
 		return RealtimeSessionPlan{}, err
 	}
-	return RealtimeSessionPlan{key: key, account: account, request: request}, nil
+	return RealtimeSessionPlan{key: key, accounts: accounts, request: request}, nil
 }
 
 // RealtimeSession serves a prepared app session: it reserves the session
 // budget on the key, relays the account's session and settles the summed
-// response usage once.
+// response usage once. A dial refused for a limit, before anything is
+// relayed, moves the session to the next ranked account.
 func (s *CodexOperations) RealtimeSession(ctx context.Context, options CodexOperationOptions, plan RealtimeSessionPlan, connection CodexRealtimeConnection) error {
 	sessions, ok := s.provider.(CodexRealtimeSessionProvider)
-	if !ok || plan.key.ID == "" {
+	if !ok || plan.key.ID == "" || len(plan.accounts) == 0 {
 		return &ProxyError{Code: "realtime_session_unavailable", Status: 503, Message: "Realtime sessions are not available"}
 	}
-	key, account, request := plan.key, plan.account, plan.request
-	started := s.now()
 	release, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
+	for _, account := range plan.accounts[:min(voiceAttempts, len(plan.accounts))] {
+		err = s.realtimeSessionAttempt(ctx, options, plan.key, account, plan.request, sessions, connection)
+		var failure *ProviderFailure
+		cooldown, refused := voiceQuotaRefusal(err)
+		if !refused || errors.As(err, &failure) && failure.Dispatched {
+			return err
+		}
+		s.voice.refuse(account.ID, s.now().Add(cooldown))
+	}
+	return err
+}
+
+// realtimeSessionAttempt reserves the session budget for one account, relays
+// its session while counting it there and settles the summed usage once.
+func (s *CodexOperations) realtimeSessionAttempt(ctx context.Context, options CodexOperationOptions, key domain.APIKey, account domain.Account,
+	request CodexRealtimeSessionRequest, sessions CodexRealtimeSessionProvider, connection CodexRealtimeConnection) error {
+	started := s.now()
 	id, attemptAt := "req_"+rand.Text(), s.now()
 	if _, err := s.store.ReserveUsage(ctx, domain.ReservationRequest{
 		ID: id, APIKeyID: key.ID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision,
@@ -332,7 +348,9 @@ func (s *CodexOperations) RealtimeSession(ctx context.Context, options CodexOper
 		total.CostMicrodollars += amount.CostMicrodollars
 	}
 	target := CodexOperationTarget{Account: account, KeyID: key.ID, SessionID: options.upstreamSessionID(account.ID), accountNeutral: true}
+	counted := s.voice.begin(account.ID)
 	callErr := sessions.RealtimeSession(ctx, target, request, connection, observe)
+	counted()
 	mu.Lock()
 	usage, invalid := total, invalidUsage
 	mu.Unlock()

@@ -243,3 +243,4 @@ Deferred:
   - A WebRTC call with real media remains unrun.
 - 2026-11-03: After go-v1.12.0 the instruction for app developers showed that browsers on other origins could not use client secrets. Cross-origin protection refused call offers, and the WebSocket accepted only its own origin. The owner asked to fix it, which adds use case 5. Only the routes that accept client secrets open up.
 - 2026-11-03: Validation of use case 5: a test through the full server handler, all local gates green. Mutations that drop the bypass or the origin pattern each fail `TestRealtimeAppServesPagesOnOtherOrigins`.
+- 2026-11-04: Account choice for these routes now follows `specs/voice-account-balancing.md` (go-v1.13.1). Voice is ranked by warnings, exhausted windows, load and use. A 429 refusal moves to the next account, up to three, and refused accounts cool down.

@@ -196,6 +196,7 @@ type CodexOperations struct {
 	accountAdmissionProxy *Proxy
 	imageCooldowns        imageCooldowns
 	live                  *liveObservers
+	voice                 *voiceBalance
 }
 
 func NewCodexOperations(store CodexOperationStore, owners CodexResourceOwners, provider CodexOperationProvider, ttl time.Duration) *CodexOperations {
@@ -204,7 +205,7 @@ func NewCodexOperations(store CodexOperationStore, owners CodexResourceOwners, p
 	}
 	return &CodexOperations{
 		store: store, owners: owners, provider: provider, now: time.Now, ttl: ttl,
-		admission: blockedCodexAdmission{}, resolvePrice: defaultCodexPrice(store),
+		admission: blockedCodexAdmission{}, resolvePrice: defaultCodexPrice(store), voice: newVoiceBalance(),
 	}
 }
 
