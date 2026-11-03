@@ -180,7 +180,7 @@ internal/domain/realtime_test.go
 6. [x] HTTP: routes, subprotocol and client-secret authentication, wiring (R1, R2, R7–R10).
 7. [x] End-to-end tests against loopback stubs (R1–R10).
 8. [x] Gates, release notes `go-v1.12.0`, context notes, sync and archive the OpenSpec change.
-9. [ ] Publish go-v1.12.0 and stop before the rollout; after the owner's update, check one app session with approval.
+9. [x] Publish go-v1.12.0 and stop before the rollout; after the owner's update, check one app session with approval.
 
 Deferred:
 - Metering WebRTC media, which flows directly between the app and OpenAI; codex-lb would have to keep its own sideband open for every call.
@@ -200,3 +200,9 @@ Deferred:
 - 2026-11-03: Client secrets live in SQLite (additive migration 49) rather than in memory or in a sealed token. This keeps them short, survives restarts and works in both workers during an update.
 - 2026-11-03: Sessions are account-neutral, as they are for Codex's own realtime, because voice limits are not known to match Codex limits.
 - 2026-11-03: Validation: realtime pricing and secret store tests, and end-to-end tests against a loopback Realtime. Those cover the relay with settlement at realtime rates, refusals before the upgrade, a refused dial closing with a fixed reason and no charge, browser secrets through the subprotocol and calls, and offer conversion. All local gates are green. A mutation that ignores `response.done` fails `TestRealtimeAppSessionRelaysAndSettlesOnce`. The first gate run caught a regression of the relay split, which reported a credential failure as `realtime_live_unavailable`; it was fixed before release.
+- 2026-11-03 06:56 UTC, prod on go-v1.12.0 (schema 49, `NRestarts=0`), owner-approved check, run the way a browser does through `https://152.89.218.35:8443`:
+  - `POST /v1/realtime/client_secrets` with the local key `31deb86d` returned 200, an `ek_` secret, a 120 s lifetime and the session;
+  - the WebSocket `/v1/realtime?model=gpt-realtime` with the subprotocols `realtime` and `openai-insecure-api-key.<secret>` returned 101 with `realtime` selected;
+  - `session.updated` carried the secret's instructions and text output before any client message, and a text question got `Pong.`;
+  - prod recorded one `realtime_session` success on account `3241176f`: 17 input and 5 output tokens, 148 microdollars (17 × $4 + 5 × $16 per million), 1.7 s, reservation finalized.
+  - A WebRTC call with real media remains unrun.
