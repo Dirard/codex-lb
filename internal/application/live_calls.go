@@ -180,42 +180,57 @@ func (s *CodexOperations) CreateAppLiveCall(ctx context.Context, options CodexOp
 	if err != nil {
 		return CodexOperationResult{}, err
 	}
-	account, err := s.accountForOwner(ctx, key.ID, resolved.Owner, nil)
+	candidates, err := s.voiceAccounts(ctx, key.ID, resolved.Owner)
 	if err != nil {
 		return CodexOperationResult{}, err
-	}
-	call := liveCall{options: options, model: model, reservation: "req_" + rand.Text(), started: s.now(),
-		target: CodexOperationTarget{Account: account, KeyID: key.ID, SessionID: options.upstreamSessionID(account.ID),
-			TurnState: resolved.UpstreamTurnState, accountNeutral: true}}
-	call.attemptAt = s.now()
-	if _, err := s.store.ReserveUsage(ctx, domain.ReservationRequest{
-		ID: call.reservation, APIKeyID: key.ID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision,
-		Model: model, Budget: domain.LiveCallBudget(), Now: call.attemptAt,
-	}); err != nil {
-		return CodexOperationResult{}, reservationError(err)
 	}
 	offer, _ := json.Marshal(struct {
 		SDP     string          `json:"sdp"`
 		Session json.RawMessage `json:"session"`
 	}{sdp, session})
-	result, err := s.dispatchRealtimeCall(ctx, options, call.target, CodexControlRequest{
-		Method: "POST", Path: "realtime/calls", Query: [][2]string{{"intent", "quicksilver"}, {"architecture", "avas"}},
-		Body: offer, ContentType: "application/json", RealtimeHeaders: CodexRealtimeHeaders{Alpha: domain.LiveAlpha},
-	})
-	if err != nil {
-		// No call exists, so nothing ran: the reservation goes back unused.
-		_ = s.settle(ctx, call.reservation, domain.UsageSettlement{Status: "released"})
-		return result, err
+	var result CodexOperationResult
+	for _, account := range candidates[:min(voiceAttempts, len(candidates))] {
+		call := liveCall{options: options, model: model, reservation: "req_" + rand.Text(), started: s.now(),
+			target: CodexOperationTarget{Account: account, KeyID: key.ID, SessionID: options.upstreamSessionID(account.ID),
+				TurnState: resolved.UpstreamTurnState, accountNeutral: true}}
+		call.attemptAt = s.now()
+		if _, err := s.store.ReserveUsage(ctx, domain.ReservationRequest{
+			ID: call.reservation, APIKeyID: key.ID, AccountID: account.ID, AccountGeneration: account.Generation, RouteRevision: account.RouteRevision,
+			Model: model, Budget: domain.LiveCallBudget(), Now: call.attemptAt,
+		}); err != nil {
+			return CodexOperationResult{}, reservationError(err)
+		}
+		result, err = s.dispatchRealtimeCall(ctx, options, call.target, CodexControlRequest{
+			Method: "POST", Path: "realtime/calls", Query: [][2]string{{"intent", "quicksilver"}, {"architecture", "avas"}},
+			Body: offer, ContentType: "application/json", RealtimeHeaders: CodexRealtimeHeaders{Alpha: domain.LiveAlpha},
+		})
+		if err != nil {
+			// No call exists, so nothing ran: the reservation goes back unused.
+			_ = s.settle(ctx, call.reservation, domain.UsageSettlement{Status: "released"})
+			cooldown, refused := voiceQuotaRefusal(err)
+			if !refused {
+				return result, err
+			}
+			// A limit refusal created nothing, so the next account may try.
+			s.voice.refuse(account.ID, s.now().Add(cooldown))
+			continue
+		}
+		call.callID = realtimeCallID(resultHeaderValue(result.Headers, "Location"))
+		counted := s.voice.begin(account.ID)
+		observing = s.live.start(release, func(ctx context.Context) {
+			defer counted()
+			s.observeLiveCall(ctx, observer, call)
+		})
+		if !observing {
+			// The worker began stopping while the call was created.
+			counted()
+			s.settleLiveCall(ctx, call, liveObservation{stopped: true})
+		}
+		result.ContentType = "application/sdp"
+		result.Headers = map[string][]string{"Location": {"/v1/live/" + call.callID}}
+		return result, nil
 	}
-	call.callID = realtimeCallID(resultHeaderValue(result.Headers, "Location"))
-	observing = s.live.start(release, func(ctx context.Context) { s.observeLiveCall(ctx, observer, call) })
-	if !observing {
-		// The worker began stopping while the call was created.
-		s.settleLiveCall(ctx, call, liveObservation{stopped: true})
-	}
-	result.ContentType = "application/sdp"
-	result.Headers = map[string][]string{"Location": {"/v1/live/" + call.callID}}
-	return result, nil
+	return result, err
 }
 
 // liveSession completes an app's GPT-Live session: a missing model becomes
@@ -263,6 +278,10 @@ func (s *CodexOperations) observeLiveCall(ctx context.Context, observer CodexLiv
 			Usage struct {
 				AudioDurationMS int64 `json:"audio_duration_ms"`
 			} `json:"usage"`
+			UsageLimit struct {
+				Status       json.RawMessage `json:"status"`
+				ResetSeconds json.RawMessage `json:"reset_seconds"`
+			} `json:"usage_limit"`
 		}
 		if json.Unmarshal(data, &event) != nil {
 			return
@@ -277,6 +296,12 @@ func (s *CodexOperations) observeLiveCall(ctx context.Context, observer CodexLiv
 		case "session.usage.updated", "session.closed":
 			seen.audioMS = max(seen.audioMS, event.Usage.AudioDurationMS)
 			seen.closed = seen.closed || event.Type == "session.closed"
+			if status := event.UsageLimit.Status; len(status) != 0 && string(status) != "null" {
+				// The subscription's voice limit is near: new calls go elsewhere.
+				var reset float64
+				_ = json.Unmarshal(event.UsageLimit.ResetSeconds, &reset)
+				s.voice.warn(call.target.Account.ID, s.now().Add(voiceCooldown(reset)))
+			}
 		}
 	}
 	config := s.live.config

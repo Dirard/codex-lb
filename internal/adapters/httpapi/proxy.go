@@ -300,6 +300,12 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		return
 	}
 	status, code, message := proxyError(err)
+	if errors.As(err, &failure) && status == http.StatusTooManyRequests {
+		// A voice limit refusal says when to retry.
+		if retry := failure.LimitHeaders["Retry-After"]; len(retry) == 1 {
+			w.Header().Set("Retry-After", retry[0])
+		}
+	}
 	if status == 429 && (code == "account_response_create_cap" || code == "account_stream_cap" || code == "api_key_stream_fair_share") {
 		w.Header().Set("Retry-After", "2")
 		writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "type": "rate_limit_error", "message": message}})
