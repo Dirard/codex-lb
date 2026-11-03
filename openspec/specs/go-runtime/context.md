@@ -949,4 +949,6 @@ GPT-Live is OpenAI's full-duplex voice model: it listens and speaks at once and 
 - The subscription's voice limits (`usage_limit.status: approaching`) are not used for account selection.
 - No browser call through the released version had been run at release.
 
+**Prod check (2026-11-03, go-v1.13.0).** A browser-style call from another origin with an `ek_` secret was created (201, CORS), connected media, had its delegation answered on the data channel and spoken, and closed after 15 s of audio. Prod settled one `live_session` for 12500 microdollars and finalized the reservation.
+
 Design: [gpt-live-for-apps](../../../../specs/gpt-live-for-apps.md).
