@@ -194,7 +194,7 @@ internal/adapters/httpapi/live_calls_test.go
 6. [x] HTTP: routes, preflight, secret alias, cross-origin bypass; runtime wiring and close (R1, R4, R7, R8, R10, R11).
 7. [x] End-to-end tests against loopback stubs (R1–R12).
 8. [x] Gates, release notes `go-v1.13.0`, context notes, sync and archive the OpenSpec change.
-9. [ ] Publish go-v1.13.0 and stop before the rollout; after the owner's update, check one browser-style call with approval.
+9. [x] Publish go-v1.13.0 and stop before the rollout; after the owner's update, check one browser-style call with approval.
 
 Deferred:
 - GA-compatible `/v1/live/sessions`: the subscription refuses it, and the app's data channel speaks the alpha dialect, which codex-lb cannot translate because media and events bypass it.
@@ -217,3 +217,8 @@ Deferred:
 - 2026-11-03: The ledger refused the first reservation: a key with token limits needs a positive token part. The call budget carries one input and one output token, which settlement returns, as transcription does.
 - 2026-11-03: Validation: domain pricing tests, a repricing test, and end-to-end tests against a loopback GPT-Live that cover creation from a foreign page with a secret, offer checks, refusal release, early 404 retry, reattachment, close with known usage, an unobserved call, observer capacity and the app sideband alpha. Twelve mutations (default alpha, attach retry, release on refusal, reattachment, join on close, capacity, usage tracking, unobserved code, session completion, quicksilver query, CORS bypass, budget tokens) each fail their test. A thirteenth showed the planned `live_session` repricing exclusion was redundant with the token-free rule, so it was removed.
 - 2026-11-03: All twelve local gates green on the branch: build and contract tests, web checks, vet, lint, `go test`, four race shards, govulncheck and spec validation.
+- 2026-11-03 19:50 UTC, prod on go-v1.13.0 (schema 49, `NRestarts=0`), owner-approved check, run the way a browser page on another origin does through `https://152.89.218.35:8443` with the local key `31deb86d`:
+  - `POST /v1/live/client_secrets` returned 200 and an `ek_` secret for 120 s;
+  - `POST /v1/live/calls` with `application/sdp`, the secret, `Origin: https://app.example` and `Sec-Fetch-Site: cross-site` returned 201, `application/sdp`, `Location: /v1/live/rtc_u24_…`, `Access-Control-Allow-Origin: *` and the exposed `Location`;
+  - a pion peer with synthetic speech connected media (713 inbound RTP packets). On the data channel the model delegated the request, the answer sent as `delegation.context.append` was spoken ("On it, checking now. You've got two open chats: Design Review and Release Plan."), and `session.close` ended the call with `audio_duration_ms` 15000;
+  - prod recorded a content-free `realtime_call` and one successful `live_session` on account `3241176f`: `gpt-live-1.1-codex`, webrtc, 12500 microdollars (15 s at $0.05 per minute), reservation finalized, no open reservations and no warnings.
