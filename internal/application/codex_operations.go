@@ -195,6 +195,7 @@ type CodexOperations struct {
 	cipher                SecretCipher
 	accountAdmissionProxy *Proxy
 	imageCooldowns        imageCooldowns
+	live                  *liveObservers
 }
 
 func NewCodexOperations(store CodexOperationStore, owners CodexResourceOwners, provider CodexOperationProvider, ttl time.Duration) *CodexOperations {

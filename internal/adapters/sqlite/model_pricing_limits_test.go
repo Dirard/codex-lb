@@ -197,3 +197,33 @@ func TestModelPricingDoesNotRepriceExternalSourceHistory(t *testing.T) {
 		t.Fatalf("external source cost changed: %d, %v", cost, err)
 	}
 }
+
+func TestModelPricingKeepsVoiceSessionCosts(t *testing.T) {
+	ctx := context.Background()
+	store, _ := testStore(t)
+	saveTestAccount(t, store, "voice-account")
+	// Voice sessions are priced by their own rates, which a token tariff
+	// cannot recompute: realtime sessions by kind, token-free Live minutes
+	// because a cost without tokens is never recomputed.
+	for _, event := range []domain.UsageEvent{
+		{RequestID: "live-usage", AccountID: "voice-account", Model: "gpt-live-1.1-codex", RequestKind: "live_session",
+			Status: "success", RequestedAt: fixedTime, Usage: domain.UsageAmount{CostMicrodollars: 50_000}},
+		{RequestID: "realtime-usage", AccountID: "voice-account", Model: "gpt-live-1.1-codex", RequestKind: "realtime_session",
+			Status: "success", RequestedAt: fixedTime, Usage: domain.UsageAmount{InputTokens: 17, OutputTokens: 5, CostMicrodollars: 148}},
+	} {
+		if _, err := store.RecordUsage(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := application.NewModelPricingService(store, func() time.Time { return fixedTime })
+	entry, err := service.Save(ctx, "gpt-live-1.1-codex", pricing.Price{Standard: pricing.Rates{Input: 4_000_000, Output: 16_000_000}})
+	if err != nil || entry.Reprice == nil || entry.Reprice.RecomputedRequests != 0 {
+		t.Fatalf("voice history entered reprice: %+v, %v", entry.Reprice, err)
+	}
+	for id, want := range map[string]int64{"live-usage": 50_000, "realtime-usage": 148} {
+		var cost int64
+		if err := store.db.QueryRowContext(ctx, `SELECT cost_microdollars FROM usage_events WHERE request_id=?`, id).Scan(&cost); err != nil || cost != want {
+			t.Fatalf("%s cost changed: %d, %v", id, cost, err)
+		}
+	}
+}

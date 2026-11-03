@@ -80,6 +80,12 @@ func (h *CodexOperationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /v1/realtime/calls/{$}", h.realtimeCallPreflight)
 	mux.HandleFunc("POST /v1/realtime/client_secrets", h.createRealtimeClientSecret)
 	mux.HandleFunc("POST /v1/realtime/client_secrets/{$}", h.createRealtimeClientSecret)
+	mux.HandleFunc("POST /v1/live/calls", h.createAppLiveCall)
+	mux.HandleFunc("POST /v1/live/calls/{$}", h.createAppLiveCall)
+	mux.HandleFunc("OPTIONS /v1/live/calls", h.realtimeCallPreflight)
+	mux.HandleFunc("OPTIONS /v1/live/calls/{$}", h.realtimeCallPreflight)
+	mux.HandleFunc("POST /v1/live/client_secrets", h.createRealtimeClientSecret)
+	mux.HandleFunc("POST /v1/live/client_secrets/{$}", h.createRealtimeClientSecret)
 }
 
 func (h *CodexOperationsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

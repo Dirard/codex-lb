@@ -138,9 +138,9 @@ func (s *Server) Handler(proxy, ui http.Handler) http.Handler {
 		// Validated as a bare https origin by ValidateConfig.
 		_ = csrf.AddTrustedOrigin(s.config.PublicOrigin)
 	}
-	// Browser pages on other origins create Realtime calls with a client
-	// secret in Authorization; no cookie authenticates these routes.
-	for _, pattern := range []string{"POST /v1/realtime/calls", "POST /v1/realtime/calls/{$}"} {
+	// Browser pages on other origins create Realtime and GPT-Live calls with a
+	// client secret in Authorization; no cookie authenticates these routes.
+	for _, pattern := range []string{"POST /v1/realtime/calls", "POST /v1/realtime/calls/{$}", "POST /v1/live/calls", "POST /v1/live/calls/{$}"} {
 		csrf.AddInsecureBypassPattern(pattern)
 	}
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

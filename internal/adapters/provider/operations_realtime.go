@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"codex-lb/internal/application"
+	"codex-lb/internal/domain"
 )
 
 const defaultLiveBaseURL = "https://api.openai.com/v1"
@@ -40,7 +41,13 @@ func (a *Adapter) Realtime(ctx context.Context, target application.CodexOperatio
 	if query := encodeQuery(queryValues); query != "" {
 		endpoint += "?" + query
 	}
-	upstream, _, err := a.dialRealtime(ctx, target, request.Headers, endpoint)
+	protocol := request.Headers
+	if request.Protocol != application.CodexRealtimeLegacy && strings.TrimSpace(protocol.Alpha) == "" {
+		// The v3 path speaks the frameless GPT-Live protocol; an app that
+		// does not name it still attaches with the alpha Codex sends.
+		protocol.Alpha = domain.LiveAlpha
+	}
+	upstream, _, err := a.dialRealtime(ctx, target, protocol, endpoint)
 	if err != nil {
 		var failure *application.ProviderFailure
 		if errors.As(err, &failure) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

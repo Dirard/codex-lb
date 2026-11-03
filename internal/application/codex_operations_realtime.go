@@ -39,6 +39,13 @@ func (s *CodexOperations) CreateRealtimeCall(ctx context.Context, options CodexO
 	}
 	target := CodexOperationTarget{Account: account, KeyID: options.KeyID,
 		SessionID: options.upstreamSessionID(account.ID), TurnState: resolved.UpstreamTurnState}
+	return s.dispatchRealtimeCall(ctx, options, target, request)
+}
+
+// dispatchRealtimeCall creates a call on the target account and binds its
+// key-scoped owner from Location before the answer is returned.
+func (s *CodexOperations) dispatchRealtimeCall(ctx context.Context, options CodexOperationOptions, target CodexOperationTarget, request CodexControlRequest) (CodexOperationResult, error) {
+	account := target.Account
 	return s.contentFree(ctx, options, account, "realtime-call", "realtime_call", nil, target, func() (CodexOperationResult, error) {
 		result, err := s.provider.Control(ctx, target, request)
 		if err != nil || result.Failed || result.Status < 200 || result.Status >= 300 {
