@@ -911,4 +911,6 @@ Apps use the standard OpenAI Realtime API on the subscription pool:
 - The effect on Codex usage limits is unmeasured.
 - Accounts are not balanced across sessions.
 
+**Browsers on other origins (go-v1.12.1).** The app session WebSocket accepts any `Origin`. `POST /v1/realtime/calls` bypasses `http.CrossOriginProtection` and answers CORS: a preflight, `Access-Control-Allow-Origin: *` and an exposed `Location`. This is safe because these routes never authenticate by cookie; the credential is always an explicit key or `ek_` secret. The sideband, Codex realtime, client secret issuance and all other proxy routes keep same-origin rules.
+
 Design: [realtime-voice-for-apps](../../../../specs/realtime-voice-for-apps.md).
