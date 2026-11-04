@@ -121,7 +121,7 @@ internal/adapters/httpapi/voice_balancing_test.go
 4. [x] Counting and warnings in the Live observer and Realtime sessions (R5, R6).
 5. [x] End-to-end tests with two subscription accounts against loopback stubs; mutations.
 6. [x] Gates, release notes `go-v1.13.1`, context notes, sync and archive the OpenSpec change.
-7. [ ] Publish go-v1.13.1 and stop before the rollout.
+7. [x] Publish go-v1.13.1 and stop before the rollout; after the owner's update, check two overlapping calls with approval.
 
 Deferred:
 - Persisting cooldowns across workers and restarts.
@@ -146,3 +146,7 @@ Deferred:
   - a warning outranking load.
   Fourteen mutations each fail their test. A first version of the spread test missed the "null status is no warning" mutation, because every stub sideband reported usage and so warned both accounts. Only the first call reports usage now.
 - 2026-11-04: All twelve local gates green on the branch.
+- 2026-11-05 01:15 UTC, prod on go-v1.13.1 (schema 49, `NRestarts=0`, five active ChatGPT accounts), owner-approved check with the local key `31deb86d`: two overlapping GPT-Live calls through `https://152.89.218.35:8443/v1/live/calls`, each with connected media and Opus silence, closed with `session.close` on the data channel.
+  - The first call was created on `3241176f`. The second, created while the first was live, went to `9f6ee091`.
+  - Prod settled both as successful `live_session` events: 6 s for 5000 microdollars and 3 s for 2500. Both reservations were finalized, none stayed open, and nothing was logged at warning level.
+  - The 429 failover and warnings were not exercised on prod, because no account refused or warned.

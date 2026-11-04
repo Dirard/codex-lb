@@ -976,4 +976,6 @@ Until go-v1.13.0 every voice request took the first active ChatGPT account in id
 - Realtime WebRTC calls and Codex calls are not counted as load, because their media bypasses codex-lb.
 - How the subscription refuses an exhausted voice limit has never been observed; 429 is assumed.
 
+**Prod check (2026-11-05, go-v1.13.1).** Two overlapping GPT-Live calls with the same key landed on two accounts (`3241176f`, then `9f6ee091`), and both settled. Failover and warnings have not happened on prod yet.
+
 Design: [voice-account-balancing](../../../../specs/voice-account-balancing.md).
