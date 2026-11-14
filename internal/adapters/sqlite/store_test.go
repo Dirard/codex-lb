@@ -394,3 +394,44 @@ func TestOpenWithOptionsSizesTheReadPool(t *testing.T) {
 		t.Fatalf("default read pool = %d", got)
 	}
 }
+
+func TestFreeRequestHoldsCostLimitByOneMicrodollar(t *testing.T) {
+	ctx := context.Background()
+	s, _ := testStore(t)
+	saveTestAccount(t, s, "acct")
+	key := testKey("key", nil)
+	key.Limits = []domain.LimitRule{{Type: domain.LimitCostUSD, Window: domain.WindowWeekly, MaxValue: 800_000_000}}
+	if err := s.SaveAPIKey(ctx, key, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	costHeld := func() int64 {
+		t.Helper()
+		got, err := s.GetAPIKey(ctx, "key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Limits[0].CurrentValue
+	}
+	// A model priced at zero has tokens but no cost; it still holds the limit.
+	free := domain.ReservationRequest{ID: "free", APIKeyID: "key", AccountID: "acct", Model: "free-model",
+		Budget: domain.UsageAmount{InputTokens: 100, OutputTokens: 2048}, Now: fixedTime}
+	if _, err := s.ReserveUsage(ctx, free); err != nil {
+		t.Fatal(err)
+	}
+	if held := costHeld(); held != 1 {
+		t.Fatalf("free request holds %d microdollars, want 1", held)
+	}
+	event := domain.UsageEvent{RequestID: "free", Model: "free-model", Status: "success", RequestedAt: fixedTime,
+		Usage: domain.UsageAmount{InputTokens: 100, OutputTokens: 20}}
+	if applied, err := s.SettleUsage(ctx, "free", domain.UsageSettlement{Status: "finalized", Event: event}); err != nil || !applied {
+		t.Fatalf("settle: %v %v", applied, err)
+	}
+	if held := costHeld(); held != 0 {
+		t.Fatalf("settled free request left %d microdollars", held)
+	}
+	// A reservation without tokens or cost is still a missing budget.
+	empty := domain.ReservationRequest{ID: "empty", APIKeyID: "key", AccountID: "acct", Model: "free-model", Now: fixedTime}
+	if _, err := s.ReserveUsage(ctx, empty); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty budget: %v", err)
+	}
+}

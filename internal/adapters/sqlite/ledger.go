@@ -99,6 +99,11 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 				return fmt.Errorf("%s %s: %w", l.typ, l.window, ErrLimitReached)
 			}
 			delta := req.Budget.ForLimit(l.typ)
+			if l.typ == domain.LimitCostUSD && delta <= 0 && req.Budget.InputTokens+req.Budget.OutputTokens > 0 {
+				// A model priced at zero still holds the cost limit while it
+				// runs; settlement charges its actual cost, nothing.
+				delta = 1
+			}
 			if l.typ != domain.LimitCredits && delta <= 0 {
 				return fmt.Errorf("missing %s reservation budget: %w", l.typ, ErrInvalid)
 			}
