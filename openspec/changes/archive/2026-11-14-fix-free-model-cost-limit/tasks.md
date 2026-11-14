@@ -5,4 +5,4 @@
 ## 2. Verification
 
 - [x] 2.1 Regression test on the failing HTTP route and a ledger boundary test.
-- [ ] 2.2 Gates, strict OpenSpec validation and release notes.
+- [x] 2.2 Gates, strict OpenSpec validation and release notes.
