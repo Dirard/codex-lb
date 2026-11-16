@@ -146,7 +146,7 @@ func bulkFailureCode(err error) string {
 		return domain.KeyBulkInvalidGroup
 	case errors.Is(err, domain.ErrConflict):
 		return domain.KeyBulkConflict
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(err, domain.ErrKeyIsFork):
 		return domain.KeyBulkNotApplied
 	}
 	return domain.KeyBulkInternal

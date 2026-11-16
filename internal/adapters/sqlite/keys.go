@@ -17,7 +17,7 @@ const keyColumns = `id,name,key_hash,key_prefix,group_id,allowed_models,apply_to
  enforced_model,allowed_reasoning_efforts,enforced_reasoning_effort,enforced_service_tier,
  traffic_class,transport_policy_override,usage_sections,account_assignment_scope_enabled,
  source_assignment_scope_enabled,expires_at,is_active,created_at,last_used_at,
- request_pool_rpm,request_pool_max_wait_seconds`
+ request_pool_rpm,request_pool_max_wait_seconds,parent_key_id,fork_created_by,fork_updated_by,fork_updated_at`
 
 func encodeList(values []string) (any, error) {
 	if values == nil {
@@ -61,19 +61,23 @@ func optionalString(v sql.NullString) *string {
 
 func scanKey(row scanner) (domain.APIKey, error) {
 	var k domain.APIKey
-	var group, allowed, enforcedModel, efforts, enforcedEffort, tier, transport sql.NullString
-	var expires, lastUsed, poolRPM, poolWait sql.NullInt64
+	var group, allowed, enforcedModel, efforts, enforcedEffort, tier, transport, parent, createdBy, updatedBy sql.NullString
+	var expires, lastUsed, poolRPM, poolWait, updatedAt sql.NullInt64
 	var created int64
 	err := row.Scan(&k.ID, &k.Name, &k.KeyHash, &k.KeyPrefix, &group, &allowed,
 		&k.ApplyToCodexModel, &enforcedModel, &efforts, &enforcedEffort, &tier,
 		&k.TrafficClass, &transport, &k.UsageSections, &k.AccountAssignmentScopeEnabled,
 		&k.SourceAssignmentScopeEnabled, &expires, &k.IsActive, &created, &lastUsed,
-		&poolRPM, &poolWait)
+		&poolRPM, &poolWait, &parent, &createdBy, &updatedBy, &updatedAt)
 	if err != nil {
 		return k, err
 	}
 	if poolRPM.Valid {
 		k.RequestPool = &domain.RequestPool{RequestsPerMinute: int(poolRPM.Int64), MaxWaitSeconds: int(poolWait.Int64)}
+	}
+	if parent.Valid {
+		k.Fork = &domain.KeyFork{ParentID: parent.String, CreatedBy: domain.KeyActor(createdBy.String),
+			UpdatedBy: domain.KeyActor(updatedBy.String), UpdatedAt: fromMillis(updatedAt.Int64)}
 	}
 	k.GroupID = optionalString(group)
 	k.AllowedModels, err = decodeList(allowed)
@@ -129,11 +133,32 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
 	if k.CreatedAt.IsZero() {
 		k.CreatedAt = now
 	}
+	var parentID, forkCreatedBy, forkUpdatedBy, forkUpdatedAt any
+	if k.Fork != nil {
+		if k.Fork.ParentID == "" || k.Fork.ParentID == k.ID || !validActor(k.Fork.CreatedBy) || !validActor(k.Fork.UpdatedBy) {
+			return fmt.Errorf("API key fork: %w", ErrInvalid)
+		}
+		// A fork's scope and inherited settings are its parent's, read with it.
+		k.GroupID, k.AccountAssignmentScopeEnabled, k.SourceAssignmentScopeEnabled = nil, false, false
+		k.AssignedAccountIDs, k.AssignedSourceIDs = nil, nil
+		k.TrafficClass, k.TransportPolicyOverride, k.UsageSections = "foreground", nil, ""
+		parentID, forkCreatedBy, forkUpdatedBy, forkUpdatedAt = k.Fork.ParentID, string(k.Fork.CreatedBy), string(k.Fork.UpdatedBy), millis(now)
+	}
 	return s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var priorGroup sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT group_id FROM api_keys WHERE id=? AND deleted_at IS NULL", k.ID).Scan(&priorGroup)
+		var priorGroup, priorParent sql.NullString
+		err := tx.QueryRowContext(ctx, "SELECT group_id,parent_key_id FROM api_keys WHERE id=? AND deleted_at IS NULL", k.ID).Scan(&priorGroup, &priorParent)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		inserting := errors.Is(err, sql.ErrNoRows)
+		// No key changes its parent, becomes a fork or stops being one.
+		if !inserting && (priorParent.Valid != (k.Fork != nil) || k.Fork != nil && priorParent.String != k.Fork.ParentID) {
+			return fmt.Errorf("API key parent cannot change: %w", ErrInvalid)
+		}
+		if k.Fork != nil {
+			if err := checkForkTx(ctx, tx, k, inserting); err != nil {
+				return err
+			}
 		}
 		if k.GroupID != nil {
 			var exists int
@@ -155,8 +180,8 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
  allowed_reasoning_efforts,enforced_reasoning_effort,enforced_service_tier,traffic_class,
  transport_policy_override,usage_sections,account_assignment_scope_enabled,
  source_assignment_scope_enabled,expires_at,is_active,created_at,last_used_at,
- request_pool_rpm,request_pool_max_wait_seconds
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+ request_pool_rpm,request_pool_max_wait_seconds,parent_key_id,fork_created_by,fork_updated_by,fork_updated_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
  name=excluded.name,key_hash=excluded.key_hash,key_prefix=excluded.key_prefix,group_id=excluded.group_id,
  allowed_models=excluded.allowed_models,apply_to_codex_model=excluded.apply_to_codex_model,
  enforced_model=excluded.enforced_model,allowed_reasoning_efforts=excluded.allowed_reasoning_efforts,
@@ -166,14 +191,15 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
  account_assignment_scope_enabled=excluded.account_assignment_scope_enabled,
  source_assignment_scope_enabled=excluded.source_assignment_scope_enabled,
  expires_at=excluded.expires_at,is_active=excluded.is_active,last_used_at=excluded.last_used_at,
- request_pool_rpm=excluded.request_pool_rpm,request_pool_max_wait_seconds=excluded.request_pool_max_wait_seconds
+ request_pool_rpm=excluded.request_pool_rpm,request_pool_max_wait_seconds=excluded.request_pool_max_wait_seconds,
+ fork_updated_by=excluded.fork_updated_by,fork_updated_at=excluded.fork_updated_at
  WHERE api_keys.deleted_at IS NULL`, k.ID, k.Name, k.KeyHash, k.KeyPrefix, nullableString(k.GroupID),
 			allowed, boolInt(k.ApplyToCodexModel), nullableString(k.EnforcedModel), efforts,
 			nullableString(k.EnforcedReasoningEffort), nullableString(k.EnforcedServiceTier), k.TrafficClass,
 			nullableString(k.TransportPolicyOverride), k.UsageSections,
 			boolInt(k.AccountAssignmentScopeEnabled), boolInt(k.SourceAssignmentScopeEnabled),
 			optionalMillis(k.ExpiresAt), boolInt(k.IsActive), millis(k.CreatedAt), optionalMillis(k.LastUsedAt),
-			poolRPM, poolWait)
+			poolRPM, poolWait, parentID, forkCreatedBy, forkUpdatedBy, forkUpdatedAt)
 		if err != nil {
 			return err
 		}
@@ -189,6 +215,11 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
 		}
 		if err := replaceAssignments(ctx, tx, "api_key_sources", k.ID, k.AssignedSourceIDs); err != nil {
 			return err
+		}
+		if k.Fork == nil {
+			if err := disableExceedingForksTx(ctx, tx, k, now); err != nil {
+				return err
+			}
 		}
 		if k.GroupID != nil {
 			rules, err := groupRulesTx(ctx, tx, *k.GroupID)
@@ -240,7 +271,38 @@ func replaceAssignments(ctx context.Context, tx *sql.Tx, table, keyID string, id
 	return nil
 }
 
+// GetAPIKey returns the key as it serves; a fork carries its parent's state,
+// expiry, scope and enforcement (domain.InheritFromParent).
 func (s *Store) GetAPIKey(ctx context.Context, id string) (domain.APIKey, error) {
+	k, err := s.storedKey(ctx, id)
+	if err != nil || k.Fork == nil {
+		return k, err
+	}
+	parent, err := s.storedKey(ctx, k.Fork.ParentID)
+	if err != nil {
+		return domain.APIKey{}, err
+	}
+	return domain.InheritFromParent(k, parent), nil
+}
+
+// GetStoredAPIKey returns the key's own settings, as an editor changes them.
+func (s *Store) GetStoredAPIKey(ctx context.Context, id string) (domain.APIKey, error) {
+	k, err := s.storedKey(ctx, id)
+	if err != nil || k.Fork == nil {
+		return k, err
+	}
+	var name string
+	if err := s.readDB.QueryRowContext(ctx, "SELECT name FROM api_keys WHERE id=? AND deleted_at IS NULL", k.Fork.ParentID).Scan(&name); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.APIKey{}, ErrNotFound
+		}
+		return domain.APIKey{}, err
+	}
+	k.Fork.ParentName = name
+	return k, nil
+}
+
+func (s *Store) storedKey(ctx context.Context, id string) (domain.APIKey, error) {
 	k, err := scanKey(s.readDB.QueryRowContext(ctx, "SELECT "+keyColumns+" FROM api_keys WHERE id=? AND deleted_at IS NULL", id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return k, ErrNotFound
@@ -340,8 +402,9 @@ func (s *Store) DeleteAPIKey(ctx context.Context, id string) error {
 	if domain.IsInternalKey(id) {
 		return ErrInvalid
 	}
+	// A parent takes its forks with it.
 	res, err := s.exec(ctx, `UPDATE api_keys SET is_active=0,deleted_at=?
- WHERE id=? AND deleted_at IS NULL`, time.Now().UTC().UnixMilli(), id)
+ WHERE (id=? OR parent_key_id=?) AND deleted_at IS NULL`, time.Now().UTC().UnixMilli(), id, id)
 	if err != nil {
 		return err
 	}
@@ -387,21 +450,18 @@ func (s *Store) QuotaCandidateAccounts(ctx context.Context, keyID string) ([]dom
 }
 
 func (s *Store) eligibleAccounts(ctx context.Context, keyID string, includeQuotaExceeded bool) ([]domain.Account, error) {
-	var group sql.NullString
-	var accountScoped, sourceScoped, active bool
-	var expires sql.NullInt64
-	err := s.readDB.QueryRowContext(ctx, `SELECT group_id,account_assignment_scope_enabled,
- source_assignment_scope_enabled,is_active,expires_at FROM api_keys WHERE id=? AND deleted_at IS NULL`, keyID).
-		Scan(&group, &accountScoped, &sourceScoped, &active, &expires)
+	scope, err := loadKeyServingScope(ctx, s.readDB, keyID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !active || (expires.Valid && expires.Int64 < time.Now().UTC().UnixMilli()) {
+	if !scope.active || (scope.expires.Valid && scope.expires.Int64 < time.Now().UTC().UnixMilli()) {
 		return nil, ErrNoAccounts
 	}
+	// A fork's accounts are its parent's.
+	group, accountScoped, sourceScoped, keyID := scope.group, scope.accountScoped, scope.sourceScoped, scope.scopeID
 	statusGate := "a.status='active'"
 	if includeQuotaExceeded {
 		statusGate = "(a.status='active' OR (a.status='quota_exceeded' AND a.kind='chatgpt'))"
@@ -455,22 +515,17 @@ func (s *Store) ScopedAccountForOwner(ctx context.Context, keyID, accountID stri
 		return account, err
 	}
 	defer tx.Rollback()
-	var group sql.NullString
-	var expires sql.NullInt64
-	var active, accountScoped, sourceScoped bool
-	err = tx.QueryRowContext(ctx, `SELECT group_id,expires_at,is_active,
- account_assignment_scope_enabled,source_assignment_scope_enabled
- FROM api_keys WHERE id=? AND deleted_at IS NULL`, keyID).Scan(&group, &expires, &active,
-		&accountScoped, &sourceScoped)
+	scope, err := loadKeyServingScope(ctx, tx, keyID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return account, ErrNoAccounts
 	}
 	if err != nil {
 		return account, err
 	}
-	if !active || expires.Valid && expires.Int64 <= millis(now) {
+	if !scope.usable(now) {
 		return account, ErrNoAccounts
 	}
+	group, accountScoped, sourceScoped, keyID := scope.group, scope.accountScoped, scope.sourceScoped, scope.scopeID
 	account, err = scanAccount(tx.QueryRowContext(ctx, "SELECT "+accountColumns+" FROM accounts WHERE id=?", accountID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return account, ErrNoAccounts

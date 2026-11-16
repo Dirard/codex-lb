@@ -52,11 +52,13 @@ type OverviewGroupRef struct {
 type OverviewKey struct {
 	ID, Name, Prefix string
 	GroupID          *string
-	IsActive         bool
-	ExpiresAt        *time.Time
-	LastUsedAt       *time.Time
-	CreatedAt        time.Time
-	Limits           []LimitRule
+	// ParentID is set on a fork; IsActive and ExpiresAt include its parent's.
+	ParentID   *string
+	IsActive   bool
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+	CreatedAt  time.Time
+	Limits     []LimitRule
 }
 
 // Status is active, disabled or expired.

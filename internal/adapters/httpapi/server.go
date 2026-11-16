@@ -38,6 +38,7 @@ type Repository interface {
 	application.GroupsSummaryRepository
 	application.KeysListRepository
 	application.KeysBulkRepository
+	application.KeyForkStore
 }
 
 type Config struct {
@@ -283,6 +284,11 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 const statusClientClosedRequest = 499
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
+	var exceeds *domain.ForkExceedsParent
+	if errors.As(err, &exceeds) || errors.Is(err, domain.ErrForkLimitReached) {
+		writeKeyForkError(w, err)
+		return
+	}
 	for _, known := range []struct {
 		target        error
 		status        int

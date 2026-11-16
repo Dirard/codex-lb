@@ -15,11 +15,15 @@ const (
 	headerLimitRequests     = "x-ratelimit-limit-requests"
 	headerRemainingRequests = "x-ratelimit-remaining-requests"
 	headerResetRequests     = "x-ratelimit-reset-requests"
+	// A fork's share of its parent's pool, and its own cap.
+	headerForkUsedRequests  = "x-ratelimit-fork-used-requests"
+	headerForkLimitRequests = "x-ratelimit-fork-limit-requests"
 )
 
 // requestPoolExposedHeaders are the pool headers a browser page may read on
 // a cross-origin answer.
-const requestPoolExposedHeaders = "Retry-After, " + headerLimitRequests + ", " + headerRemainingRequests + ", " + headerResetRequests
+const requestPoolExposedHeaders = "Retry-After, " + headerLimitRequests + ", " + headerRemainingRequests + ", " + headerResetRequests +
+	", " + headerForkUsedRequests + ", " + headerForkLimitRequests
 
 // requestPoolHeaders renders status with lower-case names; it is empty for a
 // key without a pool. A refusal adds Retry-After.
@@ -36,6 +40,12 @@ func requestPoolHeaders(status domain.RequestPoolStatus, refused bool) map[strin
 	if refused {
 		headers["retry-after"] = strconv.FormatInt(status.RetryAfterSeconds(), 10)
 	}
+	if status.Fork {
+		headers[headerForkUsedRequests] = strconv.Itoa(status.ForkUsed)
+		if status.ForkLimit > 0 {
+			headers[headerForkLimitRequests] = strconv.Itoa(status.ForkLimit)
+		}
+	}
 	return headers
 }
 
@@ -50,7 +60,7 @@ func setRequestPoolHeaders(header http.Header, status domain.RequestPoolStatus, 
 // and reports false after writing the refusal or cancellation. A key without
 // a pool, or a handler without pools, is admitted unchanged.
 func admitRequestPool(w http.ResponseWriter, r *http.Request, pools *application.RequestPools, key domain.APIKey) bool {
-	if pools == nil || key.RequestPool == nil {
+	if pools == nil || !key.HasRequestPool() {
 		return true
 	}
 	status, err := pools.Admit(r.Context(), key)

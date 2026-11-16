@@ -205,6 +205,8 @@ export function createKeyPage(apiKey: ApiKey, options: KeyPageOptions = {}): Key
       assignedAccountCount: apiKey.assignedAccountIds.length,
       assignedSourceCount: apiKey.assignedSourceIds.length,
       requestPool: apiKey.requestPool,
+      parent: apiKey.fork ? { id: apiKey.fork.parentId, name: apiKey.fork.parentName } : undefined,
+      forks: [],
     },
     period: keyPagePeriod(period, options.timezone),
     rollupsUsable: true,

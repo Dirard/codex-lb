@@ -2,9 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -77,10 +75,21 @@ func authenticateKeyValue(r *http.Request, store interface {
 	if value == "" || len(value) > 4096 {
 		return domain.APIKey{}, invalidKey()
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
-	key, err := store.FindAPIKeyByHash(r.Context(), hash)
+	key, err := findKeyBySecret(r.Context(), store, value)
 	if errors.Is(err, domain.ErrNotFound) || err == nil && (!key.IsActive || key.ExpiresAt != nil && !key.ExpiresAt.After(time.Now())) {
 		return domain.APIKey{}, invalidKey()
+	}
+	return key, err
+}
+
+// findKeyBySecret looks a secret up by its plain hash and, for a fork secret,
+// by the fork hash; every key issued before forks keeps its plain hash.
+func findKeyBySecret(ctx context.Context, store interface {
+	FindAPIKeyByHash(context.Context, string) (domain.APIKey, error)
+}, secret string) (domain.APIKey, error) {
+	key, err := store.FindAPIKeyByHash(ctx, domain.APIKeyHash(secret))
+	if errors.Is(err, domain.ErrNotFound) && strings.HasPrefix(secret, domain.ForkSecretPrefix) {
+		key, err = store.FindAPIKeyByHash(ctx, domain.ForkKeyHash(secret))
 	}
 	return key, err
 }

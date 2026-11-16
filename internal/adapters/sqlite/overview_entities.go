@@ -178,8 +178,10 @@ func listGroupRefs(ctx context.Context, tx *sql.Tx) ([]domain.OverviewGroupRef, 
 // listKeyRows reads the non-deleted, non-internal keys and their active
 // limits in two statements.
 func listKeyRows(ctx context.Context, tx *sql.Tx, now time.Time) ([]domain.OverviewKey, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id,name,key_prefix,group_id,is_active,expires_at,last_used_at,created_at
- FROM api_keys WHERE deleted_at IS NULL AND id NOT IN (?,?) ORDER BY created_at,id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
+	// A fork serves only while its parent does, until the earlier expiry.
+	rows, err := tx.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,k.group_id,`+servingStateColumns+`,k.last_used_at,k.created_at,k.parent_key_id
+ FROM api_keys k LEFT JOIN api_keys p ON p.id=k.parent_key_id AND p.deleted_at IS NULL
+ WHERE k.deleted_at IS NULL AND k.id NOT IN (?,?) ORDER BY k.created_at,k.id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,14 +189,15 @@ func listKeyRows(ctx context.Context, tx *sql.Tx, now time.Time) ([]domain.Overv
 	index := map[string]int{}
 	for rows.Next() {
 		var key domain.OverviewKey
-		var group sql.NullString
+		var group, parent sql.NullString
 		var expires, lastUsed sql.NullInt64
 		var created int64
-		if err := rows.Scan(&key.ID, &key.Name, &key.Prefix, &group, &key.IsActive, &expires, &lastUsed, &created); err != nil {
+		if err := rows.Scan(&key.ID, &key.Name, &key.Prefix, &group, &key.IsActive, &expires, &lastUsed, &created, &parent); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		key.GroupID, key.ExpiresAt, key.LastUsedAt, key.CreatedAt = optionalString(group), optionalTime(expires), optionalTime(lastUsed), fromMillis(created)
+		key.ParentID = optionalString(parent)
 		key.Limits = []domain.LimitRule{}
 		index[key.ID] = len(keys)
 		keys = append(keys, key)
@@ -291,8 +294,9 @@ func usageRollupStatus(ctx context.Context, tx *sql.Tx) (domain.UsageRollupStatu
 func (s *Store) Directory(ctx context.Context, now time.Time) (domain.Directory, error) {
 	result := domain.Directory{Keys: []domain.DirectoryKey{}, Groups: []domain.DirectoryGroup{}, Accounts: []domain.DirectoryAccount{}}
 	err := s.readSnapshot(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id,name,key_prefix,group_id,is_active,expires_at FROM api_keys
- WHERE deleted_at IS NULL AND id NOT IN (?,?) ORDER BY name,id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
+		rows, err := tx.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,k.group_id,`+servingStateColumns+` FROM api_keys k
+ LEFT JOIN api_keys p ON p.id=k.parent_key_id AND p.deleted_at IS NULL
+ WHERE k.deleted_at IS NULL AND k.id NOT IN (?,?) ORDER BY k.name,k.id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
 		if err != nil {
 			return err
 		}

@@ -209,6 +209,27 @@ type KeyPageKey struct {
 	AssignedAccountCount          int                   `json:"assignedAccountCount"`
 	AssignedSourceCount           int                   `json:"assignedSourceCount"`
 	RequestPool                   *RequestPool          `json:"requestPool"`
+	// Parent names a fork's parent key (administrator only).
+	Parent *KeyPageKeyRef `json:"parent,omitempty"`
+	// Forks are the key's forks.
+	Forks []KeyPageFork `json:"forks"`
+}
+
+// KeyPageKeyRef names a key.
+type KeyPageKeyRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// KeyPageFork is one fork on its parent's key page.
+type KeyPageFork struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	Status     string     `json:"status"`
+	CreatedBy  KeyActor   `json:"createdBy"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
 }
 
 // KeyAssignedAccount is an assigned account's id and display label.

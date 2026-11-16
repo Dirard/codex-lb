@@ -44,6 +44,8 @@ export function keyRowFromApiKey(key: ApiKey, groups: AccountGroup[], now = Date
     prefix: key.keyPrefix,
     groupId: key.groupId ?? null,
     groupName: groups.find((group) => group.id === key.groupId)?.name ?? null,
+    parentId: key.fork?.parentId ?? null,
+    parentName: key.fork?.parentName ?? null,
     status: keyStatus(key, now),
     expiresAt: key.expiresAt,
     lastUsedAt: key.lastUsedAt,

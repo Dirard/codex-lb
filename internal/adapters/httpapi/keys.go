@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -36,8 +35,13 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 
 func issueKey() (plain, hash, prefix string) {
 	plain = newID("sk-clb-") + newID("")
-	hash = fmt.Sprintf("%x", sha256.Sum256([]byte(plain)))
-	return plain, hash, plain[:15]
+	return plain, domain.APIKeyHash(plain), plain[:15]
+}
+
+// issueForkKey issues a fork secret, hashed in the fork domain.
+func issueForkKey() (plain, hash, prefix string) {
+	plain = newID(domain.ForkSecretPrefix) + newID("")
+	return plain, domain.ForkKeyHash(plain), plain[:18]
 }
 
 func (s *Server) saveKey(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +50,8 @@ func (s *Server) saveKey(w http.ResponseWriter, r *http.Request) {
 	var err error
 	plain := ""
 	if id != "" {
-		key, err = s.store.GetAPIKey(r.Context(), id)
+		// A fork is edited from its own settings, not those it inherits.
+		key, err = s.store.GetStoredAPIKey(r.Context(), id)
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -77,6 +82,12 @@ func (s *Server) saveKey(w http.ResponseWriter, r *http.Request) {
 	// Server-owned fields cannot be patched through the dashboard wire format.
 	payload.ID, payload.KeyHash, payload.KeyPrefix = key.ID, key.KeyHash, key.KeyPrefix
 	payload.CreatedAt, payload.LastUsedAt = key.CreatedAt, key.LastUsedAt
+	payload.Fork = nil
+	if key.Fork != nil {
+		fork := *key.Fork
+		fork.UpdatedBy = domain.KeyActorAdmin
+		payload.Fork = &fork
+	}
 	if payload.WeeklyTokenLimit != nil {
 		filtered := make([]domain.LimitRule, 0, len(payload.Limits)+1)
 		for _, limit := range payload.Limits {
@@ -108,6 +119,9 @@ func (s *Server) saveKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SaveAPIKey(r.Context(), payload.APIKey, time.Now().UTC()); err != nil {
 		s.fail(w, err)
 		return
+	}
+	if key.Fork != nil {
+		s.logger.Info("api key fork updated", "parent_key_id", key.Fork.ParentID, "fork_key_id", key.ID, "actor", domain.KeyActorAdmin)
 	}
 	if payload.ResetUsage {
 		if err := s.store.ResetAPIKeyUsage(r.Context(), key.ID, time.Now().UTC()); err != nil {
@@ -166,12 +180,16 @@ func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) regenerateKey(w http.ResponseWriter, r *http.Request) {
-	key, err := s.store.GetAPIKey(r.Context(), r.PathValue("id"))
+	key, err := s.store.GetStoredAPIKey(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	plain, hash, prefix := issueKey()
+	if key.Fork != nil {
+		plain, hash, prefix = issueForkKey()
+		key.Fork.UpdatedBy = domain.KeyActorAdmin
+	}
 	key.KeyHash, key.KeyPrefix = hash, prefix
 	if err := s.store.SaveAPIKey(r.Context(), key, time.Now().UTC()); err != nil {
 		s.fail(w, err)

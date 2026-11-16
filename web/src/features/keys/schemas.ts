@@ -32,6 +32,8 @@ export const KeyRowSchema = z.object({
   prefix: z.string(),
   groupId: z.string().nullable(),
   groupName: z.string().nullable(),
+  parentId: z.string().nullable().default(null),
+  parentName: z.string().nullable().default(null),
   status: z.enum(KEY_STATUSES),
   expiresAt: Time.nullable(),
   lastUsedAt: Time.nullable(),

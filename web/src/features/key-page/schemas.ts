@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ShellStatusSchema } from "@/components/layout/shell-status";
-import { LIMIT_TYPES, LIMIT_WINDOWS, RequestPoolSchema } from "@/features/api-keys/schemas";
+import { KEY_ACTORS, LIMIT_TYPES, LIMIT_WINDOWS, RequestPoolSchema } from "@/features/api-keys/schemas";
 import { WindowHealthSchema } from "@/features/overview/schemas";
 
 /**
@@ -96,6 +96,19 @@ export const KeyPageKeySchema = z.object({
   assignedAccountCount: z.number().int(),
   assignedSourceCount: z.number().int(),
   requestPool: RequestPoolSchema.nullable().default(null),
+  /** Administrator only: a fork's parent. */
+  parent: z.object({ id: z.string(), name: z.string() }).optional(),
+  forks: list(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      prefix: z.string(),
+      status: z.string(),
+      createdBy: z.enum(KEY_ACTORS),
+      createdAt: z.iso.datetime({ offset: true }),
+      lastUsedAt: z.iso.datetime({ offset: true }).nullable(),
+    }),
+  ).default([]),
 });
 
 export const KeyPagePeriodSchema = z.object({

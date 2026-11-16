@@ -311,3 +311,118 @@ func TestRequestPoolSweepsIdlePools(t *testing.T) {
 		}
 	})
 }
+
+func forkKey(id, parent string, parentPool *domain.RequestPool, cap *domain.RequestPool) domain.APIKey {
+	return domain.APIKey{ID: id, RequestPool: cap, Fork: &domain.KeyFork{ParentID: parent, ParentPool: parentPool}}
+}
+
+func TestRequestPoolIsSharedByAParentAndItsForks(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pools := NewRequestPools()
+		pool := &domain.RequestPool{RequestsPerMinute: 3}
+		parent := domain.APIKey{ID: "parent", RequestPool: pool}
+		a, b := forkKey("a", "parent", pool, nil), forkKey("b", "parent", pool, nil)
+		if status := mustAdmit(t, pools, parent); status.Remaining != 2 || status.ForkUsed != 0 {
+			t.Fatalf("parent %+v", status)
+		}
+		if status := mustAdmit(t, pools, a); status.Remaining != 1 || status.ForkUsed != 1 || status.ForkLimit != 0 {
+			t.Fatalf("fork a %+v", status)
+		}
+		if status := mustAdmit(t, pools, b); status.Remaining != 0 || status.ForkUsed != 1 || status.Limit != 3 {
+			t.Fatalf("fork b %+v", status)
+		}
+		_, err := pools.Admit(context.Background(), a)
+		if status := refusal(t, err); status.ForkUsed != 1 || status.RetryAfter != time.Minute {
+			t.Fatalf("full shared pool %+v", status)
+		}
+		if status := pools.Status(b); status.ForkUsed != 1 || status.Remaining != 0 {
+			t.Fatalf("status %+v", status)
+		}
+		// The shares leave the window with their slots.
+		time.Sleep(time.Minute)
+		if status := mustAdmit(t, pools, a); status.ForkUsed != 1 || status.Remaining != 2 {
+			t.Fatalf("after a minute %+v", status)
+		}
+		// Without a parent pool a fork's own pool is its cap.
+		own := forkKey("own", "unpooled", nil, &domain.RequestPool{RequestsPerMinute: 2})
+		if status := mustAdmit(t, pools, own); status.ForkUsed != 1 || status.ForkLimit != 2 || status.Limit != 2 {
+			t.Fatalf("own pool %+v", status)
+		}
+	})
+}
+
+func TestRequestPoolForkCapWithinTheSharedPool(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pools := NewRequestPools()
+		pool := &domain.RequestPool{RequestsPerMinute: 10, MaxWaitSeconds: 30}
+		capped := forkKey("capped", "parent", pool, &domain.RequestPool{RequestsPerMinute: 1, MaxWaitSeconds: 30})
+		if status := mustAdmit(t, pools, capped); status.ForkUsed != 1 || status.ForkLimit != 1 || status.Remaining != 0 || status.Limit != 10 {
+			t.Fatalf("capped %+v", status)
+		}
+		_, err := pools.Admit(context.Background(), capped)
+		if status := refusal(t, err); status.RetryAfter != time.Minute || status.ForkLimit != 1 || status.Limit != 10 {
+			t.Fatalf("over the cap %+v", status)
+		}
+		// The cap binds only its fork.
+		if status := mustAdmit(t, pools, forkKey("other", "parent", pool, nil)); status.Remaining != 8 {
+			t.Fatalf("other fork %+v", status)
+		}
+	})
+}
+
+func TestRequestPoolForkReturnsItsCapSlotWithoutASharedSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pools := NewRequestPools()
+		pool := &domain.RequestPool{RequestsPerMinute: 1, MaxWaitSeconds: 60}
+		mustAdmit(t, pools, domain.APIKey{ID: "parent", RequestPool: pool})
+		refused := forkKey("refused", "parent", &domain.RequestPool{RequestsPerMinute: 1}, &domain.RequestPool{RequestsPerMinute: 5})
+		if _, err := pools.Admit(context.Background(), refused); err == nil {
+			t.Fatal("full shared pool admitted a fork")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		waiting := forkKey("waiting", "parent", pool, &domain.RequestPool{RequestsPerMinute: 5, MaxWaitSeconds: 60})
+		done := admitAsync(ctx, pools, waiting)
+		poolPending(t, "waiting", done)
+		cancel()
+		if outcome := poolFinished(t, "waiting", done); !errors.Is(outcome.err, context.Canceled) {
+			t.Fatalf("waiting %+v", outcome)
+		}
+		pools.mu.Lock()
+		defer pools.mu.Unlock()
+		for _, id := range []string{"cap:refused", "cap:waiting"} {
+			if w := pools.windows[id]; w != nil && (len(w.admitted) != 0 || len(w.members) != 0) {
+				t.Fatalf("%s kept %d slots", id, len(w.admitted))
+			}
+		}
+		if w := pools.windows["parent"]; len(w.waiters) != 0 || len(w.admitted) != 1 {
+			t.Fatalf("shared pool %d waiting, %d taken", len(w.waiters), len(w.admitted))
+		}
+	})
+}
+
+// A cap slot taken while the fork queued for a shared slot counts from the
+// shared admission, so the cap holds over every minute of actual requests.
+func TestRequestPoolForkCapCountsFromTheSharedAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pools := NewRequestPools()
+		start := time.Now()
+		pool := &domain.RequestPool{RequestsPerMinute: 2, MaxWaitSeconds: 60}
+		mustAdmit(t, pools, domain.APIKey{ID: "parent", RequestPool: pool})
+		mustAdmit(t, pools, domain.APIKey{ID: "parent", RequestPool: pool})
+		capped := forkKey("capped", "parent", pool, &domain.RequestPool{RequestsPerMinute: 1, MaxWaitSeconds: 60})
+		time.Sleep(10 * time.Second)
+		first := admitAsync(context.Background(), pools, capped)
+		poolPending(t, "first", first)
+		time.Sleep(50 * time.Second)
+		if outcome := poolFinished(t, "first", first); outcome.err != nil || !outcome.at.Equal(start.Add(time.Minute)) {
+			t.Fatalf("first %+v", outcome)
+		}
+		time.Sleep(15 * time.Second)
+		second := admitAsync(context.Background(), pools, capped)
+		poolPending(t, "second", second)
+		time.Sleep(45 * time.Second)
+		if outcome := poolFinished(t, "second", second); outcome.err != nil || !outcome.at.Equal(start.Add(2*time.Minute)) || outcome.status.ForkUsed != 1 {
+			t.Fatalf("second %+v", outcome)
+		}
+	})
+}

@@ -23,6 +23,7 @@ type KeyPageRepository interface {
 	UsageTotals(context.Context, string, string) (domain.UsageTotals, error)
 	KeyPageUsage(context.Context, domain.KeyPageUsageQuery) (domain.KeyPageUsage, error)
 	KeyRecentRequests(context.Context, domain.KeyRequestsQuery) (domain.KeyRequestsPage, error)
+	ListKeyForks(context.Context, string) ([]domain.APIKey, error)
 }
 
 // KeyPageService is use case 4 of the dashboard redesign: one key's page for
@@ -177,7 +178,11 @@ func (s *KeyPageService) page(ctx context.Context, scope string, key domain.APIK
 			return domain.KeyPageResponse{}, err
 		}
 	}
-	response := buildKeyPage(scope, now, period, key, entry, entities, usage, history, poolVisible)
+	forks, err := s.repo.ListKeyForks(ctx, key.ID)
+	if err != nil {
+		return domain.KeyPageResponse{}, err
+	}
+	response := buildKeyPage(scope, now, period, key, entry, entities, usage, history, poolVisible, forks)
 	if scope != domain.KeyPageAdmin {
 		return response, nil
 	}
@@ -268,14 +273,14 @@ func paceModels(limits []domain.LimitRule) []string {
 // limits, pool or group remaining, group mini-list and the period sections,
 // with the owner's fields dropped.
 func buildKeyPage(scope string, now time.Time, period keyPagePeriod, key domain.APIKey, entry domain.OverviewKey,
-	entities domain.OverviewEntities, usage domain.KeyPageUsage, history []domain.AccountQuota, poolVisible bool) domain.KeyPageResponse {
+	entities domain.OverviewEntities, usage domain.KeyPageUsage, history []domain.AccountQuota, poolVisible bool, forks []domain.APIKey) domain.KeyPageResponse {
 	admin := scope == domain.KeyPageAdmin
 	labels := map[string]string{}
 	for _, account := range entities.Accounts {
 		labels[account.Account.ID] = accountLabel(account.Account)
 	}
 	response := domain.KeyPageResponse{Scope: scope, GeneratedAt: now, Period: period.response, RollupsUsable: usage.RollupsUsable,
-		DetailsFrom: usage.DetailsFrom, Key: keyPageProperties(key, entry, entities, labels, admin, now),
+		DetailsFrom: usage.DetailsFrom, Key: keyPageProperties(key, entry, entities, labels, admin, now, forks),
 		Limits: keyLimitStates(key.Limits, entry.Limits, usage.Pace, now), Summary: keyPeriodSummary(usage),
 		Daily: keyDays(period, usage), ByModel: keyModelRows(usage), ErrorsByCode: keyErrorRows(usage),
 		UserAgents: keyUserAgentRows(usage), RecentRequests: []domain.KeyRequestRow{}, NextCursor: usage.Recent.NextCursor}
@@ -308,7 +313,7 @@ func buildKeyPage(scope string, now time.Time, period keyPagePeriod, key domain.
 }
 
 func keyPageProperties(key domain.APIKey, entry domain.OverviewKey, entities domain.OverviewEntities, labels map[string]string,
-	admin bool, now time.Time) domain.KeyPageKey {
+	admin bool, now time.Time, forks []domain.APIKey) domain.KeyPageKey {
 	props := domain.KeyPageKey{ID: key.ID, Name: entry.Name, Prefix: entry.Prefix, Status: entry.Status(now), GroupID: entry.GroupID,
 		CreatedAt: entry.CreatedAt, LastUsedAt: entry.LastUsedAt, ExpiresAt: entry.ExpiresAt,
 		AllowedModels: nonNilStrings(key.AllowedModels), EnforcedModel: key.EnforcedModel,
@@ -316,7 +321,18 @@ func keyPageProperties(key domain.APIKey, entry domain.OverviewKey, entities dom
 		TrafficClass: key.TrafficClass, ServiceTier: key.EnforcedServiceTier, UsageSections: []string{},
 		AccountAssignmentScopeEnabled: key.AccountAssignmentScopeEnabled, SourceAssignmentScopeEnabled: key.SourceAssignmentScopeEnabled,
 		AssignedAccountCount: len(key.AssignedAccountIDs), AssignedSourceCount: len(key.AssignedSourceIDs),
-		RequestPool: key.RequestPool}
+		RequestPool: key.RequestPool, Forks: []domain.KeyPageFork{}}
+	if key.Fork != nil && admin {
+		props.Parent = &domain.KeyPageKeyRef{ID: key.Fork.ParentID, Name: key.Fork.ParentName}
+	}
+	for _, fork := range forks {
+		item := domain.KeyPageFork{ID: fork.ID, Name: fork.Name, Prefix: fork.KeyPrefix, CreatedAt: fork.CreatedAt, LastUsedAt: fork.LastUsedAt,
+			Status: domain.OverviewKey{IsActive: fork.IsActive && key.IsActive, ExpiresAt: earlierTime(fork.ExpiresAt, key.ExpiresAt)}.Status(now)}
+		if fork.Fork != nil {
+			item.CreatedBy = fork.Fork.CreatedBy
+		}
+		props.Forks = append(props.Forks, item)
+	}
 	for _, section := range strings.Split(key.UsageSections, ",") {
 		if section = strings.TrimSpace(section); section != "" {
 			props.UsageSections = append(props.UsageSections, section)
@@ -594,4 +610,12 @@ func keyAccountRows(usage domain.KeyPageUsage, labels map[string]string) []domai
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// earlierTime is the earlier of two optional times.
+func earlierTime(a, b *time.Time) *time.Time {
+	if a == nil || b != nil && b.Before(*a) {
+		return b
+	}
+	return a
 }

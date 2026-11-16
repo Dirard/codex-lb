@@ -144,6 +144,21 @@ describe("KeyPage", () => {
     expect(within(properties).getByText("120 per minute, waits up to 30 s")).toBeInTheDocument();
   });
 
+  it("lists a parent's forks and links a fork's parent", async () => {
+    const page = createKeyPage(createApiKey());
+    page.key.forks = [
+      { id: "key_fork", name: "CI fork", prefix: "sk-clb-fork-abc", status: "active", createdBy: "owner", createdAt: new Date().toISOString(), lastUsedAt: null },
+    ];
+    page.key.parent = { id: "key_parent", name: "Project" };
+    server.use(http.get("/api/api-keys/:keyId/page", () => HttpResponse.json(page)));
+    openAdmin();
+    const properties = await screen.findByRole("region", { name: "Key properties" });
+    const forks = within(properties).getByRole("list", { name: "Forks (1)" });
+    expect(within(forks).getByRole("link", { name: "CI fork" })).toHaveAttribute("href", "/keys/key_fork");
+    expect(forks).toHaveTextContent("Active, created by the key holder");
+    expect(within(properties).getByRole("link", { name: "Project" })).toHaveAttribute("href", "/keys/key_parent");
+  });
+
   it("shows the administrator's actions, account columns, cost by account and lifetime", async () => {
     openAdmin();
 

@@ -163,6 +163,7 @@
   "keys.table.moreLimits_other": "另有 {{count}} 项",
   "keys.table.expiresIn": "{{until}} 后",
   "keys.table.never": "从未",
+  "keys.table.forkOf": "{{name}} 的分叉",
   "keys.bulk.selected": "已选择 {{count}} 个",
   "keys.bulk.selected_one": "已选择 {{count}} 个",
   "keys.bulk.selected_other": "已选择 {{count}} 个",
@@ -2065,6 +2066,11 @@
   "keyPage.properties.requestPool": "请求池",
   "keyPage.properties.requestPoolValue": "每分钟 {{requests}} 次，最多等待 {{seconds}} 秒",
   "keyPage.properties.noRequestPool": "无请求池",
+  "keyPage.properties.parent": "父密钥",
+  "keyPage.properties.forks": "分叉（{{count}}）",
+  "keyPage.properties.forkState": "{{status}}，由{{actor}}创建",
+  "keyPage.properties.actor.owner": "密钥持有者",
+  "keyPage.properties.actor.admin": "管理员",
   "keyPage.accounts.title": "按账号的费用",
   "keyPage.accounts.empty": "此期间没有账号处理此密钥的请求",
   "keyPage.accounts.none": "无账号",
@@ -2175,5 +2181,7 @@
   "video.pool.resets": "{{time}} 重置",
   "video.pool.noData": "暂无数据",
   "video.pool.needsSignIn": "重新登录后可查看",
-  "video.pool.stale": "上次读取的值;最近一次读取失败"
+  "video.pool.stale": "上次读取的值;最近一次读取失败",
+  "apiKeys.fork.title": "{{name}} 的分叉",
+  "apiKeys.fork.inherited": "此密钥是分叉。其分组、账户、模型来源、用量分区、流量类别和 HTTP 客户端路由来自父密钥；模型、推理强度、服务层级、过期时间和请求池不得超出父密钥。"
 }

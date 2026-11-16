@@ -249,6 +249,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	proxyMux := http.NewServeMux()
 	keyUsage := httpapi.NewKeyUsageHandler(data.store)
 	keyUsage.RegisterPublicRoutes(proxyMux)
+	httpapi.NewKeyForksHandler(data.store, logger).RegisterRoutes(proxyMux)
 	operations := application.NewCodexOperations(data.store, data.store, adapter, 0)
 	operations.Catalog = catalog
 	operations.ConfigureAdmission(proxy)

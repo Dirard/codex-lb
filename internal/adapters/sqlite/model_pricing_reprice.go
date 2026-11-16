@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"codex-lb/internal/application"
@@ -301,7 +302,33 @@ func currentCostLimitsTx(ctx context.Context, tx *sql.Tx) (map[string][]currentC
 		limit.start = limit.reset - duration.Milliseconds()
 		limits[key] = append(limits[key], limit)
 	}
-	return limits, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	// A fork's requests are charged to its parent's limits too.
+	forks, err := tx.QueryContext(ctx, `SELECT id,parent_key_id FROM api_keys WHERE parent_key_id IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer forks.Close()
+	parents := map[string]string{}
+	for forks.Next() {
+		var fork, parent string
+		if err := forks.Scan(&fork, &parent); err != nil {
+			return nil, err
+		}
+		parents[fork] = parent
+	}
+	if err := forks.Err(); err != nil {
+		return nil, err
+	}
+	for fork, parent := range parents {
+		if inherited := limits[parent]; len(inherited) > 0 {
+			limits[fork] = append(slices.Clip(limits[fork]), inherited...)
+		}
+	}
+	return limits, nil
 }
 
 // repriceRawChunkTx reprices at most repriceRawChunk raw events after the

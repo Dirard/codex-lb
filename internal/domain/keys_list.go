@@ -123,6 +123,8 @@ type KeyListRow struct {
 	Prefix        string            `json:"prefix"`
 	GroupID       *string           `json:"groupId"`
 	GroupName     *string           `json:"groupName"`
+	ParentID      *string           `json:"parentId"`
+	ParentName    *string           `json:"parentName"`
 	Status        string            `json:"status"`
 	ExpiresAt     *time.Time        `json:"expiresAt"`
 	LastUsedAt    *time.Time        `json:"lastUsedAt"`
@@ -192,6 +194,8 @@ var (
 	ErrKeyInGroup = errors.New("API key belongs to a group")
 	// ErrUnknownGroup refuses a move to a group that does not exist.
 	ErrUnknownGroup = fmt.Errorf("unknown account group: %w", ErrInvalid)
+	// ErrKeyIsFork refuses a group for a fork: its scope is its parent's.
+	ErrKeyIsFork = errors.New("API key is a fork")
 )
 
 // ValidateLimitRules checks each rule and refuses two rules of the same type,

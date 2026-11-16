@@ -71,6 +71,13 @@ func (s *Store) MoveAPIKeyToGroup(ctx context.Context, id string, groupID *strin
 		if _, err := currentKeyGroupTx(ctx, tx, id); err != nil {
 			return err
 		}
+		var fork int
+		if err := tx.QueryRowContext(ctx, `SELECT parent_key_id IS NOT NULL FROM api_keys WHERE id=?`, id).Scan(&fork); err != nil {
+			return err
+		}
+		if fork == 1 {
+			return domain.ErrKeyIsFork
+		}
 		if groupID == nil {
 			_, err := tx.ExecContext(ctx, `UPDATE api_keys SET group_id=NULL WHERE id=? AND deleted_at IS NULL`, id)
 			return err

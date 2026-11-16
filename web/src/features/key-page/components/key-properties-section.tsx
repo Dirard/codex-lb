@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import { AccountLabel } from "@/features/key-page/components/key-admin-sections";
 import { dateTimeLabel } from "@/features/key-page/key-page-format";
@@ -87,6 +88,37 @@ export function KeyPropertiesSection({
               ? t("keyPage.properties.allSources")
               : t("keyPage.properties.sourceCount", { count: details.assignedSourceCount })}
           </Property>
+          {details.parent ? (
+            <Property label={t("keyPage.properties.parent")}>
+              <Link className="hover:underline" to={`/keys/${encodeURIComponent(details.parent.id)}`}>
+                {details.parent.name || details.parent.id}
+              </Link>
+            </Property>
+          ) : null}
+          {details.forks.length > 0 ? (
+            <Property label={t("keyPage.properties.forks", { count: details.forks.length })}>
+              <ul className="flex flex-col items-end gap-0.5" aria-label={t("keyPage.properties.forks", { count: details.forks.length })}>
+                {details.forks.map((fork) => (
+                  <li key={fork.id} className="max-w-64 truncate">
+                    {mode === "admin" ? (
+                      <Link className="hover:underline" to={`/keys/${encodeURIComponent(fork.id)}`}>
+                        {fork.name}
+                      </Link>
+                    ) : (
+                      fork.name
+                    )}{" "}
+                    <span className="font-mono text-muted-foreground">{fork.prefix}</span>{" "}
+                    <span className="text-muted-foreground">
+                      {t("keyPage.properties.forkState", {
+                        status: t(`common.states.${fork.status}`, { defaultValue: fork.status }),
+                        actor: t(`keyPage.properties.actor.${fork.createdBy}`),
+                      })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Property>
+          ) : null}
           <Property label={t("keyPage.properties.requestPool")}>
             {details.requestPool
               ? t("keyPage.properties.requestPoolValue", {

@@ -20,32 +20,32 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 		return r, err
 	}
 	err := s.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var group sql.NullString
-		var active, accountScoped, sourceScoped bool
-		var expires sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT group_id,is_active,expires_at,
- account_assignment_scope_enabled,source_assignment_scope_enabled FROM api_keys
- WHERE id=? AND deleted_at IS NULL`, req.APIKeyID).
-			Scan(&group, &active, &expires, &accountScoped, &sourceScoped); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
+		scope, err := loadKeyServingScope(ctx, tx, req.APIKeyID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
 			return err
 		}
-		if !active || (expires.Valid && expires.Int64 < millis(req.Now)) {
+		if !scope.active || (scope.expires.Valid && scope.expires.Int64 < millis(req.Now)) {
 			return ErrNoAccounts
 		}
+		// A fork reserves within its parent's accounts and limits as well.
 		if req.AccountID != "" {
-			if err := checkReservedAccountTx(ctx, tx, req, group, accountScoped, sourceScoped); err != nil {
+			if err := checkReservedAccountTx(ctx, tx, req, scope); err != nil {
 				return err
 			}
 		} else {
-			if err := checkAnyReservedAccountTx(ctx, tx, req.APIKeyID, group, accountScoped, sourceScoped); err != nil {
+			if err := checkAnyReservedAccountTx(ctx, tx, scope); err != nil {
 				return err
 			}
 		}
+		parentID := req.APIKeyID
+		if scope.parentID.Valid {
+			parentID = scope.parentID.String
+		}
 		rows, err := tx.QueryContext(ctx, `SELECT id,limit_type,limit_window,model_filter,max_value,current_value,reset_at
- FROM api_key_limits WHERE api_key_id=? AND is_active=1 ORDER BY id`, req.APIKeyID)
+ FROM api_key_limits WHERE api_key_id IN (?,?) AND is_active=1 ORDER BY id`, req.APIKeyID, parentID)
 		if err != nil {
 			return err
 		}
@@ -140,7 +140,8 @@ func (s *Store) ReserveUsage(ctx context.Context, req domain.ReservationRequest)
 	return r, err
 }
 
-func checkReservedAccountTx(ctx context.Context, tx *sql.Tx, req domain.ReservationRequest, group sql.NullString, accountScoped, sourceScoped bool) error {
+func checkReservedAccountTx(ctx context.Context, tx *sql.Tx, req domain.ReservationRequest, scope keyServingScope) error {
+	group, accountScoped, sourceScoped := scope.group, scope.accountScoped, scope.sourceScoped
 	var kind domain.AccountKind
 	var status domain.AccountStatus
 	var plan string
@@ -190,7 +191,7 @@ func checkReservedAccountTx(ctx context.Context, tx *sql.Tx, req domain.Reservat
 	}
 	if accountScoped && !group.Valid {
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM api_key_accounts
- WHERE api_key_id=? AND account_id=?`, req.APIKeyID, req.AccountID).Scan(&exists); err != nil {
+ WHERE api_key_id=? AND account_id=?`, scope.scopeID, req.AccountID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNoAccounts
 			}
@@ -199,7 +200,7 @@ func checkReservedAccountTx(ctx context.Context, tx *sql.Tx, req domain.Reservat
 	}
 	if sourceScoped && kind == domain.AccountExternal {
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM api_key_sources
- WHERE api_key_id=? AND account_id=?`, req.APIKeyID, req.AccountID).Scan(&exists); err != nil {
+ WHERE api_key_id=? AND account_id=?`, scope.scopeID, req.AccountID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNoAccounts
 			}
@@ -252,7 +253,8 @@ func creditBackedReservationAllowedTx(ctx context.Context, tx *sql.Tx, accountID
 	return credits.UsableAfter(refusalAt), err
 }
 
-func checkAnyReservedAccountTx(ctx context.Context, tx *sql.Tx, keyID string, group sql.NullString, accountScoped, sourceScoped bool) error {
+func checkAnyReservedAccountTx(ctx context.Context, tx *sql.Tx, scope keyServingScope) error {
+	keyID, group, accountScoped, sourceScoped := scope.scopeID, scope.group, scope.accountScoped, scope.sourceScoped
 	query := `SELECT count(*) FROM accounts a JOIN account_credentials c ON c.account_id=a.id
  WHERE a.status='active' AND a.requires_egress_decision=0`
 	var args []any

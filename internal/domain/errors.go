@@ -9,6 +9,8 @@ var (
 	ErrLimitReached            = errors.New("API key limit reached")
 	ErrNoAccounts              = errors.New("no eligible accounts")
 	ErrPlanConfirmationPending = errors.New("plan downgrade confirmation pending")
+	// ErrForkLimitReached refuses a fork beyond MaxForksPerKey.
+	ErrForkLimitReached = errors.New("fork limit reached")
 	// ErrAffinityPersistence marks a soft-affinity write failure that rolled
 	// back the reservation it shared a transaction with.
 	ErrAffinityPersistence = errors.New("affinity persistence failed")

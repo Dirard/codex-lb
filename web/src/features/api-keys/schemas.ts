@@ -28,6 +28,17 @@ export const RequestPoolSchema = z.object({
   maxWaitSeconds: z.number().int().min(0).max(60),
 });
 
+export const KEY_ACTORS = ["owner", "admin"] as const;
+
+/** Set on a fork: a child key its parent's holder manages through the key API. */
+export const KeyForkSchema = z.object({
+  parentId: z.string(),
+  parentName: z.string().default(""),
+  createdBy: z.enum(KEY_ACTORS),
+  updatedBy: z.enum(KEY_ACTORS),
+  updatedAt: z.iso.datetime({ offset: true }),
+});
+
 const ApiKeyUsageSummarySchema = z.object({
   requestCount: z.number().int().nonnegative(),
   totalTokens: z.number().int().nonnegative(),
@@ -75,6 +86,7 @@ export const ApiKeySchema = z.object({
   lastUsedAt: z.iso.datetime({ offset: true }).nullable(),
   limits: z.array(LimitRuleSchema).default([]),
   requestPool: RequestPoolSchema.nullable().default(null),
+  fork: KeyForkSchema.nullable().default(null),
   usageSummary: ApiKeyUsageSummarySchema.nullable().default(null),
 });
 

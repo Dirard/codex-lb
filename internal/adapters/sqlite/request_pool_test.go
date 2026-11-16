@@ -85,7 +85,7 @@ func TestMigration50LeavesKeysUnpooledAndBesideOlderWriters(t *testing.T) {
 	}
 	defer store.Close()
 	var version int
-	if err := store.readDB.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 50 {
+	if err := store.readDB.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != SchemaVersion() {
 		t.Fatalf("version %d %v", version, err)
 	}
 	key, err := store.GetAPIKey(ctx, "old")
