@@ -303,7 +303,7 @@ Slice 2 — key forks (go-v1.15.0)
 12. [x] Shared pools with fork caps and fork headers (R14, R15).
 13. [x] Fork management API, admin narrowing, regenerate, audit logging (R9-R11).
 14. [x] Dashboard: forks on the key page, fork marks in the keys list, fork editor (R16).
-15. [ ] Gates, release notes go-v1.15.0, context notes, sync and archive, PR, merge, publish.
+15. [x] Gates, release notes go-v1.15.0, context notes, sync and archive, PR, merge, publish.
 
 Deferred:
 - Sharing pools across workers of one installation (two workers overlap only during a seamless update).
