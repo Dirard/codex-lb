@@ -87,6 +87,14 @@ export function KeyPropertiesSection({
               ? t("keyPage.properties.allSources")
               : t("keyPage.properties.sourceCount", { count: details.assignedSourceCount })}
           </Property>
+          <Property label={t("keyPage.properties.requestPool")}>
+            {details.requestPool
+              ? t("keyPage.properties.requestPoolValue", {
+                  requests: details.requestPool.requestsPerMinute,
+                  seconds: details.requestPool.maxWaitSeconds,
+                })
+              : t("keyPage.properties.noRequestPool")}
+          </Property>
         </div>
       </dl>
     </SectionCard>

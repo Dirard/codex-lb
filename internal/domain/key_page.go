@@ -208,6 +208,7 @@ type KeyPageKey struct {
 	AssignedAccounts              *[]KeyAssignedAccount `json:"assignedAccounts,omitempty"` // administrator only
 	AssignedAccountCount          int                   `json:"assignedAccountCount"`
 	AssignedSourceCount           int                   `json:"assignedSourceCount"`
+	RequestPool                   *RequestPool          `json:"requestPool"`
 }
 
 // KeyAssignedAccount is an assigned account's id and display label.

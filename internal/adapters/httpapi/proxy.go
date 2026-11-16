@@ -25,6 +25,7 @@ type ProxyHandler struct {
 	proxy                      *application.Proxy
 	trusted                    []netip.Prefix
 	bodies                     *BodyBudget
+	pools                      *application.RequestPools
 	websockets                 chan struct{}
 	mux                        *http.ServeMux
 	QuotaHeaders               func(context.Context, string) (map[string]string, error)
@@ -59,6 +60,10 @@ func NewProxyHandlerWithLimits(store ProxyRepository, proxy *application.Proxy, 
 	p.mux = mux
 	return p
 }
+
+// ConfigureRequestPools gates model requests of pooled keys; it is shared by
+// every proxy handler.
+func (p *ProxyHandler) ConfigureRequestPools(pools *application.RequestPools) { p.pools = pools }
 
 // ClientWebSockets reports admitted client WebSockets and the budget.
 func (p *ProxyHandler) ClientWebSockets() (open, limit int) {
@@ -165,6 +170,10 @@ func (p *ProxyHandler) responses(w http.ResponseWriter, r *http.Request) {
 	if !p.writeQuotaHeaders(w, r, key) {
 		return
 	}
+	// The pool slot comes before the body: a queued request holds no body.
+	if !admitRequestPool(w, r, p.pools, key) {
+		return
+	}
 	// The body stays charged until the response ends: it is retained for
 	// failover, compaction and accounting until then.
 	lease := p.bodies.lease(key.ID)
@@ -243,6 +252,10 @@ func proxyError(err error) (int, string, string) {
 	if errors.As(err, &proxy) {
 		return proxy.Status, proxy.Code, proxy.Message
 	}
+	var exhausted *application.RequestPoolExhausted
+	if errors.As(err, &exhausted) {
+		return http.StatusTooManyRequests, "rate_limit_exceeded", requestPoolRefusalMessage(exhausted.Status)
+	}
 	var upstream *application.ProviderFailure
 	if errors.As(err, &upstream) {
 		status := upstream.Status
@@ -287,6 +300,11 @@ func providerFailureMessage(code string) string {
 }
 
 func writeProxyError(w http.ResponseWriter, err error) {
+	var exhausted *application.RequestPoolExhausted
+	if errors.As(err, &exhausted) {
+		writeRequestPoolRefusal(w, exhausted.Status)
+		return
+	}
 	var failure *application.ProviderFailure
 	if errors.As(err, &failure) && failure.Code == application.ImageGenerationLimitCode {
 		// The subscription's image window, not the account's quota, refused:

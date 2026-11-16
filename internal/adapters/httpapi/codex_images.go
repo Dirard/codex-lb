@@ -36,11 +36,15 @@ func (h *CodexOperationsHandler) registerImageRoutes(mux *http.ServeMux) {
 }
 
 func (h *CodexOperationsHandler) images(w http.ResponseWriter, r *http.Request, edit bool) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	if !admitRequestPool(w, r, h.pools, key) {
+		return
+	}
+	keyID := key.ID
 	lease := h.bodies.lease(keyID)
 	defer lease.release()
 	var body json.RawMessage

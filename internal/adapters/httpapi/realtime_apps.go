@@ -67,6 +67,9 @@ func (h *CodexOperationsHandler) realtimeSession(w http.ResponseWriter, r *http.
 		writeProxyError(w, err)
 		return
 	}
+	if !h.admitPoolKey(w, r, credential.KeyID) {
+		return
+	}
 	options := h.operationOptions(r, credential.KeyID)
 	options.Transport = "websocket"
 	query := make([][2]string, 0)
@@ -133,7 +136,7 @@ func realtimeCloseCode(err error) string {
 // answer, refusals included; the credential travels in Authorization.
 func allowRealtimeCallOrigin(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Location")
+	w.Header().Set("Access-Control-Expose-Headers", "Location, "+requestPoolExposedHeaders)
 }
 
 // realtimeCallPreflight answers the CORS preflight of a browser's call offer.
@@ -152,6 +155,9 @@ func (h *CodexOperationsHandler) createAppRealtimeCall(w http.ResponseWriter, r 
 	credential, _, err := h.realtimeCredential(r, false)
 	if err != nil {
 		writeProxyError(w, err)
+		return
+	}
+	if !h.admitPoolKey(w, r, credential.KeyID) {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))) {
@@ -179,6 +185,9 @@ func (h *CodexOperationsHandler) createAppLiveCall(w http.ResponseWriter, r *htt
 	credential, _, err := h.realtimeCredential(r, false)
 	if err != nil {
 		writeProxyError(w, err)
+		return
+	}
+	if !h.admitPoolKey(w, r, credential.KeyID) {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))) {

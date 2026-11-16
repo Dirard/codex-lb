@@ -32,6 +32,9 @@ func (h *CodexOperationsHandler) publicWarmup(w http.ResponseWriter, r *http.Req
 		writeProxyError(w, &application.ProxyError{Code: "required_capability_transport_unsupported", Status: 400, Message: "Required capability routing is only supported over the Responses WebSocket transport"})
 		return
 	}
+	if !admitRequestPool(w, r, h.pools, key) {
+		return
+	}
 	lease := h.bodies.lease(key.ID)
 	defer lease.release()
 	mode := r.PathValue("mode")

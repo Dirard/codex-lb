@@ -22,6 +22,7 @@ type VideoHandler struct {
 	}
 	service *application.VideoService
 	bodies  *BodyBudget
+	pools   *application.RequestPools
 }
 
 func NewVideoHandler(store interface {
@@ -33,6 +34,10 @@ func NewVideoHandler(store interface {
 // ConfigureBodyBudget charges bodies to the budget shared by every proxy route.
 func (h *VideoHandler) ConfigureBodyBudget(bodies *BodyBudget) { h.bodies = bodies }
 
+// ConfigureRequestPools gates new generations of pooled keys; status and
+// listing never take a slot.
+func (h *VideoHandler) ConfigureRequestPools(pools *application.RequestPools) { h.pools = pools }
+
 func (h *VideoHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /video/v1/generations", h.create)
 	mux.HandleFunc("GET /video/v1/generations", h.list)
@@ -42,22 +47,28 @@ func (h *VideoHandler) RegisterRoutes(mux *http.ServeMux) {
 // authorize requires a real API key on the video allow list. Keyless local
 // access has no bearer key, so it never reaches this function's success path.
 func (h *VideoHandler) authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
+	key, ok := h.authorizeKey(w, r)
+	return key.ID, ok
+}
+
+func (h *VideoHandler) authorizeKey(w http.ResponseWriter, r *http.Request) (domain.APIKey, bool) {
 	key, err := authenticateBearerKey(r, h.store)
 	if err == nil {
 		err = h.service.KeyAllowed(r.Context(), key.ID)
 	}
 	if err != nil {
 		writeVideoError(w, err)
-		return "", false
+		return domain.APIKey{}, false
 	}
-	return key.ID, true
+	return key, true
 }
 
 func (h *VideoHandler) create(w http.ResponseWriter, r *http.Request) {
-	keyID, ok := h.authorize(w, r)
-	if !ok {
+	key, ok := h.authorizeKey(w, r)
+	if !ok || !admitRequestPool(w, r, h.pools, key) {
 		return
 	}
+	keyID := key.ID
 	lease := h.bodies.lease(keyID)
 	defer lease.release()
 	body, err := readOperationJSON(w, r, lease, domain.MaxRequestBodyBytes)

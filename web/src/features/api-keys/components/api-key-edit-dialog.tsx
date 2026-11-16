@@ -34,6 +34,13 @@ import { AccountMultiSelect } from "@/features/api-keys/components/account-multi
 import { ModelMultiSelect } from "@/features/api-keys/components/model-multi-select";
 import { ReasoningEffortsMultiSelect } from "@/features/api-keys/components/reasoning-efforts-multi-select";
 import { UsageSectionsMultiSelect } from "@/features/api-keys/components/usage-sections-multi-select";
+import { RequestPoolEditor } from "@/features/api-keys/components/request-pool-editor";
+import {
+  parseRequestPool,
+  requestPoolDraft,
+  sameRequestPool,
+  type RequestPoolDraft,
+} from "@/features/api-keys/components/request-pool-utils";
 import { ModelSourceMultiSelect } from "@/features/model-sources/components/model-source-multi-select";
 import type {
   ApiKey,
@@ -110,6 +117,7 @@ type ApiKeyEditDraft = {
   enforcedServiceTier: string;
   trafficClass: TrafficClass;
   transportPolicyOverride: TransportPolicyOverride | null;
+  requestPool: RequestPoolDraft;
 };
 
 function createApiKeyEditDraft(apiKey: ApiKey): ApiKeyEditDraft {
@@ -129,6 +137,7 @@ function createApiKeyEditDraft(apiKey: ApiKey): ApiKeyEditDraft {
     enforcedServiceTier: apiKey.enforcedServiceTier || "none",
     trafficClass: apiKey.trafficClass || "foreground",
     transportPolicyOverride: apiKey.transportPolicyOverride,
+    requestPool: requestPoolDraft(apiKey.requestPool),
   };
 }
 
@@ -171,6 +180,10 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
     : [];
 
   const handleSubmit = async (values: FormValues) => {
+    const requestPool = parseRequestPool(draft.requestPool);
+    if (requestPool === undefined) {
+      return;
+    }
     const normalizedLimits = normalizeLimitRules(draft.limitRules);
     const shouldSubmitAssignedAccountIds =
       hasSelectionChange(apiKey.assignedAccountIds, draft.selectedAccountIds) ||
@@ -212,6 +225,9 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
     }
     if (draft.groupId !== (apiKey.groupId ?? null)) {
       payload.groupId = draft.groupId;
+    }
+    if (!sameRequestPool(requestPool, apiKey.requestPool)) {
+      payload.requestPool = requestPool;
     }
     try {
       await onSubmit(payload);
@@ -456,6 +472,12 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
             ) : (
               <LimitRulesEditor rules={draft.limitRules} onChange={(limitRules) => updateDraft({ limitRules })} />
             )}
+
+            <RequestPoolEditor
+              idPrefix="edit-api-key"
+              value={draft.requestPool}
+              onChange={(requestPool) => updateDraft({ requestPool })}
+            />
 
             {apiKey.limits.length > 0 ? (
               <div className="space-y-1">

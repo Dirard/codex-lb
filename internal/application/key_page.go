@@ -315,7 +315,8 @@ func keyPageProperties(key domain.APIKey, entry domain.OverviewKey, entities dom
 		EnforcedReasoningEffort: key.EnforcedReasoningEffort, AllowedReasoningEfforts: nonNilStrings(key.AllowedReasoningEfforts),
 		TrafficClass: key.TrafficClass, ServiceTier: key.EnforcedServiceTier, UsageSections: []string{},
 		AccountAssignmentScopeEnabled: key.AccountAssignmentScopeEnabled, SourceAssignmentScopeEnabled: key.SourceAssignmentScopeEnabled,
-		AssignedAccountCount: len(key.AssignedAccountIDs), AssignedSourceCount: len(key.AssignedSourceIDs)}
+		AssignedAccountCount: len(key.AssignedAccountIDs), AssignedSourceCount: len(key.AssignedSourceIDs),
+		RequestPool: key.RequestPool}
 	for _, section := range strings.Split(key.UsageSections, ",") {
 		if section = strings.TrimSpace(section); section != "" {
 			props.UsageSections = append(props.UsageSections, section)

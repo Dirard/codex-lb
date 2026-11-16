@@ -23,6 +23,7 @@ type CodexOperationsHandler struct {
 	ops     *application.CodexOperations
 	trusted []netip.Prefix
 	bodies  *BodyBudget
+	pools   *application.RequestPools
 	mux     *http.ServeMux
 }
 
@@ -38,6 +39,28 @@ func NewCodexOperationsHandler(store ProxyRepository, operations *application.Co
 // ConfigureBodyBudget charges request bodies to the budget shared by every
 // proxy route instead of the handler's own 1 GB-host default.
 func (h *CodexOperationsHandler) ConfigureBodyBudget(bodies *BodyBudget) { h.bodies = bodies }
+
+// ConfigureRequestPools gates the model requests of pooled keys.
+func (h *CodexOperationsHandler) ConfigureRequestPools(pools *application.RequestPools) {
+	h.pools = pools
+}
+
+// admitPoolKey takes a pool slot for a request authenticated by key id, for
+// example through a Realtime client secret.
+func (h *CodexOperationsHandler) admitPoolKey(w http.ResponseWriter, r *http.Request, keyID string) bool {
+	if h.pools == nil {
+		return true
+	}
+	key, err := h.store.GetAPIKey(r.Context(), keyID)
+	if errors.Is(err, domain.ErrNotFound) {
+		err = invalidKey()
+	}
+	if err != nil {
+		writeProxyError(w, err)
+		return false
+	}
+	return admitRequestPool(w, r, h.pools, key)
+}
 
 func RegisterCodexOperationRoutes(mux *http.ServeMux, store ProxyRepository, operations *application.CodexOperations, trusted []netip.Prefix) {
 	NewCodexOperationsHandler(store, operations, trusted).RegisterRoutes(mux)
@@ -92,20 +115,20 @@ func (h *CodexOperationsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	h.mux.ServeHTTP(w, r)
 }
 
-func (h *CodexOperationsHandler) authenticate(r *http.Request) (string, error) {
-	key, err := authenticateProxyKey(r, h.store)
-	if err != nil {
-		return "", err
-	}
-	return key.ID, nil
+func (h *CodexOperationsHandler) authenticate(r *http.Request) (domain.APIKey, error) {
+	return authenticateProxyKey(r, h.store)
 }
 
 func (h *CodexOperationsHandler) compact(w http.ResponseWriter, r *http.Request) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	if !admitRequestPool(w, r, h.pools, key) {
+		return
+	}
+	keyID := key.ID
 	lease := h.bodies.lease(keyID)
 	defer lease.release()
 	body, err := readOperationJSON(w, r, lease, domain.MaxRequestBodyBytes)
@@ -121,11 +144,12 @@ func (h *CodexOperationsHandler) compact(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *CodexOperationsHandler) control(w http.ResponseWriter, r *http.Request) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	keyID := key.ID
 	const prefix = "/backend-api/codex/"
 	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), "/")
 	var body []byte
@@ -151,11 +175,12 @@ func (h *CodexOperationsHandler) control(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *CodexOperationsHandler) createFile(w http.ResponseWriter, r *http.Request) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	keyID := key.ID
 	lease := h.bodies.lease(keyID)
 	defer lease.release()
 	body, err := readOperationJSON(w, r, lease, 64<<10)
@@ -168,21 +193,26 @@ func (h *CodexOperationsHandler) createFile(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *CodexOperationsHandler) finalizeFile(w http.ResponseWriter, r *http.Request) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	keyID := key.ID
 	result, err := h.ops.FinalizeFileWithOptions(r.Context(), h.operationOptions(r, keyID), r.PathValue("file_id"))
 	h.writeResult(w, result, err, false)
 }
 
 func (h *CodexOperationsHandler) transcribeBackend(w http.ResponseWriter, r *http.Request) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	if !admitRequestPool(w, r, h.pools, key) {
+		return
+	}
+	keyID := key.ID
 	lease := h.bodies.lease(keyID)
 	defer lease.release()
 	request, err := parseTranscription(w, r, lease, false)
@@ -195,11 +225,15 @@ func (h *CodexOperationsHandler) transcribeBackend(w http.ResponseWriter, r *htt
 }
 
 func (h *CodexOperationsHandler) transcribeV1(w http.ResponseWriter, r *http.Request) {
-	keyID, err := h.authenticate(r)
+	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
+	if !admitRequestPool(w, r, h.pools, key) {
+		return
+	}
+	keyID := key.ID
 	lease := h.bodies.lease(keyID)
 	defer lease.release()
 	request, err := parseTranscription(w, r, lease, true)
@@ -215,6 +249,9 @@ func (h *CodexOperationsHandler) createRealtimeCall(w http.ResponseWriter, r *ht
 	key, err := authenticateBearerKey(r, h.store)
 	if err != nil {
 		writeProxyError(w, err)
+		return
+	}
+	if !admitRequestPool(w, r, h.pools, key) {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))) {

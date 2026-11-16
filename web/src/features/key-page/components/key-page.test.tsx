@@ -133,6 +133,17 @@ describe("KeyPage", () => {
     expect(pageRequests(requests)).toHaveLength(1);
   });
 
+  it("shows the key's request pool among its properties", async () => {
+    server.use(
+      http.get("/api/api-keys/:keyId/page", () =>
+        HttpResponse.json(createKeyPage(createApiKey({ requestPool: { requestsPerMinute: 120, maxWaitSeconds: 30 } }))),
+      ),
+    );
+    openAdmin();
+    const properties = await screen.findByRole("region", { name: "Key properties" });
+    expect(within(properties).getByText("120 per minute, waits up to 30 s")).toBeInTheDocument();
+  });
+
   it("shows the administrator's actions, account columns, cost by account and lifetime", async () => {
     openAdmin();
 

@@ -29,6 +29,12 @@ import { ExpiryPicker } from "@/features/api-keys/components/expiry-picker";
 import { LimitRulesEditor } from "@/features/api-keys/components/limit-rules-editor";
 import { ModelMultiSelect } from "@/features/api-keys/components/model-multi-select";
 import { ReasoningEffortsMultiSelect } from "@/features/api-keys/components/reasoning-efforts-multi-select";
+import { RequestPoolEditor } from "@/features/api-keys/components/request-pool-editor";
+import {
+  parseRequestPool,
+  requestPoolDraft,
+  type RequestPoolDraft,
+} from "@/features/api-keys/components/request-pool-utils";
 import { UsageSectionsMultiSelect } from "@/features/api-keys/components/usage-sections-multi-select";
 import { ModelSourceMultiSelect } from "@/features/model-sources/components/model-source-multi-select";
 import type {
@@ -79,6 +85,7 @@ type ApiKeyCreateDraft = {
   trafficClass: TrafficClass;
   transportPolicyOverride: TransportPolicyOverride | null;
   applyToCodexModel: boolean;
+  requestPool: RequestPoolDraft;
 };
 
 const initialApiKeyCreateDraft: ApiKeyCreateDraft = {
@@ -96,6 +103,7 @@ const initialApiKeyCreateDraft: ApiKeyCreateDraft = {
   trafficClass: "foreground",
   transportPolicyOverride: null,
   applyToCodexModel: false,
+  requestPool: requestPoolDraft(null),
 };
 
 function apiKeyCreateDraftReducer(
@@ -118,6 +126,10 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
   const [draft, updateDraft] = useReducer(apiKeyCreateDraftReducer, initialApiKeyCreateDraft);
 
   const handleSubmit = async (values: FormValues) => {
+    const requestPool = parseRequestPool(draft.requestPool);
+    if (requestPool === undefined) {
+      return;
+    }
     const grouped = draft.groupId !== null;
     const validLimits = draft.limitRules.filter((rule) => rule.maxValue > 0);
     const payload: ApiKeyCreateRequest = {
@@ -143,6 +155,7 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
       transportPolicyOverride: draft.transportPolicyOverride,
       expiresAt: draft.expiresAt?.toISOString(),
       ...(!grouped && validLimits.length > 0 ? { limits: validLimits } : {}),
+      ...(requestPool ? { requestPool } : {}),
     };
 
     try {
@@ -344,6 +357,12 @@ function ApiKeyCreateForm({ busy, onClose, onSubmit }: ApiKeyCreateFormProps) {
             ) : (
               <LimitRulesEditor rules={draft.limitRules} onChange={(limitRules) => updateDraft({ limitRules })} />
             )}
+
+            <RequestPoolEditor
+              idPrefix="create-api-key"
+              value={draft.requestPool}
+              onChange={(requestPool) => updateDraft({ requestPool })}
+            />
           </div>
         </div>
         </div>
