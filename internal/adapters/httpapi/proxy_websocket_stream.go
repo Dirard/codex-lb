@@ -18,8 +18,9 @@ import (
 // onTerminal runs once, before the terminal frame is written: a client frame
 // that follows the terminal then always finds the turn finalizing. ctx is the
 // turn, which response.cancel ends; session is the connection's lifetime and
-// bounds the writes.
-func (p *ProxyHandler) respondWebSocket(session, ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage, onTerminal func()) (bool, error) {
+// bounds the writes. admit, when set, runs first in the worker, so a Codex
+// client keeps receiving heartbeats while the turn waits for its pool slot.
+func (p *ProxyHandler) respondWebSocket(session, ctx context.Context, connection *websocket.Conn, options application.ResponseOptions, body json.RawMessage, admit func(context.Context) error, onTerminal func()) (bool, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	turn := &websocketTurn{connection: connection, session: session, lastWrite: time.Now(), onTerminal: onTerminal}
 	done := make(chan proxyOutcome, 1)
@@ -41,6 +42,11 @@ func (p *ProxyHandler) respondWebSocket(session, ctx context.Context, connection
 			}
 			done <- outcome
 		}()
+		if admit != nil {
+			if outcome.err = admit(ctx); outcome.err != nil {
+				return
+			}
+		}
 		outcome.result, outcome.err = p.proxy.Respond(ctx, options, body, func(event application.ResponseEvent) error {
 			if err := ctx.Err(); err != nil {
 				return err

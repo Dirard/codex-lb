@@ -132,6 +132,8 @@ type APIKey struct {
 	CreatedAt                     time.Time   `json:"createdAt"`
 	LastUsedAt                    *time.Time  `json:"lastUsedAt"`
 	Limits                        []LimitRule `json:"limits"`
+	// RequestPool caps the key's model requests per minute; nil is no pool.
+	RequestPool *RequestPool `json:"requestPool"`
 }
 
 type UsageAmount struct {

@@ -24,6 +24,10 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 	if !p.writeQuotaHeaders(w, r, key) {
 		return
 	}
+	// The upgrade reports the pool and takes no slot; each response.create does.
+	if p.pools != nil {
+		setRequestPoolHeaders(w.Header(), p.pools.Status(key), false)
+	}
 	turnState := conversationHeader(r, "X-Codex-Turn-State")
 	synthesizedTurnState := turnState == ""
 	if turnState == "" {
@@ -257,7 +261,16 @@ func (p *ProxyHandler) websocket(w http.ResponseWriter, r *http.Request) {
 				activeMu.Unlock()
 			}
 			turnActive.Store(true)
-			terminal, err := p.respondWebSocket(ctx, callCtx, connection, options, message.body, func() {
+			// The turn waits for its pool slot like an HTTP request; a
+			// response.cancel ends the wait without a slot.
+			admit := func(turn context.Context) error {
+				if p.pools == nil {
+					return nil
+				}
+				_, err := p.pools.Admit(turn, current)
+				return err
+			}
+			terminal, err := p.respondWebSocket(ctx, callCtx, connection, options, message.body, admit, func() {
 				activeMu.Lock()
 				activeTerminal = true
 				activeMu.Unlock()
@@ -348,7 +361,14 @@ func sendWebSocketError(ctx context.Context, connection *websocket.Conn, err err
 	if errors.As(err, &request) && request.Param != "" {
 		detail["type"], detail["param"] = "invalid_request_error", request.Param
 	}
-	payload, _ := json.Marshal(map[string]any{"type": "error", "status": status, "error": detail})
+	frame := map[string]any{"type": "error", "status": status, "error": detail}
+	var exhausted *application.RequestPoolExhausted
+	if errors.As(err, &exhausted) {
+		// A frame has no headers of its own: the pool's go beside the error,
+		// where Codex reads the headers of a wrapped WebSocket error.
+		frame["error"], frame["headers"] = requestPoolRefusalDetail(exhausted.Status), requestPoolHeaders(exhausted.Status, true)
+	}
+	payload, _ := json.Marshal(frame)
 	writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	return connection.Write(writeCtx, websocket.MessageText, payload)

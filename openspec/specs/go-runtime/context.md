@@ -979,3 +979,38 @@ Until go-v1.13.0 every voice request took the first active ChatGPT account in id
 **Prod check (2026-11-05, go-v1.13.1).** Two overlapping GPT-Live calls with the same key landed on two accounts (`3241176f`, then `9f6ee091`), and both settled. Failover and warnings have not happened on prod yet.
 
 Design: [voice-account-balancing](../../../../specs/voice-account-balancing.md).
+
+## API key request pools (go-v1.14.0)
+
+A key can have a request pool: at most N model requests per minute (1 to 10000) and a maximum wait (0 to 60 s, default 30). The operator sets it under **Request pool** in the key editor or through the admin key API:
+
+```json
+PATCH /api/api-keys/{id}
+{"requestPool": {"requestsPerMinute": 120, "maxWaitSeconds": 30}}
+```
+
+`"requestPool": null` removes the pool; omitting the field keeps it. Keys are read on every request, so a change applies to the next request without a restart.
+
+**Admission.**
+- A pool is a sliding window: a slot frees 60 s after the request that took it was admitted, so no 60-second interval holds more than N admissions.
+- The slot is taken right after authentication, before the body is read, proxy admission, account selection, reservation and any upstream I/O. A malformed request therefore counts, as at OpenAI.
+- Requests over the pool queue in arrival order. A request whose slot frees within its maximum wait waits for it; otherwise it is refused at once, because waiting could only end in the same refusal. With `maxWaitSeconds: 0` every request over the pool is refused.
+- A request whose client disconnects while it waits leaves the queue and takes no slot. The queue of a pool never holds more than N requests.
+
+**Answers.** Every answer to a pooled request carries OpenAI's request rate-limit headers, success or failure:
+
+| Header | Meaning |
+|---|---|
+| `x-ratelimit-limit-requests` | requests per minute of the pool |
+| `x-ratelimit-remaining-requests` | slots free now, after this request; 0 while requests queue |
+| `x-ratelimit-reset-requests` | time until every slot taken now is free again, as a Go duration: `850ms`, `42.5s`, `1m0s` |
+
+A refusal is 429 with `Retry-After` in whole seconds until the slot a new request would get frees, the same headers, and `{"error":{"type":"requests","code":"rate_limit_exceeded","param":null,"message":"Request pool limit reached for this API key: 120 requests per minute. Please try again in 12s."}}`. Codex reads "Please try again in 12s." as its retry delay. The browser Realtime and Live call routes expose the headers to scripts.
+
+**Routes.** One slot per request: Responses over HTTP, each `response.create` on the Responses WebSocket, compact, image generations and edits, chat completions, embeddings, transcriptions, Realtime and Live call creation, each app Realtime WebSocket session, video generation creation and `/v1/warmup`. No slot: WebSocket upgrades, `response.cancel` and `response.interrupt`, Realtime sideband sockets, client secrets, video status and listing, Codex control and file routes, `/v1/models`, key usage and report routes, admin and dashboard routes.
+
+**Responses WebSocket.** The upgrade answer carries the headers and takes no slot. A waiting `response.create` keeps Codex alive with `codex.keepalive`, and `response.cancel` ends the wait without a slot. A refused turn gets `{"type":"error","status":429,"error":{...},"headers":{"retry-after":"12","x-ratelimit-limit-requests":"120","x-ratelimit-remaining-requests":"0","x-ratelimit-reset-requests":"12s"}}` and the connection stays open. Admitted turns get no extra frame: the Responses event stream has no rate-limit event.
+
+**Limits.** Pools live in the worker's memory. During a seamless update the new worker starts with empty pools, so a key may get up to twice its pool in that minute. The request log's timing starts after admission and does not show the wait. The pool is per key, not per group, and is not a ledger limit: budgets stay in `api_key_limits`.
+
+Design: [api-key-request-pools](../../../../specs/api-key-request-pools.md).

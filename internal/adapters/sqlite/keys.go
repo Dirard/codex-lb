@@ -16,7 +16,8 @@ import (
 const keyColumns = `id,name,key_hash,key_prefix,group_id,allowed_models,apply_to_codex_model,
  enforced_model,allowed_reasoning_efforts,enforced_reasoning_effort,enforced_service_tier,
  traffic_class,transport_policy_override,usage_sections,account_assignment_scope_enabled,
- source_assignment_scope_enabled,expires_at,is_active,created_at,last_used_at`
+ source_assignment_scope_enabled,expires_at,is_active,created_at,last_used_at,
+ request_pool_rpm,request_pool_max_wait_seconds`
 
 func encodeList(values []string) (any, error) {
 	if values == nil {
@@ -61,14 +62,18 @@ func optionalString(v sql.NullString) *string {
 func scanKey(row scanner) (domain.APIKey, error) {
 	var k domain.APIKey
 	var group, allowed, enforcedModel, efforts, enforcedEffort, tier, transport sql.NullString
-	var expires, lastUsed sql.NullInt64
+	var expires, lastUsed, poolRPM, poolWait sql.NullInt64
 	var created int64
 	err := row.Scan(&k.ID, &k.Name, &k.KeyHash, &k.KeyPrefix, &group, &allowed,
 		&k.ApplyToCodexModel, &enforcedModel, &efforts, &enforcedEffort, &tier,
 		&k.TrafficClass, &transport, &k.UsageSections, &k.AccountAssignmentScopeEnabled,
-		&k.SourceAssignmentScopeEnabled, &expires, &k.IsActive, &created, &lastUsed)
+		&k.SourceAssignmentScopeEnabled, &expires, &k.IsActive, &created, &lastUsed,
+		&poolRPM, &poolWait)
 	if err != nil {
 		return k, err
+	}
+	if poolRPM.Valid {
+		k.RequestPool = &domain.RequestPool{RequestsPerMinute: int(poolRPM.Int64), MaxWaitSeconds: int(poolWait.Int64)}
 	}
 	k.GroupID = optionalString(group)
 	k.AllowedModels, err = decodeList(allowed)
@@ -114,6 +119,13 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
 	if err := validateRules(k.Limits); err != nil {
 		return err
 	}
+	var poolRPM, poolWait any
+	if k.RequestPool != nil {
+		if err := k.RequestPool.Validate(); err != nil {
+			return err
+		}
+		poolRPM, poolWait = k.RequestPool.RequestsPerMinute, k.RequestPool.MaxWaitSeconds
+	}
 	if k.CreatedAt.IsZero() {
 		k.CreatedAt = now
 	}
@@ -142,8 +154,9 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
  id,name,key_hash,key_prefix,group_id,allowed_models,apply_to_codex_model,enforced_model,
  allowed_reasoning_efforts,enforced_reasoning_effort,enforced_service_tier,traffic_class,
  transport_policy_override,usage_sections,account_assignment_scope_enabled,
- source_assignment_scope_enabled,expires_at,is_active,created_at,last_used_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+ source_assignment_scope_enabled,expires_at,is_active,created_at,last_used_at,
+ request_pool_rpm,request_pool_max_wait_seconds
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
  name=excluded.name,key_hash=excluded.key_hash,key_prefix=excluded.key_prefix,group_id=excluded.group_id,
  allowed_models=excluded.allowed_models,apply_to_codex_model=excluded.apply_to_codex_model,
  enforced_model=excluded.enforced_model,allowed_reasoning_efforts=excluded.allowed_reasoning_efforts,
@@ -152,13 +165,15 @@ func (s *Store) SaveAPIKey(ctx context.Context, k domain.APIKey, now time.Time) 
  transport_policy_override=excluded.transport_policy_override,usage_sections=excluded.usage_sections,
  account_assignment_scope_enabled=excluded.account_assignment_scope_enabled,
  source_assignment_scope_enabled=excluded.source_assignment_scope_enabled,
- expires_at=excluded.expires_at,is_active=excluded.is_active,last_used_at=excluded.last_used_at
+ expires_at=excluded.expires_at,is_active=excluded.is_active,last_used_at=excluded.last_used_at,
+ request_pool_rpm=excluded.request_pool_rpm,request_pool_max_wait_seconds=excluded.request_pool_max_wait_seconds
  WHERE api_keys.deleted_at IS NULL`, k.ID, k.Name, k.KeyHash, k.KeyPrefix, nullableString(k.GroupID),
 			allowed, boolInt(k.ApplyToCodexModel), nullableString(k.EnforcedModel), efforts,
 			nullableString(k.EnforcedReasoningEffort), nullableString(k.EnforcedServiceTier), k.TrafficClass,
 			nullableString(k.TransportPolicyOverride), k.UsageSections,
 			boolInt(k.AccountAssignmentScopeEnabled), boolInt(k.SourceAssignmentScopeEnabled),
-			optionalMillis(k.ExpiresAt), boolInt(k.IsActive), millis(k.CreatedAt), optionalMillis(k.LastUsedAt))
+			optionalMillis(k.ExpiresAt), boolInt(k.IsActive), millis(k.CreatedAt), optionalMillis(k.LastUsedAt),
+			poolRPM, poolWait)
 		if err != nil {
 			return err
 		}

@@ -224,6 +224,34 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     expect((await owner("/api/key-reports/page")).status).toBe(401);
   });
 
+  it("saves a key's request pool, shows it on the key page and gates model requests with it", async () => {
+    const pool = { requestsPerMinute: 1, maxWaitSeconds: 0 };
+    const created = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", { name: "contract pool", requestPool: pool }));
+    expect(created.requestPool).toEqual(pool);
+    const page = KeyPageResponseSchema.parse(await request(`/api/api-keys/${created.id}/page`));
+    expect(page.key.requestPool).toEqual(pool);
+    const model = () => fetch(`${base}/v1/responses`, {
+      method: "POST", headers: { Authorization: `Bearer ${created.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-6-sol", input: "hi" }), signal: AbortSignal.timeout(4_000),
+    });
+    // No account serves the installation: the first request fails after taking the only slot.
+    const first = await model();
+    expect(first.status).not.toBe(429);
+    expect(first.headers.get("x-ratelimit-limit-requests")).toBe("1");
+    expect(first.headers.get("x-ratelimit-remaining-requests")).toBe("0");
+    const refused = await model();
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("60");
+    expect(refused.headers.get("x-ratelimit-reset-requests")).toMatch(/^(\d+(\.\d+)?m?s|1m0s)$/);
+    expect((await refused.json()).error).toMatchObject({ type: "requests", code: "rate_limit_exceeded" });
+    const cleared = ApiKeySchema.parse(await request(`/api/api-keys/${created.id}`, "PATCH", { requestPool: null }));
+    expect(cleared.requestPool).toBeNull();
+    const unpooled = await model();
+    expect(unpooled.status).not.toBe(429);
+    expect(unpooled.headers.get("x-ratelimit-limit-requests")).toBeNull();
+    await request(`/api/api-keys/${created.id}`, "DELETE");
+  });
+
   it("serves the keys list, its matching ids and bulk key actions to an administrator", async () => {
     for (const route of ["/api/keys", "/api/keys/ids"]) {
       const anonymous = await fetch(base + route, { signal: AbortSignal.timeout(4_000) });

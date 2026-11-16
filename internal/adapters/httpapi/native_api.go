@@ -20,6 +20,7 @@ type NativeAPIHandler struct {
 	service *application.NativeAPIService
 	trusted []netip.Prefix
 	bodies  *BodyBudget
+	pools   *application.RequestPools
 }
 
 func NewNativeAPIHandler(store ProxyRepository, service *application.NativeAPIService, trusted []netip.Prefix) *NativeAPIHandler {
@@ -29,6 +30,9 @@ func NewNativeAPIHandler(store ProxyRepository, service *application.NativeAPISe
 // ConfigureBodyBudget charges request bodies to the budget shared by every
 // proxy route instead of the handler's own 1 GB-host default.
 func (h *NativeAPIHandler) ConfigureBodyBudget(bodies *BodyBudget) { h.bodies = bodies }
+
+// ConfigureRequestPools gates the model requests of pooled keys.
+func (h *NativeAPIHandler) ConfigureRequestPools(pools *application.RequestPools) { h.pools = pools }
 
 func RegisterNativeAPIRoutes(mux *http.ServeMux, store ProxyRepository, service *application.NativeAPIService, trusted []netip.Prefix) {
 	NewNativeAPIHandler(store, service, trusted).RegisterRoutes(mux)
@@ -53,6 +57,9 @@ func (h *NativeAPIHandler) chat(w http.ResponseWriter, r *http.Request) {
 	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
+		return
+	}
+	if !admitRequestPool(w, r, h.pools, key) {
 		return
 	}
 	lease := h.bodies.lease(key.ID)
@@ -93,6 +100,9 @@ func (h *NativeAPIHandler) embeddings(w http.ResponseWriter, r *http.Request) {
 	key, err := h.authenticate(r)
 	if err != nil {
 		writeProxyError(w, err)
+		return
+	}
+	if !admitRequestPool(w, r, h.pools, key) {
 		return
 	}
 	lease := h.bodies.lease(key.ID)

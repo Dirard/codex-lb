@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -60,9 +61,18 @@ func (s *Server) saveKey(w http.ResponseWriter, r *http.Request) {
 		ResetUsage       bool            `json:"resetUsage"`
 		AssignedAccounts *[]string       `json:"assignedAccountIds"`
 		AssignedSources  *[]string       `json:"assignedSourceIds"`
+		RequestPool      json.RawMessage `json:"requestPool"`
 	}{APIKey: key}
 	if !decodeJSON(w, r, &payload) {
 		return
+	}
+	if payload.RequestPool != nil {
+		pool, err := decodeRequestPool(payload.RequestPool)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "invalid_request_pool", err.Error())
+			return
+		}
+		payload.APIKey.RequestPool = pool
 	}
 	// Server-owned fields cannot be patched through the dashboard wire format.
 	payload.ID, payload.KeyHash, payload.KeyPrefix = key.ID, key.KeyHash, key.KeyPrefix
@@ -118,6 +128,33 @@ func (s *Server) saveKey(w http.ResponseWriter, r *http.Request) {
 		domain.APIKey
 		Key string `json:"key"`
 	}{key, plain})
+}
+
+// decodeRequestPool reads a key's requestPool: null removes the pool, and an
+// omitted maximum wait is the default.
+func decodeRequestPool(raw json.RawMessage) (*domain.RequestPool, error) {
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	var wire struct {
+		RequestsPerMinute *int `json:"requestsPerMinute"`
+		MaxWaitSeconds    *int `json:"maxWaitSeconds"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	invalid := fmt.Errorf("requestPool needs requestsPerMinute from 1 to %d and maxWaitSeconds from 0 to %d",
+		domain.MaxRequestPoolRequestsPerMinute, domain.MaxRequestPoolWaitSeconds)
+	if decoder.Decode(&wire) != nil || wire.RequestsPerMinute == nil {
+		return nil, invalid
+	}
+	pool := domain.RequestPool{RequestsPerMinute: *wire.RequestsPerMinute, MaxWaitSeconds: domain.DefaultRequestPoolWaitSeconds}
+	if wire.MaxWaitSeconds != nil {
+		pool.MaxWaitSeconds = *wire.MaxWaitSeconds
+	}
+	if pool.Validate() != nil {
+		return nil, invalid
+	}
+	return &pool, nil
 }
 
 func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {

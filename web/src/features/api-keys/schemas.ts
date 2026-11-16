@@ -23,6 +23,11 @@ export const LimitRuleCreateSchema = z.object({
   modelFilter: z.string().nullable().optional(),
 });
 
+export const RequestPoolSchema = z.object({
+  requestsPerMinute: z.number().int().min(1).max(10000),
+  maxWaitSeconds: z.number().int().min(0).max(60),
+});
+
 const ApiKeyUsageSummarySchema = z.object({
   requestCount: z.number().int().nonnegative(),
   totalTokens: z.number().int().nonnegative(),
@@ -69,6 +74,7 @@ export const ApiKeySchema = z.object({
   createdAt: z.iso.datetime({ offset: true }),
   lastUsedAt: z.iso.datetime({ offset: true }).nullable(),
   limits: z.array(LimitRuleSchema).default([]),
+  requestPool: RequestPoolSchema.nullable().default(null),
   usageSummary: ApiKeyUsageSummarySchema.nullable().default(null),
 });
 
@@ -100,6 +106,7 @@ export const ApiKeyCreateRequestSchema = z.object({
   assignedAccountIds: z.array(z.string()).optional(),
   assignedSourceIds: z.array(z.string()).optional(),
   limits: z.array(LimitRuleCreateSchema).optional(),
+  requestPool: RequestPoolSchema.nullable().optional(),
 });
 
 export const ApiKeyCreateResponseSchema = ApiKeySchema.extend({
@@ -127,12 +134,14 @@ export const ApiKeyUpdateRequestSchema = z.object({
   assignedAccountIds: z.array(z.string()).optional(),
   assignedSourceIds: z.array(z.string()).optional(),
   limits: z.array(LimitRuleCreateSchema).optional(),
+  requestPool: RequestPoolSchema.nullable().optional(),
   resetUsage: z.boolean().optional(),
 });
 
 export const ApiKeyListSchema = z.array(ApiKeySchema);
 
 export type LimitRule = z.infer<typeof LimitRuleSchema>;
+export type RequestPool = z.infer<typeof RequestPoolSchema>;
 export type LimitRuleCreate = z.infer<typeof LimitRuleCreateSchema>;
 export type ApiKey = z.infer<typeof ApiKeySchema>;
 export type ApiKeyCreateRequest = z.infer<typeof ApiKeyCreateRequestSchema>;

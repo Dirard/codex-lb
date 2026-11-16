@@ -204,6 +204,7 @@ export function createKeyPage(apiKey: ApiKey, options: KeyPageOptions = {}): Key
       assignedAccounts: apiKey.assignedAccountIds.map((id) => ({ id, label: id })),
       assignedAccountCount: apiKey.assignedAccountIds.length,
       assignedSourceCount: apiKey.assignedSourceIds.length,
+      requestPool: apiKey.requestPool,
     },
     period: keyPagePeriod(period, options.timezone),
     rollupsUsable: true,

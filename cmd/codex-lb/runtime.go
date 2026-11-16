@@ -267,8 +267,11 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	})
 	// One request-body budget is shared by every proxy route that reads a body.
 	bodies := httpapi.NewBodyBudget(capacity.BodyBudgetBytes, capacity.BodyBudgetKeyBytes)
+	// One set of key request pools gates every model route.
+	pools := application.NewRequestPools()
 	operationRoutes := httpapi.NewCodexOperationsHandler(data.store, operations, cfg.trusted)
 	operationRoutes.ConfigureBodyBudget(bodies)
+	operationRoutes.ConfigureRequestPools(pools)
 	operationRoutes.RegisterRoutes(proxyMux)
 	native := application.NewNativeAPIService(data.store, adapter, adapter, proxy)
 	native.ConfigureAdmission(proxy)
@@ -276,12 +279,15 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	native.ConfigurePrice(proxy.ResolvePrice)
 	nativeRoutes := httpapi.NewNativeAPIHandler(data.store, native, cfg.trusted)
 	nativeRoutes.ConfigureBodyBudget(bodies)
+	nativeRoutes.ConfigureRequestPools(pools)
 	nativeRoutes.RegisterRoutes(proxyMux)
 	videoRoutes := httpapi.NewVideoHandler(data.store, videos)
 	videoRoutes.ConfigureBodyBudget(bodies)
+	videoRoutes.ConfigureRequestPools(pools)
 	videoRoutes.RegisterRoutes(proxyMux)
 	httpapi.NewModelCatalogHandler(data.store, catalog).RegisterPublicRoutes(proxyMux)
 	responses := httpapi.NewProxyHandlerWithLimits(data.store, proxy, cfg.trusted, httpapi.ProxyHandlerLimits{Bodies: bodies, ClientWebSockets: capacity.ClientWebSockets})
+	responses.ConfigureRequestPools(pools)
 	api.ConfigureRuntimeCapacity(httpapi.RuntimeCapacitySource{Plan: capacity, Usage: func() httpapi.CapacityUsage {
 		active, queued := proxy.AdmissionUsage()
 		sockets, _ := responses.ClientWebSockets()
