@@ -163,6 +163,7 @@
   "keys.table.moreLimits_other": "+{{count}} more",
   "keys.table.expiresIn": "in {{until}}",
   "keys.table.never": "Never",
+  "keys.table.forkOf": "Fork of {{name}}",
   "keys.bulk.selected": "{{count}} selected",
   "keys.bulk.selected_one": "{{count}} selected",
   "keys.bulk.selected_other": "{{count}} selected",
@@ -2065,6 +2066,11 @@
   "keyPage.properties.requestPool": "Request pool",
   "keyPage.properties.requestPoolValue": "{{requests}} per minute, waits up to {{seconds}} s",
   "keyPage.properties.noRequestPool": "No pool",
+  "keyPage.properties.parent": "Fork of",
+  "keyPage.properties.forks": "Forks ({{count}})",
+  "keyPage.properties.forkState": "{{status}}, created by {{actor}}",
+  "keyPage.properties.actor.owner": "the key holder",
+  "keyPage.properties.actor.admin": "an administrator",
   "keyPage.accounts.title": "Cost by account",
   "keyPage.accounts.empty": "No account served this key in this period",
   "keyPage.accounts.none": "No account",
@@ -2175,5 +2181,7 @@
   "video.pool.resets": "Resets {{time}}",
   "video.pool.noData": "No data yet",
   "video.pool.needsSignIn": "Sign in again to see this",
-  "video.pool.stale": "Last reading; the latest read failed"
+  "video.pool.stale": "Last reading; the latest read failed",
+  "apiKeys.fork.title": "Fork of {{name}}",
+  "apiKeys.fork.inherited": "This key is a fork. Its group, accounts, model sources, usage sections, traffic class and HTTP client routing come from its parent; its models, efforts, tier, expiry and pool must stay within the parent's."
 }

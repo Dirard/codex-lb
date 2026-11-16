@@ -51,6 +51,11 @@ type RequestPoolStatus struct {
 	// RetryAfter, on a refusal, is the time until the slot a new request would
 	// get frees.
 	RetryAfter time.Duration
+	// Fork marks a fork's request. ForkUsed counts the fork's slots in the
+	// pool and ForkLimit is its own cap, zero when it has none.
+	Fork      bool
+	ForkUsed  int
+	ForkLimit int
 }
 
 // Pooled reports whether the status describes a pool.

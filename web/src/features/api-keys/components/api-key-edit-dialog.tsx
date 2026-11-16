@@ -167,6 +167,8 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
   const initialLimitRules = useMemo(() => limitsToCreateRules(apiKey), [apiKey]);
   const [draft, updateDraft] = useReducer(apiKeyEditDraftReducer, apiKey, createApiKeyEditDraft);
   const hasMalformedReasoningPolicy = apiKey.allowedReasoningEfforts?.length === 0;
+  // A fork's scope and inherited settings are its parent's.
+  const isFork = apiKey.fork !== null;
   const grouped = draft.groupId !== null;
   const selectedGroup = grouped
     ? (groupsQuery.data ?? []).find((group) => group.id === draft.groupId) ?? null
@@ -208,22 +210,22 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
         ? { allowedReasoningEfforts: draft.selectedReasoningEfforts.length > 0 ? draft.selectedReasoningEfforts : null }
         : {}),
       enforcedServiceTier: draft.enforcedServiceTier === "none" ? null : draft.enforcedServiceTier as ServiceTierType,
-      trafficClass: draft.trafficClass,
-      transportPolicyOverride: draft.transportPolicyOverride,
-      usageSections: draft.usageSections,
+      ...(isFork
+        ? {}
+        : { trafficClass: draft.trafficClass, transportPolicyOverride: draft.transportPolicyOverride, usageSections: draft.usageSections }),
       expiresAt: draft.expiresAt?.toISOString() ?? null,
       isActive: values.isActive,
     };
-    if (!grouped && shouldSubmitAssignedAccountIds) {
+    if (!isFork && !grouped && shouldSubmitAssignedAccountIds) {
       payload.assignedAccountIds = draft.selectedAccountIds;
     }
-    if (shouldSubmitAssignedSourceIds) {
+    if (!isFork && shouldSubmitAssignedSourceIds) {
       payload.assignedSourceIds = draft.selectedSourceIds;
     }
     if (!grouped && hasLimitRuleChanges(initialLimitRules, draft.limitRules)) {
       payload.limits = normalizedLimits;
     }
-    if (draft.groupId !== (apiKey.groupId ?? null)) {
+    if (!isFork && draft.groupId !== (apiKey.groupId ?? null)) {
       payload.groupId = draft.groupId;
     }
     if (!sameRequestPool(requestPool, apiKey.requestPool)) {
@@ -259,6 +261,13 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
               )}
             />
 
+            {isFork ? (
+              <div role="note" className="space-y-1 rounded-md border p-2 text-xs">
+                <p className="font-medium">{t("apiKeys.fork.title", { name: apiKey.fork?.parentName || apiKey.fork?.parentId })}</p>
+                <p className="text-muted-foreground">{t("apiKeys.fork.inherited")}</p>
+              </div>
+            ) : null}
+
             <div className="space-y-1">
               <div className="text-sm font-medium">{t("apiKeys.form.allowedModels")}</div>
               <ModelMultiSelect value={draft.selectedModels} onChange={(selectedModels) => updateDraft({ selectedModels })} />
@@ -275,6 +284,8 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
               </label>
             </div>
 
+            {!isFork ? (
+              <>
             <div className="space-y-1">
               <label htmlFor="edit-api-key-group" className="text-sm font-medium">{t("apiKeys.form.group")}</label>
               <GroupSelect
@@ -306,7 +317,11 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
                 <AccountMultiSelect value={draft.selectedAccountIds} onChange={(selectedAccountIds) => updateDraft({ selectedAccountIds })} />
               )}
             </div>
+              </>
+            ) : null}
 
+            {!isFork ? (
+              <>
             <div className="space-y-1">
               <div className="text-sm font-medium">{t("apiKeys.form.assignedModelSources")}</div>
               <ModelSourceMultiSelect
@@ -338,6 +353,8 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
               <div className="text-sm font-medium">{t("apiKeys.form.usageSections")}</div>
               <UsageSectionsMultiSelect value={draft.usageSections} onChange={(usageSections) => updateDraft({ usageSections })} />
             </div>
+              </>
+            ) : null}
 
             <div className="space-y-1">
               <div className="text-sm font-medium">{t("apiKeys.form.enforcedModel")}</div>
@@ -403,6 +420,8 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
               </Select>
             </div>
 
+            {!isFork ? (
+              <>
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="edit-api-key-traffic-class">
                 {t("apiKeys.form.trafficClass")}
@@ -444,6 +463,8 @@ function ApiKeyEditForm({ apiKey, busy, onSubmit, onClose }: ApiKeyEditFormProps
                 </SelectContent>
               </Select>
             </div>
+              </>
+            ) : null}
 
             <div className="space-y-1">
               <div className="text-sm font-medium">{t("apiKeys.form.expiry")}</div>

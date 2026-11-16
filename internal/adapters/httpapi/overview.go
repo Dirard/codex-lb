@@ -48,7 +48,8 @@ func (s *Server) registerOverviewRoutes(mux *http.ServeMux) {
 		})))
 	}
 	mux.HandleFunc("GET /api/api-keys/{id}", func(w http.ResponseWriter, r *http.Request) {
-		key, err := s.store.GetAPIKey(r.Context(), r.PathValue("id"))
+		// The editor shows a fork's own settings; the key page shows how it serves.
+		key, err := s.store.GetStoredAPIKey(r.Context(), r.PathValue("id"))
 		if err != nil {
 			s.fail(w, err)
 			return

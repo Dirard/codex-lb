@@ -203,6 +203,11 @@ export function KeysTable({ rows, loading, sort, order, selected, onSelect, onSo
                         {row.name}
                       </a>
                       <span className="block font-mono text-[11px] text-muted-foreground">{row.prefix}</span>
+                      {row.parentId ? (
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {t("keys.table.forkOf", { name: row.parentName || row.parentId })}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="max-w-[10rem] truncate px-3 py-2 text-xs">
                       {row.groupName ?? (row.groupId ? row.groupId : <span className="text-muted-foreground">{t("keys.filters.ungrouped")}</span>)}

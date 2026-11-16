@@ -61,6 +61,8 @@ func (r *keyPageRepo) KeyPageUsage(_ context.Context, q domain.KeyPageUsageQuery
 	return usage, nil
 }
 
+func (r *keyPageRepo) ListKeyForks(context.Context, string) ([]domain.APIKey, error) { return nil, nil }
+
 func (r *keyPageRepo) KeyRecentRequests(_ context.Context, q domain.KeyRequestsQuery) (domain.KeyRequestsPage, error) {
 	r.calls = append(r.calls, "KeyRecentRequests")
 	r.requests = append(r.requests, q)

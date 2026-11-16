@@ -252,6 +252,43 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     await request(`/api/api-keys/${created.id}`, "DELETE");
   });
 
+  it("lets a key holder fork their key and shows the fork under its parent", async () => {
+    const parent = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", {
+      name: "contract parent", allowedModels: ["gpt-6-sol", "gpt-6-luna"], requestPool: { requestsPerMinute: 2, maxWaitSeconds: 0 },
+    }));
+    const keyApi = (path: string, method = "GET", body?: unknown, secret = parent.key) => fetch(`${base}/v1/key/forks${path}`, {
+      method, headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(4_000),
+    });
+    const created = await keyApi("", "POST", { name: "contract fork", allowedModels: ["gpt-6-luna"] });
+    expect(created.status).toBe(201);
+    const fork = await created.json();
+    expect(fork).toMatchObject({ object: "api_key.fork", createdBy: "owner", allowedModels: ["gpt-6-luna"] });
+    expect(fork.key).toMatch(/^sk-clb-fork-/);
+    const wider = await keyApi("", "POST", { name: "too wide", allowedModels: ["gpt-6-terra"] });
+    expect(wider.status).toBe(422);
+    expect((await wider.json()).error).toMatchObject({ code: "fork_exceeds_parent", param: "allowedModels" });
+    expect((await keyApi("", "GET", undefined, fork.key)).status).toBe(403);
+    // The fork takes a slot of its parent's pool and reports its share.
+    const answer = await fetch(`${base}/v1/responses`, {
+      method: "POST", headers: { Authorization: `Bearer ${fork.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-6-luna", input: "hi" }), signal: AbortSignal.timeout(4_000),
+    });
+    expect(answer.status).not.toBe(429);
+    expect(answer.headers.get("x-ratelimit-limit-requests")).toBe("2");
+    expect(answer.headers.get("x-ratelimit-remaining-requests")).toBe("1");
+    expect(answer.headers.get("x-ratelimit-fork-used-requests")).toBe("1");
+    const page = KeyPageResponseSchema.parse(await request(`/api/api-keys/${parent.id}/page`));
+    expect(page.key.forks.map((item) => item.id)).toEqual([fork.id]);
+    const forkPage = KeyPageResponseSchema.parse(await request(`/api/api-keys/${fork.id}/page`));
+    expect(forkPage.key.parent).toEqual({ id: parent.id, name: "contract parent" });
+    const edited = ApiKeySchema.parse(await request(`/api/api-keys/${fork.id}`));
+    expect(edited.fork).toMatchObject({ parentId: parent.id, parentName: "contract parent", createdBy: "owner" });
+    expect((await keyApi(`/${fork.id}`, "DELETE")).status).toBe(204);
+    expect(((await (await keyApi("")).json()).data as unknown[]).length).toBe(0);
+    await request(`/api/api-keys/${parent.id}`, "DELETE");
+  });
+
   it("serves the keys list, its matching ids and bulk key actions to an administrator", async () => {
     for (const route of ["/api/keys", "/api/keys/ids"]) {
       const anonymous = await fetch(base + route, { signal: AbortSignal.timeout(4_000) });

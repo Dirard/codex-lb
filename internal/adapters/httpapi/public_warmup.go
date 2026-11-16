@@ -2,10 +2,8 @@ package httpapi
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -91,8 +89,7 @@ func (h *CodexOperationsHandler) publicWarmupKey(r *http.Request) (domain.APIKey
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || len(parts[1]) > 4096 {
 		return domain.APIKey{}, invalidKey()
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(parts[1])))
-	key, err := h.store.FindAPIKeyByHash(r.Context(), hash)
+	key, err := findKeyBySecret(r.Context(), h.store, parts[1])
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.APIKey{}, invalidKey()
 	}

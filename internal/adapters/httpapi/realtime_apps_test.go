@@ -445,7 +445,7 @@ func TestRealtimeAppServesPagesOnOtherOrigins(t *testing.T) {
 		t.Fatalf("preflight: %d %v", preflight.StatusCode, preflight.Header)
 	}
 	call := f.browserRequest(t, http.MethodPost, "/v1/realtime/calls", "application/sdp", "v=offer\r\n", http.Header{"Authorization": {"Bearer " + secret.Value}})
-	if call.StatusCode != 201 || call.Header.Get("Access-Control-Allow-Origin") != "*" || call.Header.Get("Access-Control-Expose-Headers") != "Location, Retry-After, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests" ||
+	if call.StatusCode != 201 || call.Header.Get("Access-Control-Allow-Origin") != "*" || call.Header.Get("Access-Control-Expose-Headers") != "Location, Retry-After, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests, x-ratelimit-fork-used-requests, x-ratelimit-fork-limit-requests" ||
 		call.Header.Get("Location") != "/v1/realtime/calls/rtc_app" {
 		t.Fatalf("foreign page call: %d %v", call.StatusCode, call.Header)
 	}

@@ -348,7 +348,7 @@ func TestLiveCallFromBrowserIsCreatedAndMetered(t *testing.T) {
 	answer, _ := io.ReadAll(call.Body)
 	if call.StatusCode != http.StatusCreated || call.Header.Get("Content-Type") != "application/sdp" || string(answer) != "v=answer\r\n" ||
 		call.Header.Get("Location") != "/v1/live/rtc_live" || call.Header.Get("Access-Control-Allow-Origin") != "*" ||
-		call.Header.Get("Access-Control-Expose-Headers") != "Location, Retry-After, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests" {
+		call.Header.Get("Access-Control-Expose-Headers") != "Location, Retry-After, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests, x-ratelimit-fork-used-requests, x-ratelimit-fork-limit-requests" {
 		t.Fatalf("foreign page call: %d %v %q", call.StatusCode, call.Header, answer)
 	}
 	if res := f.browserRequest(t, http.MethodPost, "/v1/live/client_secrets", "application/json", `{}`, http.Header{"Authorization": {"Bearer synthetic-key"}}); res.StatusCode != http.StatusForbidden {

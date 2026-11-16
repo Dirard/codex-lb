@@ -164,8 +164,9 @@ func backfillLimitTx(ctx context.Context, tx *sql.Tx, keyID string, rule domain.
 	case domain.LimitCostUSD:
 		column = "cost_microdollars"
 	}
-	query := "SELECT coalesce(sum(" + column + "),0) FROM usage_events WHERE api_key_id=? AND request_kind='normal' AND requested_at>=? AND requested_at<?"
-	args := []any{keyID, millis(start), millis(end)}
+	// A parent's limit also counts its forks' usage.
+	query := "SELECT coalesce(sum(" + column + "),0) FROM usage_events WHERE api_key_id IN (SELECT id FROM api_keys WHERE id=? OR parent_key_id=?) AND request_kind='normal' AND requested_at>=? AND requested_at<?"
+	args := []any{keyID, keyID, millis(start), millis(end)}
 	if rule.ModelFilter != nil {
 		query += " AND model=?"
 		args = append(args, *rule.ModelFilter)

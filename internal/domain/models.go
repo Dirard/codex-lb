@@ -133,7 +133,10 @@ type APIKey struct {
 	LastUsedAt                    *time.Time  `json:"lastUsedAt"`
 	Limits                        []LimitRule `json:"limits"`
 	// RequestPool caps the key's model requests per minute; nil is no pool.
+	// On a fork it is the fork's own cap inside its parent's pool.
 	RequestPool *RequestPool `json:"requestPool"`
+	// Fork is set on a fork and is server-owned.
+	Fork *KeyFork `json:"fork"`
 }
 
 type UsageAmount struct {

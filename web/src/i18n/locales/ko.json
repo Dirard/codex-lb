@@ -163,6 +163,7 @@
   "keys.table.moreLimits_other": "+{{count}}개 더",
   "keys.table.expiresIn": "{{until}} 후",
   "keys.table.never": "없음",
+  "keys.table.forkOf": "{{name}}의 포크",
   "keys.bulk.selected": "{{count}}개 선택됨",
   "keys.bulk.selected_one": "{{count}}개 선택됨",
   "keys.bulk.selected_other": "{{count}}개 선택됨",
@@ -2065,6 +2066,11 @@
   "keyPage.properties.requestPool": "요청 풀",
   "keyPage.properties.requestPoolValue": "분당 {{requests}}회, 최대 {{seconds}}초 대기",
   "keyPage.properties.noRequestPool": "풀 없음",
+  "keyPage.properties.parent": "부모 키",
+  "keyPage.properties.forks": "포크 ({{count}})",
+  "keyPage.properties.forkState": "{{status}}, 생성: {{actor}}",
+  "keyPage.properties.actor.owner": "키 보유자",
+  "keyPage.properties.actor.admin": "관리자",
   "keyPage.accounts.title": "계정별 비용",
   "keyPage.accounts.empty": "이 기간에 이 키를 처리한 계정이 없습니다",
   "keyPage.accounts.none": "계정 없음",
@@ -2175,5 +2181,7 @@
   "video.pool.resets": "{{time}} 초기화",
   "video.pool.noData": "아직 데이터 없음",
   "video.pool.needsSignIn": "확인하려면 다시 로그인하세요",
-  "video.pool.stale": "마지막 값입니다. 최근 읽기에 실패했습니다"
+  "video.pool.stale": "마지막 값입니다. 최근 읽기에 실패했습니다",
+  "apiKeys.fork.title": "{{name}}의 포크",
+  "apiKeys.fork.inherited": "이 키는 포크입니다. 그룹, 계정, 모델 소스, 사용량 섹션, 트래픽 클래스와 HTTP 클라이언트 라우팅은 부모 키를 따르며, 모델, 노력 수준, 티어, 만료와 풀은 부모 키의 범위 안에 있어야 합니다."
 }

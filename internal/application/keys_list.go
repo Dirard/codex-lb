@@ -244,8 +244,17 @@ func (s *KeysListService) List(ctx context.Context, p KeysListParams) (domain.Ke
 	if plan.offset >= len(entries) {
 		return page, nil
 	}
+	keyNames := make(map[string]string, len(data.Keys))
+	for _, key := range data.Keys {
+		keyNames[key.ID] = key.Name
+	}
 	for _, entry := range entries[plan.offset:min(len(entries), plan.offset+plan.limit)] {
-		page.Rows = append(page.Rows, keyRow(entry, groupNames, plan.now))
+		row := keyRow(entry, groupNames, plan.now)
+		if parent := entry.key.ParentID; parent != nil {
+			name := keyNames[*parent]
+			row.ParentID, row.ParentName = parent, &name
+		}
+		page.Rows = append(page.Rows, row)
 	}
 	return page, nil
 }

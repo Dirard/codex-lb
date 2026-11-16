@@ -1014,3 +1014,34 @@ A refusal is 429 with `Retry-After` in whole seconds until the slot a new reques
 **Limits.** Pools live in the worker's memory. During a seamless update the new worker starts with empty pools, so a key may get up to twice its pool in that minute. The request log's timing starts after admission and does not show the wait. The pool is per key, not per group, and is not a ledger limit: budgets stay in `api_key_limits`.
 
 Design: [api-key-request-pools](../../../../specs/api-key-request-pools.md).
+
+## API key forks (go-v1.15.0)
+
+The holder of a key can fork it: create child keys for their own services and manage them with the parent key as the bearer, without the dashboard.
+
+| Request | Answer |
+|---|---|
+| `GET /v1/key/forks` | `{"object":"list","data":[fork...]}` |
+| `POST /v1/key/forks` | 201, the fork with its secret in `key` (shown once, starts with `sk-clb-fork-`) |
+| `GET /v1/key/forks/{id}` | the fork |
+| `PATCH /v1/key/forks/{id}` | the fork after the change; absent fields are kept, `null` clears a nullable one |
+| `DELETE /v1/key/forks/{id}` | 204 |
+
+A fork has `name`, `isActive`, `expiresAt`, `allowedModels`, `enforcedModel`, `allowedReasoningEfforts`, `enforcedReasoningEffort`, `enforcedServiceTier`, `limits` (its own budget rules) and `requestPool` (its cap). The answer also carries `keyPrefix`, `createdAt`, `lastUsedAt`, `createdBy`, `updatedBy` (`owner` or `admin`) and `updatedAt`. Model and effort lists the request omits are copied from the parent.
+
+**Within the parent.**
+- Each write is checked against the parent's current settings. Models and efforts must be subsets of the parent's lists. An enforced model, effort or tier must match the parent's enforcement or be allowed by it. The expiry must be no later than the parent's, and the pool cap at most the parent's pool. A violation is 422 `fork_exceeds_parent` with the field in `param`.
+- Scope is the parent's: group, accounts, model sources, traffic class, HTTP client routing and usage sections cannot be set on a fork.
+- A fork serves only while its parent is active and unexpired. It reserves on its own limits and on all of its parent's, so its usage counts on the parent; repricing and backfill follow.
+- When the administrator narrows a parent below a fork's models, efforts or tier, the fork is disabled in the same write (`updatedBy: admin`). It keeps its settings; the holder narrows it and enables it again.
+- Deleting a parent deletes its forks. Forks have no forks, no key changes its parent, and a parent has at most 100 forks (409 `fork_limit_reached`).
+- A fork, keyless access and Realtime client secrets get 403 `fork_management_forbidden`; another key's fork is 404 `fork_not_found`.
+- Video generation needs the fork itself on the video allow list.
+
+**Shared pool.** A parent's request pool is shared by the parent and its forks. A fork may have its own cap inside it: a capped request takes a cap slot, then a shared slot, both before the earlier maximum wait, and returns the cap slot when it gets no shared slot. Fork answers add `x-ratelimit-fork-used-requests` (the fork's requests in the pool during the last minute) and, with a cap, `x-ratelimit-fork-limit-requests`; `x-ratelimit-remaining-requests` is the smaller of the shared and the capped free slots. A fork of a parent without a pool uses its cap as its own pool.
+
+**Dashboard.** The keys list marks forks with their parent. A parent's key page lists its forks, and a fork's page links its parent. The editor of a fork hides the inherited settings. The administrator can edit, disable, regenerate and delete forks under the same rules; a group move is not applied to a fork.
+
+**Compatibility.** Fork secrets are hashed in their own domain. Code before go-v1.15.0 cannot authenticate a fork, so during a seamless update or after a rollback forks are refused, never served without their parent's limits. Management actions are logged with key ids and the actor only.
+
+Design: [api-key-request-pools](../../../../specs/api-key-request-pools.md).
