@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import App from "@/App";
 import { createAccountGroup } from "@/features/account-groups/api";
 import { updateApiKey } from "@/features/api-keys/api";
+import { createAccountGroup as accountGroupFixture, createAccountSummary, createApiKey } from "@/test/mocks/factories";
+import { createGroupsSummary } from "@/test/mocks/groups-summary-factories";
 import { server } from "@/test/mocks/server";
 import { renderWithProviders } from "@/test/utils";
 
@@ -69,6 +71,30 @@ describe("groups flow", () => {
     for (const path of ["/api/accounts", "/api/account-groups/", "/api/dashboard/status", "/health/ready"]) {
       expect(paths).not.toContain(path);
     }
+  });
+
+  it("lists a fork with its parent's group, marked as a fork, not as an ungrouped key", async () => {
+    const team = accountGroupFixture({ id: "grp_team", name: "Team", accountIds: ["acc_primary"] });
+    const parent = createApiKey({ id: "key_parent", name: "canonkeeper", groupId: team.id });
+    // The server stores no group on a fork: it belongs to its parent's group.
+    const fork = createApiKey({
+      id: "key_fork", name: "canonkeeper-reading", groupId: null,
+      fork: { parentId: parent.id, parentName: parent.name, createdBy: "owner", updatedBy: "owner", updatedAt: new Date().toISOString() },
+    });
+    const summary = createGroupsSummary([createAccountSummary({ accountId: "acc_primary" })], [parent, fork], [team]);
+    server.use(http.get("/api/groups/summary", () => HttpResponse.json(summary)));
+    const user = userEvent.setup();
+    window.history.pushState({}, "", "/groups");
+    renderWithProviders(<App />);
+
+    const rows = await screen.findAllByTestId("groups-row");
+    expect(within(rows[1]).getByText("Ungrouped keys")).toBeInTheDocument();
+    const sheet = await openSheet(user, "Team");
+    const link = sheet.getByRole("link", { name: "canonkeeper-reading" });
+    expect(link).toHaveAttribute("href", "/keys/key_fork");
+    expect(link.closest("td")).toHaveTextContent("Fork of canonkeeper");
+    expect(sheet.getByRole("link", { name: "canonkeeper" })).toBeInTheDocument();
+    expect(summary.groups.find((row) => row.id === null)?.topKeys7d.map((key) => key.id)).toEqual([]);
   });
 
   it("sorts by a column and restores the default order", async () => {

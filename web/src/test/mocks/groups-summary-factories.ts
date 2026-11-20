@@ -34,6 +34,8 @@ function groupKeyOf(key: ApiKey, index: number): GroupKey {
     id: key.id,
     name: key.name,
     prefix: key.keyPrefix,
+    parentId: key.fork?.parentId ?? null,
+    parentName: key.fork?.parentName ?? null,
     status: key.isActive ? "active" : "disabled",
     spendTodayUsd: spendToday,
     spend7dUsd: spendToday * 5,
@@ -77,6 +79,8 @@ export function createGroupsSummary(accounts: AccountSummary[], apiKeys: ApiKey[
     primaryRemainingPercent: account.usage?.primaryRemainingPercent ?? null,
     secondaryRemainingPercent: account.usage?.secondaryRemainingPercent ?? null,
   }));
+  // A fork belongs to its parent's group.
+  const groupOf = (key: ApiKey) => (key.fork ? apiKeys.find((parent) => parent.id === key.fork?.parentId)?.groupId : key.groupId) ?? null;
   const rows = groups.map((group) =>
     rowOf(
       {
@@ -86,10 +90,10 @@ export function createGroupsSummary(accounts: AccountSummary[], apiKeys: ApiKey[
         limits: group.limits.map((rule) => ({ ...rule, modelFilter: rule.modelFilter ?? null })),
       },
       groupAccounts.filter((account) => group.accountIds.includes(account.id)),
-      apiKeys.filter((key) => key.groupId === group.id),
+      apiKeys.filter((key) => groupOf(key) === group.id),
     ),
   );
-  rows.push(rowOf({ id: null, name: "Ungrouped keys" }, groupAccounts, apiKeys.filter((key) => !key.groupId)));
+  rows.push(rowOf({ id: null, name: "Ungrouped keys" }, groupAccounts, apiKeys.filter((key) => !groupOf(key))));
   return GroupsSummarySchema.parse({
     generatedAt: new Date().toISOString(),
     timezone: "UTC",

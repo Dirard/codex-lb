@@ -394,3 +394,149 @@ func TestAdminControlsForks(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// A fork stores no group: every dashboard read places it in its parent's
+// group, never among the ungrouped keys (owner report, go-v1.15.0).
+func TestForksShowInTheirParentsGroup(t *testing.T) {
+	f := newForkFixture(t, domain.APIKey{})
+	ctx := context.Background()
+	if err := f.store.SaveGroup(ctx, domain.AccountGroup{ID: "grp_team", Name: "Team", AccountIDs: []string{"fork-b"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if moved := f.admin.do(t, "PATCH", "/api/api-keys/parent-key", `{"groupId":"grp_team"}`); moved.Code != http.StatusOK {
+		t.Fatalf("group the parent: %d %s", moved.Code, moved.Body)
+	}
+	id, secret := f.createFork(t, `{"name":"canonkeeper-reading"}`)
+	// The runtime already serves the fork on its parent's group accounts.
+	if answer := f.respond(t, secret, "gpt-6-sol"); answer.status != http.StatusOK {
+		t.Fatalf("fork request %d %s", answer.status, answer.raw)
+	}
+	f.mu.Lock()
+	served := f.accounts[len(f.accounts)-1]
+	f.mu.Unlock()
+	if served != "fork-b" {
+		t.Fatalf("fork served on %s, outside its parent's group", served)
+	}
+	read := func(path string, into any) {
+		t.Helper()
+		answer := f.admin.do(t, "GET", path, "")
+		if answer.Code != http.StatusOK || json.Unmarshal(answer.Body.Bytes(), into) != nil {
+			t.Fatalf("%s: %d %s", path, answer.Code, answer.Body)
+		}
+	}
+	var summary struct {
+		Groups []struct {
+			ID        *string `json:"id"`
+			TopKeys7d []struct {
+				ID         string  `json:"id"`
+				ParentID   *string `json:"parentId"`
+				ParentName *string `json:"parentName"`
+			} `json:"topKeys7d"`
+		} `json:"groups"`
+	}
+	read("/api/groups/summary", &summary)
+	found := false
+	for _, group := range summary.Groups {
+		for _, key := range group.TopKeys7d {
+			if key.ID != id {
+				continue
+			}
+			if group.ID == nil || *group.ID != "grp_team" || key.ParentID == nil || *key.ParentID != "parent-key" || key.ParentName == nil || *key.ParentName != "Parent" {
+				t.Fatalf("groups summary places the fork in %v as %+v", group.ID, key)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("groups summary lost the fork")
+	}
+	var keys struct {
+		Rows []struct {
+			ID         string  `json:"id"`
+			GroupID    *string `json:"groupId"`
+			GroupName  *string `json:"groupName"`
+			ParentName *string `json:"parentName"`
+		} `json:"rows"`
+	}
+	read("/api/keys?group=grp_team", &keys)
+	if len(keys.Rows) != 2 {
+		t.Fatalf("group filter rows %+v", keys.Rows)
+	}
+	for _, row := range keys.Rows {
+		if row.GroupID == nil || *row.GroupID != "grp_team" || row.GroupName == nil || *row.GroupName != "Team" {
+			t.Fatalf("keys list row %+v", row)
+		}
+	}
+	read("/api/keys?group=ungrouped", &keys)
+	if len(keys.Rows) != 0 {
+		t.Fatalf("ungrouped keys %+v", keys.Rows)
+	}
+	var directory struct {
+		Keys   []struct{ ID, GroupID string } `json:"keys"`
+		Groups []struct {
+			ID       string `json:"id"`
+			KeyCount int    `json:"keyCount"`
+		} `json:"groups"`
+	}
+	read("/api/directory", &directory)
+	for _, key := range directory.Keys {
+		if key.ID == id && key.GroupID != "grp_team" {
+			t.Fatalf("directory places the fork in %q", key.GroupID)
+		}
+	}
+	if len(directory.Groups) != 1 || directory.Groups[0].KeyCount != 2 {
+		t.Fatalf("directory groups %+v", directory.Groups)
+	}
+	var page struct {
+		Key struct {
+			GroupID *string `json:"groupId"`
+		} `json:"key"`
+		Group *struct {
+			ID string `json:"id"`
+		} `json:"group"`
+	}
+	read("/api/api-keys/"+id+"/page", &page)
+	if page.Key.GroupID == nil || *page.Key.GroupID != "grp_team" || page.Group == nil || page.Group.ID != "grp_team" {
+		t.Fatalf("fork key page group %+v %+v", page.Key, page.Group)
+	}
+	// On the holders' own pages a fork lists only itself, and the parent's
+	// holder does not see the group's forks among its keys.
+	ownerGroup := func(secret string) []string {
+		t.Helper()
+		send := func(method, path string, mutate func(*http.Request)) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(method, "http://localhost"+path, nil)
+			r.RemoteAddr = "127.0.0.1:1234"
+			mutate(r)
+			w := httptest.NewRecorder()
+			f.admin.handler.ServeHTTP(w, r)
+			return w
+		}
+		login := send("POST", "/api/key-reports/session", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+secret) })
+		if login.Code != http.StatusOK || len(login.Result().Cookies()) != 1 {
+			t.Fatalf("key login %d %s", login.Code, login.Body)
+		}
+		answer := send("GET", "/api/key-reports/page", func(r *http.Request) { r.AddCookie(login.Result().Cookies()[0]) })
+		var page struct {
+			Group *struct {
+				ID   string `json:"id"`
+				Keys []struct {
+					ID string `json:"id"`
+				} `json:"keys"`
+			} `json:"group"`
+		}
+		if answer.Code != http.StatusOK || json.Unmarshal(answer.Body.Bytes(), &page) != nil || page.Group == nil || page.Group.ID != "grp_team" {
+			t.Fatalf("owner page %d %s", answer.Code, answer.Body)
+		}
+		ids := []string{}
+		for _, key := range page.Group.Keys {
+			ids = append(ids, key.ID)
+		}
+		return ids
+	}
+	if ids := ownerGroup(secret); len(ids) != 1 || ids[0] != id {
+		t.Fatalf("fork holder sees group keys %v", ids)
+	}
+	if ids := ownerGroup(parentSecret); len(ids) != 1 || ids[0] != "parent-key" {
+		t.Fatalf("parent holder sees group keys %v", ids)
+	}
+}

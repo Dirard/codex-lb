@@ -253,8 +253,9 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
   });
 
   it("lets a key holder fork their key and shows the fork under its parent", async () => {
+    const team = AccountGroupSchema.parse(await request("/api/account-groups/", "POST", { name: "Contract fork group", accountIds: [], limits: [] }));
     const parent = ApiKeyCreateResponseSchema.parse(await request("/api/api-keys/", "POST", {
-      name: "contract parent", allowedModels: ["gpt-6-sol", "gpt-6-luna"], requestPool: { requestsPerMinute: 2, maxWaitSeconds: 0 },
+      name: "contract parent", groupId: team.id, allowedModels: ["gpt-6-sol", "gpt-6-luna"], requestPool: { requestsPerMinute: 2, maxWaitSeconds: 0 },
     }));
     const keyApi = (path: string, method = "GET", body?: unknown, secret = parent.key) => fetch(`${base}/v1/key/forks${path}`, {
       method, headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
@@ -280,6 +281,13 @@ describe.skipIf(!binary)("Go runtime dashboard contracts", () => {
     expect(answer.headers.get("x-ratelimit-fork-used-requests")).toBe("1");
     const page = KeyPageResponseSchema.parse(await request(`/api/api-keys/${parent.id}/page`));
     expect(page.key.forks.map((item) => item.id)).toEqual([fork.id]);
+    // A fork belongs to its parent's group, never to the ungrouped keys.
+    const summary = GroupsSummarySchema.parse(await request("/api/groups/summary"));
+    expect(summary.groups.find((row) => row.id === team.id)?.topKeys7d.find((key) => key.id === fork.id))
+      .toMatchObject({ parentId: parent.id, parentName: "contract parent" });
+    expect(summary.groups.find((row) => row.id === null)?.topKeys7d.some((key) => key.id === fork.id)).toBe(false);
+    const grouped = KeysPageSchema.parse(await request(`/api/keys?group=${team.id}`));
+    expect(grouped.rows.find((row) => row.id === fork.id)).toMatchObject({ groupId: team.id, groupName: "Contract fork group", parentId: parent.id });
     const forkPage = KeyPageResponseSchema.parse(await request(`/api/api-keys/${fork.id}/page`));
     expect(forkPage.key.parent).toEqual({ id: parent.id, name: "contract parent" });
     const edited = ApiKeySchema.parse(await request(`/api/api-keys/${fork.id}`));

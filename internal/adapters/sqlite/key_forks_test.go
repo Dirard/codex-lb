@@ -237,3 +237,69 @@ func TestForkServesInItsParentsScope(t *testing.T) {
 		}
 	}
 }
+
+// A fork belongs to its parent's group in every group read: membership
+// counts, the group reset, account selection and the holder's reports.
+func TestForkBelongsToItsParentsGroup(t *testing.T) {
+	ctx := context.Background()
+	s, _ := testStore(t)
+	saveTestAccount(t, s, "in-group")
+	saveTestAccount(t, s, "outside")
+	if err := s.SaveGroup(ctx, domain.AccountGroup{ID: "team", Name: "Team", AccountIDs: []string{"in-group"}}, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	parent := testKey("parent", nil)
+	group := "team"
+	parent.GroupID, parent.UsageSections = &group, "upstream_limits,account_pool_usage"
+	other := testKey("other", &group)
+	for _, key := range []domain.APIKey{parent, other} {
+		if err := s.SaveAPIKey(ctx, key, fixedTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fork := testFork("fork", "parent")
+	fork.Limits = []domain.LimitRule{tokenLimit(1000)}
+	if err := s.SaveAPIKey(ctx, fork, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	// Selection: the fork serves only on its parent's group accounts.
+	accounts, err := s.EligibleAccounts(ctx, "fork")
+	if err != nil || len(accounts) != 1 || accounts[0].ID != "in-group" {
+		t.Fatalf("fork accounts %+v %v", accounts, err)
+	}
+	stored, err := s.GetGroup(ctx, "team")
+	if err != nil || stored.KeyCount != 3 {
+		t.Fatalf("group key count %d %v", stored.KeyCount, err)
+	}
+	directory, err := s.Directory(ctx, fixedTime)
+	if err != nil || len(directory.Groups) != 1 || directory.Groups[0].KeyCount != 3 {
+		t.Fatalf("directory groups %+v %v", directory.Groups, err)
+	}
+	// Resetting the group resets its keys' forks too.
+	if _, err := s.db.ExecContext(ctx, `UPDATE api_key_limits SET current_value=500 WHERE api_key_id='fork'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResetGroupUsage(ctx, "team", fixedTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var current int64
+	if err := s.db.QueryRowContext(ctx, `SELECT current_value FROM api_key_limits WHERE api_key_id='fork' AND is_active=1`).Scan(&current); err != nil || current != 0 {
+		t.Fatalf("fork limit after the group reset %d %v", current, err)
+	}
+	// The fork's holder sees the group and its pool, with the parent's
+	// sections, but only the fork; the group's other holders do not see it.
+	report, err := s.KeyReportLimits(ctx, "fork", fixedTime)
+	if err != nil || report.Group == nil || report.Group.Name != "Team" || len(report.Group.Keys) != 1 || report.Group.Keys[0].ID != "fork" ||
+		report.Group.AccountQuota == nil || report.Group.AccountQuota.AccountCount != 1 {
+		t.Fatalf("fork report %+v %v", report.Group, err)
+	}
+	report, err = s.KeyReportLimits(ctx, "parent", fixedTime)
+	if err != nil || report.Group == nil || len(report.Group.Keys) != 2 {
+		t.Fatalf("parent report %+v %v", report.Group, err)
+	}
+	for _, key := range report.Group.Keys {
+		if key.ID == "fork" {
+			t.Fatal("the group's report lists a fork to other holders")
+		}
+	}
+}

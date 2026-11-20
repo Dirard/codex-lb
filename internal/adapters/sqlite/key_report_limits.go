@@ -21,13 +21,16 @@ func (s *Store) KeyReportLimits(ctx context.Context, keyID string, now time.Time
 		return result, err
 	}
 	defer tx.Rollback()
+	// A fork reports in its parent's group with its parent's usage sections,
+	// and lists only itself: its holder may not hold the group's other keys.
 	rows, err := tx.QueryContext(ctx, `SELECT g.name,k.id,k.name,k.is_active,k.expires_at,
- caller.usage_sections,settings.hide_upstream_quota_from_keys,
+ coalesce(parent.usage_sections,caller.usage_sections),settings.hide_upstream_quota_from_keys,
  l.id,l.limit_type,l.limit_window,l.model_filter,l.max_value,l.current_value,l.reset_at
  FROM api_keys caller
+ LEFT JOIN api_keys parent ON parent.id=caller.parent_key_id AND parent.deleted_at IS NULL
  JOIN runtime_settings settings ON settings.id=1
- JOIN api_keys k ON k.id=caller.id OR k.group_id=caller.group_id
- LEFT JOIN account_groups g ON g.id=caller.group_id
+ JOIN api_keys k ON k.id=caller.id OR caller.parent_key_id IS NULL AND k.parent_key_id IS NULL AND k.group_id=caller.group_id
+ LEFT JOIN account_groups g ON g.id=coalesce(parent.group_id,caller.group_id)
  LEFT JOIN api_key_limits l ON l.api_key_id=k.id AND l.is_active=1
  WHERE caller.id=? AND caller.deleted_at IS NULL AND caller.is_active=1
  AND (caller.expires_at IS NULL OR caller.expires_at>?)

@@ -92,6 +92,10 @@ func buildGroupsSummary(now time.Time, loc *time.Location, shell domain.ShellSta
 		}
 	}
 	keysOf := map[string][]overviewKey{}
+	keyNames := make(map[string]string, len(assembly.keys))
+	for _, key := range assembly.keys {
+		keyNames[key.key.ID] = key.key.Name
+	}
 	var ungrouped []overviewKey
 	for _, key := range assembly.keys {
 		if key.key.GroupID == nil {
@@ -115,7 +119,7 @@ func buildGroupsSummary(now time.Time, loc *time.Location, shell domain.ShellSta
 			}
 		}
 		summary.Groups = append(summary.Groups, domain.GroupSummaryRow{GroupRow: row, Limits: limits, AccountIDs: accounts,
-			Spend30dUSD: keysSpend30(keys, spend30, known), TopKeys7d: groupKeys(keys, spend30, known, now)})
+			Spend30dUSD: keysSpend30(keys, spend30, known), TopKeys7d: groupKeys(keys, keyNames, spend30, known, now)})
 	}
 	summary.Pool = poolSummaryRow(assembly, usage, known, now)
 	summary.Accounts = groupAccounts(entities.Accounts, assembly.accounts)
@@ -165,11 +169,15 @@ func keysSpend30(keys []overviewKey, spend30 map[string]float64, known bool) *fl
 }
 
 // groupKeys lists at most GroupKeysLimit member keys by 7-day spend.
-func groupKeys(keys []overviewKey, spend30 map[string]float64, known bool, now time.Time) []domain.GroupKey {
+func groupKeys(keys []overviewKey, keyNames map[string]string, spend30 map[string]float64, known bool, now time.Time) []domain.GroupKey {
 	out := make([]domain.GroupKey, 0, len(keys))
 	for _, key := range keys {
 		entry := domain.GroupKey{ID: key.key.ID, Name: key.key.Name, Prefix: key.key.Prefix, Status: key.key.Status(now),
 			SpendTodayUSD: key.spendToday, Spend7dUSD: key.spend7d, LastUsedAt: key.key.LastUsedAt}
+		if parent := key.key.ParentID; parent != nil {
+			name := keyNames[*parent]
+			entry.ParentID, entry.ParentName = parent, &name
+		}
 		if known {
 			value := spend30[key.key.ID]
 			entry.Spend30dUSD = roundPointer(&value, 6)

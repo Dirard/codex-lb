@@ -18,6 +18,9 @@ export const GroupKeySchema = z.object({
   id: z.string(),
   name: z.string(),
   prefix: z.string(),
+  /** Set on a fork, which belongs to its parent's group. */
+  parentId: z.string().nullable().default(null),
+  parentName: z.string().nullable().default(null),
   status: z.string(),
   spendTodayUsd: z.number(),
   spend7dUsd: z.number().nullable(),
