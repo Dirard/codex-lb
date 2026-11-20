@@ -166,6 +166,11 @@ export function GroupDetailSheet({ row, accounts, onClose, onCreated }: GroupDet
                               {t(`groups.sheet.keyStatus.${key.status}`, { defaultValue: key.status })}
                             </Badge>
                           ) : null}
+                          {key.parentId ? (
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {t("keys.table.forkOf", { name: key.parentName || key.parentId })}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="py-1 text-right tabular-nums">{usdLabel(key.spendTodayUsd)}</td>
                         <td className="py-1 text-right tabular-nums">{usdLabel(key.spend7dUsd)}</td>

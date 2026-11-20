@@ -94,7 +94,7 @@ func (s *Store) GetGroup(ctx context.Context, id string) (domain.AccountGroup, e
 	g := domain.AccountGroup{ID: id, AccountIDs: []string{}, Limits: []domain.LimitRule{}}
 	var created int64
 	err := s.readDB.QueryRowContext(ctx, `SELECT name,created_at,
- (SELECT count(*) FROM api_keys WHERE group_id=account_groups.id) FROM account_groups WHERE id=?`, id).
+ (SELECT count(*) FROM api_keys k WHERE `+keysOfGroupCondition+`) FROM account_groups WHERE id=?`, id, id, id).
 		Scan(&g.Name, &created, &g.KeyCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return g, ErrNotFound
@@ -204,8 +204,9 @@ func (s *Store) ResetGroupUsage(ctx context.Context, id string, now time.Time) e
 			}
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id FROM api_keys WHERE group_id=? AND deleted_at IS NULL
- AND id NOT IN (?,?) ORDER BY id`, id, domain.LocalProxyKeyID, domain.WarmupKeyID)
+		// A group's keys include their forks.
+		rows, err := tx.QueryContext(ctx, `SELECT k.id FROM api_keys k WHERE `+keysOfGroupCondition+` AND k.deleted_at IS NULL
+ AND k.id NOT IN (?,?) ORDER BY k.id`, id, id, domain.LocalProxyKeyID, domain.WarmupKeyID)
 		if err != nil {
 			return err
 		}

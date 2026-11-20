@@ -179,7 +179,8 @@ func listGroupRefs(ctx context.Context, tx *sql.Tx) ([]domain.OverviewGroupRef, 
 // limits in two statements.
 func listKeyRows(ctx context.Context, tx *sql.Tx, now time.Time) ([]domain.OverviewKey, error) {
 	// A fork serves only while its parent does, until the earlier expiry.
-	rows, err := tx.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,k.group_id,`+servingStateColumns+`,k.last_used_at,k.created_at,k.parent_key_id
+	// A fork belongs to its parent's group.
+	rows, err := tx.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,`+effectiveGroupColumn+`,`+servingStateColumns+`,k.last_used_at,k.created_at,k.parent_key_id
  FROM api_keys k LEFT JOIN api_keys p ON p.id=k.parent_key_id AND p.deleted_at IS NULL
  WHERE k.deleted_at IS NULL AND k.id NOT IN (?,?) ORDER BY k.created_at,k.id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
 	if err != nil {
@@ -294,7 +295,7 @@ func usageRollupStatus(ctx context.Context, tx *sql.Tx) (domain.UsageRollupStatu
 func (s *Store) Directory(ctx context.Context, now time.Time) (domain.Directory, error) {
 	result := domain.Directory{Keys: []domain.DirectoryKey{}, Groups: []domain.DirectoryGroup{}, Accounts: []domain.DirectoryAccount{}}
 	err := s.readSnapshot(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,k.group_id,`+servingStateColumns+` FROM api_keys k
+		rows, err := tx.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,`+effectiveGroupColumn+`,`+servingStateColumns+` FROM api_keys k
  LEFT JOIN api_keys p ON p.id=k.parent_key_id AND p.deleted_at IS NULL
  WHERE k.deleted_at IS NULL AND k.id NOT IN (?,?) ORDER BY k.name,k.id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
 		if err != nil {
@@ -317,7 +318,8 @@ func (s *Store) Directory(ctx context.Context, now time.Time) (domain.Directory,
 		}
 		rows, err = tx.QueryContext(ctx, `SELECT g.id,g.name,
  (SELECT count(*) FROM account_group_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.group_id=g.id AND `+notDeletedAccount+`),
- (SELECT count(*) FROM api_keys k WHERE k.group_id=g.id AND k.deleted_at IS NULL AND k.id NOT IN (?,?))
+ (SELECT count(*) FROM api_keys k LEFT JOIN api_keys p ON p.id=k.parent_key_id
+ WHERE `+effectiveGroupColumn+`=g.id AND k.deleted_at IS NULL AND k.id NOT IN (?,?))
  FROM account_groups g ORDER BY g.name,g.id`, domain.LocalProxyKeyID, domain.WarmupKeyID)
 		if err != nil {
 			return err

@@ -69,6 +69,8 @@ type GroupKey struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
 	Prefix          string     `json:"prefix"`
+	ParentID        *string    `json:"parentId"`
+	ParentName      *string    `json:"parentName"`
 	Status          string     `json:"status"`
 	SpendTodayUSD   float64    `json:"spendTodayUsd"`
 	Spend7dUSD      *float64   `json:"spend7dUsd"`

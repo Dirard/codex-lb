@@ -14,7 +14,8 @@ func keyReportGroupQuotaTx(ctx context.Context, tx *sql.Tx, keyID string, now ti
 	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.plan_type,q.window,q.used_percent,q.reset_at,q.window_minutes,q.observed_at,
  credits.credits_balance,credits.credits_unlimited
  FROM api_keys caller
- JOIN account_group_accounts members ON members.group_id=caller.group_id
+ LEFT JOIN api_keys parent ON parent.id=caller.parent_key_id AND parent.deleted_at IS NULL
+ JOIN account_group_accounts members ON members.group_id=coalesce(parent.group_id,caller.group_id)
  JOIN accounts a ON a.id=members.account_id
  LEFT JOIN account_quotas q ON q.account_id=a.id
  LEFT JOIN account_usage_credits credits ON credits.account_id=a.id

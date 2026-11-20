@@ -295,6 +295,11 @@ func buildKeyPage(scope string, now time.Time, period keyPagePeriod, key domain.
 			}
 		}
 		for _, member := range entities.Keys {
+			// The owner of a fork sees only the fork, and other owners do not see
+			// the group's forks: a fork's holder may not hold its parent.
+			if !admin && member.ID != key.ID && (key.Fork != nil || member.ParentID != nil) {
+				continue
+			}
 			if member.GroupID != nil && *member.GroupID == group.ID {
 				group.Keys = append(group.Keys, domain.KeyReportGroupKey{ID: member.ID, Name: member.Name, IsActive: member.IsActive,
 					ExpiresAt: member.ExpiresAt, IsCurrent: member.ID == key.ID, Limits: member.Limits})
