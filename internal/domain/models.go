@@ -222,7 +222,9 @@ type UsageSettlement struct {
 
 // RuntimeSettings contains settings selected for the new runtime.
 type RuntimeSettings struct {
-	CodexClientVersion                                         string            `json:"codexClientVersion"`
+	CodexClientVersion string `json:"codexClientVersion"`
+	// AntigravityClientVersion is the version in the Cloud Code User-Agent.
+	AntigravityClientVersion                                   string            `json:"antigravityClientVersion"`
 	OpenAICacheAffinityMaxAgeSeconds                           int               `json:"openaiCacheAffinityMaxAgeSeconds"`
 	StickyReallocationPrimaryBudgetThresholdPct                float64           `json:"stickyReallocationPrimaryBudgetThresholdPct"`
 	StickyReallocationSecondaryBudgetThresholdPct              float64           `json:"stickyReallocationSecondaryBudgetThresholdPct"`

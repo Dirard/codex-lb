@@ -47,6 +47,11 @@ export const CodexClientVersionSchema = z
   .min(1)
   .max(64)
   .regex(/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/);
+/** The Antigravity client version in the Cloud Code User-Agent, e.g. 2.34.0. */
+export const AntigravityClientVersionSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$/);
 const WeeklyPaceWorkingDaysValueSchema = z.string().regex(/^[0-6](,[0-6])*$/);
 const WeeklyPaceWorkingDaysSchema = WeeklyPaceWorkingDaysValueSchema.default("0,1,2,3,4,5,6");
 const WeeklyPaceSmoothingMinutesSchema = z.union([
@@ -125,6 +130,7 @@ export const DashboardSettingsSchema = z
     additionalQuotaPolicies: z.array(AdditionalQuotaPolicySchema).optional().default([]),
     warmupModel: z.string().trim().min(1).optional().default("gpt-5.4-mini"),
     codexClientVersion: CodexClientVersionSchema.optional().default("0.156.0"),
+    antigravityClientVersion: AntigravityClientVersionSchema.optional().default("2.34.0"),
     importWithoutOverwrite: z.boolean(),
     totpRequiredOnLogin: z.boolean(),
     totpConfigured: z.boolean(),
@@ -214,6 +220,7 @@ export const SettingsUpdateRequestSchema = z
       .optional(),
     warmupModel: z.string().trim().min(1).optional(),
     codexClientVersion: CodexClientVersionSchema.optional(),
+    antigravityClientVersion: AntigravityClientVersionSchema.optional(),
     importWithoutOverwrite: z.boolean().optional(),
     totpRequiredOnLogin: z.boolean().optional(),
     apiKeyAuthEnabled: z.boolean().optional(),

@@ -18,6 +18,7 @@ import { AdvancedSettingsGroup } from "@/features/settings/components/advanced-s
 import { ApiKeyAccessSettings } from "@/features/settings/components/api-key-access-settings";
 import { AppearanceSettings } from "@/features/settings/components/appearance-settings";
 import { BackupSettings } from "@/features/settings/components/backup-settings";
+import { AntigravityClientSettings } from "@/features/settings/components/antigravity-client-settings";
 import { CodexClientSettings } from "@/features/settings/components/codex-client-settings";
 import { DataRetentionSettings } from "@/features/settings/components/data-retention-settings";
 import { ImportSettings } from "@/features/settings/components/import-settings";
@@ -170,6 +171,12 @@ function SettingsContent() {
             >
               <CodexClientSettings
                 key={settings.codexClientVersion}
+                settings={settings}
+                busy={controlsDisabled}
+                onSave={handleSave}
+              />
+              <AntigravityClientSettings
+                key={settings.antigravityClientVersion}
                 settings={settings}
                 busy={controlsDisabled}
                 onSave={handleSave}
