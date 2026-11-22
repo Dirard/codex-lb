@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"codex-lb/internal/adapters/antigravity"
 	"codex-lb/internal/adapters/credentials"
 	"codex-lb/internal/adapters/httpapi"
 	"codex-lb/internal/application"
@@ -42,7 +41,6 @@ type config struct {
 	metricsListen                             string
 	publicOrigin                              string
 	allowPrivateModelSources                  bool
-	antigravityClientVersion                  string // CODEX_LB_ANTIGRAVITY_CLIENT_VERSION
 	updater                                   application.RuntimeUpdater
 	handoff                                   *workerHandoff // lent by the launcher, never a flag
 }
@@ -55,7 +53,6 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 	if command == "serve" {
 		flags.BoolVar(&cfg.selfUpdate, "self-update", true, "enable the built-in version manager; no external service-manager access")
 		cfg.connectAddress = strings.TrimSpace(os.Getenv("CODEX_LB_CONNECT_ADDRESS"))
-		cfg.antigravityClientVersion = strings.TrimSpace(os.Getenv("CODEX_LB_ANTIGRAVITY_CLIENT_VERSION"))
 		flags.StringVar(&cfg.authMode, "dashboard-auth-mode", "standard", "standard, trusted_header, or explicitly disabled authentication")
 		flags.StringVar(&cfg.authHeader, "dashboard-auth-header", "X-Auth-Request-Email", "identity header supplied by a configured trusted reverse proxy")
 		flags.StringVar(&cfg.listen, "listen", "127.0.0.1:2455", "HTTP listen address; use a reverse proxy for TLS")
@@ -155,11 +152,6 @@ func parseConfig(command string, args []string, output io.Writer) (config, error
 		}
 		if cfg.authMode == "disabled" && !loopbackListenHost(host) {
 			return cfg, errors.New("dashboard-auth-mode=disabled requires a loopback --listen address")
-		}
-		if cfg.antigravityClientVersion == "" {
-			cfg.antigravityClientVersion = antigravity.DefaultClientVersion
-		} else if !antigravity.ValidClientVersion(cfg.antigravityClientVersion) {
-			return cfg, errors.New("CODEX_LB_ANTIGRAVITY_CLIENT_VERSION must be a version such as 2.34.0")
 		}
 	} else if command == "backup" {
 		if !filepath.IsAbs(cfg.output) {

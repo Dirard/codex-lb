@@ -74,7 +74,7 @@ Requirements:
 The provider SHALL refresh the access token before it expires (one refresh at a time per source) and retry once after a 401 when nothing was visible. A refused refresh (`invalid_grant`) SHALL mark the source's account `reauth_required`.
 
   R4:
-Every Cloud Code call SHALL send `User-Agent: antigravity/hub/<version> (aidev_client; os_type=<GOOS>; arch=<GOARCH>)`, where the version comes from `CODEX_LB_ANTIGRAVITY_CLIENT_VERSION` (default `2.34.0`) the way codex-lb presents the Codex client version to OpenAI, and only `Content-Type`, `Authorization` and `User-Agent` headers. It SHALL NOT invent a changelist, emulate TLS or HTTP/2 fingerprints, copy native-only request fields (`labels`, native `requestId` shapes) or rewrite prompts to pass content filters.
+Every Cloud Code call SHALL send `User-Agent: antigravity/hub/<version> (aidev_client; os_type=<GOOS>; arch=<GOARCH>)`, where the version is the runtime setting `antigravityClientVersion` (default `2.34.0`, see use case 5) the way codex-lb presents the Codex client version to OpenAI, and only `Content-Type`, `Authorization` and `User-Agent` headers. It SHALL NOT invent a changelist, emulate TLS or HTTP/2 fingerprints, copy native-only request fields (`labels`, native `requestId` shapes) or rewrite prompts to pass content filters.
 
   R4a:
 The translation SHALL map system text to `systemInstruction`, user text and images to `contents` parts, assistant text, tool calls and tool results to `model`/`user` turns with `functionCall`/`functionResponse`, tools to cleaned `functionDeclarations`, `reasoning.effort` to `thinkingConfig`, and `max_output_tokens` to `maxOutputTokens`. It SHALL drop empty parts, keep one stable `sessionId` per conversation, and send `userAgent: "antigravity"`, `requestType: "agent"` and a fresh `requestId`.
@@ -110,6 +110,37 @@ Requirements:
   R9:
 The Model sources page SHALL offer «Add Antigravity account» with the authorization link and a code field, show each Antigravity source's email, tier and status (including the appeal or validation link), offer re-authorization and «Refresh models», and keep the existing price, enable and sticky controls.
 
+### 5. Change the Antigravity client version
+
+operator --save a new Antigravity client version in Settings--> stored setting --read it on the next Cloud Code call--> User-Agent with the new version, without restart
+
+Requirements:
+
+  R10:
+`runtime_settings.antigravity_client_version` SHALL hold the Antigravity client version (default `2.34.0`, format `<major>.<minor>.<patch>` with up to 4, 4 and 6 digits). `GET /api/settings` SHALL return it as `antigravityClientVersion`, and `PUT /api/settings` SHALL accept and validate it the way it handles `codexClientVersion`. Every Cloud Code call (sign-in control calls and inference) SHALL read the current value, so a saved version applies to the next call without restart; an unreadable setting SHALL refuse the call before dispatch. The environment variable `CODEX_LB_ANTIGRAVITY_CLIENT_VERSION` is retired.
+
+  R11:
+The Settings page SHALL show an «Antigravity client» section beside «Codex client» with the version field and a Save button that sends only that change.
+
+Tables:
+runtime_settings
+ - antigravity_client_version: TEXT NOT NULL DEFAULT '2.34.0' # Antigravity client version in the Cloud Code User-Agent
+
+Logic Details:
+- Migration 53 adds the column. It is additive: older code ignores it and adding a column with a constant default rewrites no table.
+
+Files And Functions:
+ - planned: internal/adapters/sqlite/antigravity_settings_schema.go#schemaV53
+ - existing: internal/adapters/sqlite/settings.go#Store.LoadAntigravityClientVersion
+ - existing: internal/domain/models.go#RuntimeSettings.AntigravityClientVersion
+ - existing: internal/adapters/provider/provider.go#Config.ResolveAntigravityClientVersion
+ - existing: internal/adapters/antigravity/client.go#Config.ResolveClientVersion
+ - planned: web/src/features/settings/components/antigravity-client-settings.tsx
+
+Tests:
+ - description: settings round trip and refusal of an invalid version; migration default; a saved version reaches the next inference and control call User-Agent without restart; the dashboard field saves only the version
+   requirements: R10, R11
+
 ## Implementation checklist
 
 1. [x] OpenSpec change `add-antigravity-accounts`, validated strictly.
@@ -121,6 +152,10 @@ The Model sources page SHALL offer «Add Antigravity account» with the authoriz
 7. [x] Admin API and dashboard (R9).
 8. [x] Route-level tests through loopback stubs: sign-in, a streamed Codex turn with a tool call and replayed signature, quota refusal on a sticky account, TOS suspension.
 9. [x] Gates, archive OpenSpec, release notes, merge and release; stop before prod and before any real Google traffic.
+10. [x] OpenSpec change `move-antigravity-client-version-to-settings`, validated strictly and archived as `openspec/changes/archive/2026-11-22-move-antigravity-client-version-to-settings/`. (R10, R11)
+11. [x] Migration 53, settings store and admin API, live resolver for the provider and the Antigravity client; retire the environment variable. (R10)
+12. [x] Dashboard «Antigravity client» section with locales and tests. (R11)
+13. [x] Gates, archive, release notes, merge and release; stop before prod.
 
 ## Open questions
 
@@ -139,3 +174,4 @@ None blocking. Quota windows (`retrieveUserQuotaSummary`) for balancing and the 
   - Native Chat Completions skip Antigravity sources (they would send the stored refresh token as a bearer); such requests go through the Responses translation.
   - Thought signatures are kept per call id and per model turn in memory, also indexed by owner and key so stateless Codex replays without `previous_response_id` get them back; after a restart an unknown Gemini call carries the validator sentinel.
   - The model source JSON gains `accountStatus` and `deactivationReason` for the dashboard.
+- 2026-11-22: the owner asked to move the Antigravity client version into Settings like the Codex client version («Да, перенеси»). The environment variable is retired rather than kept as a second source, since no installation ran go-v1.17.0 yet.

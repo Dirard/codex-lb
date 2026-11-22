@@ -77,9 +77,10 @@ type Config struct {
 	// AntigravityBaseURL is where Antigravity tokens go (domain
 	// AntigravityBaseURL); tests replace it.
 	AntigravityBaseURL string
-	// AntigravityClientVersion is the Antigravity client version in the
-	// User-Agent of Cloud Code calls (CODEX_LB_ANTIGRAVITY_CLIENT_VERSION).
-	AntigravityClientVersion string
+	// ResolveAntigravityClientVersion reads the Antigravity client version of
+	// the Cloud Code User-Agent (the runtime setting) on every call; nil
+	// means the default version.
+	ResolveAntigravityClientVersion func(context.Context) (string, error)
 }
 
 type Adapter struct {
@@ -121,9 +122,6 @@ func New(store SourceStore, tokens ChatGPTTokenSource, cipher application.Secret
 	}
 	if config.AntigravityBaseURL == "" {
 		config.AntigravityBaseURL = domain.AntigravityBaseURL
-	}
-	if config.AntigravityClientVersion == "" {
-		config.AntigravityClientVersion = antigravity.DefaultClientVersion
 	}
 	client := upstream.New(config.HTTPClient, config.Continuations)
 	client.SetWebSocketSessionLimit(config.UpstreamWebSocketSessions)
@@ -245,8 +243,14 @@ func (a *Adapter) respondExternal(
 		BaseURL: baseURL, Credential: key, Capabilities: capabilities,
 	}
 	if antigravitySource {
+		version := antigravity.DefaultClientVersion
+		if a.config.ResolveAntigravityClientVersion != nil {
+			if version, err = a.config.ResolveAntigravityClientVersion(ctx); err != nil || !antigravity.ValidClientVersion(version) {
+				return application.ResponseResult{}, providerFailure("antigravity_client_version_unavailable", 0, false)
+			}
+		}
 		upstreamTarget.AntigravityProject = project
-		upstreamTarget.AntigravityUserAgent = antigravity.UserAgent(a.config.AntigravityClientVersion)
+		upstreamTarget.AntigravityUserAgent = antigravity.UserAgent(version)
 	}
 	if len(names) != 0 && emit != nil {
 		clientEmit := emit
