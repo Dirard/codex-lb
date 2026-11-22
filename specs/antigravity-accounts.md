@@ -16,7 +16,7 @@ The owner can add Google Antigravity accounts, «добавлять аккаун
 - Changed assumption: model sources authenticate with a static key or borrow a Grok token; none speaks Google's Cloud Code `v1internal` protocol. Research: `.local/research/antigravity/protocol.md` (2026-11-22).
 - Owner decision (2026-11-22): build it although Antigravity's Terms (Section 6) call third-party access a breach and Google suspended such pools on 2026-11-06 and 2026-11-14; the owner takes the risk («Делать, риск беру на себя»). Boundary agreed in the question: no client fingerprint emulation (TLS, HTTP/2 settings, header order, native request shapes beyond the protocol) and no prompt rewriting to evade content filters.
 - Non-local: domain source kind and credential, OAuth client, Cloud Code client, upstream protocol translation, provider dispatch, account status handling, model source service, admin API, dashboard, OpenSpec `go-runtime` and `frontend-architecture`, release notes.
-- OpenSpec change `add-antigravity-accounts`.
+- OpenSpec change `add-antigravity-accounts`, archived as `openspec/changes/archive/2026-11-22-add-antigravity-accounts/`: `go-runtime` ADDED «Antigravity accounts sign in as model sources», «Antigravity sources serve Responses and Chat Completions», «Antigravity refusals are classified»; `frontend-architecture` ADDED «Dashboard signs in and shows Antigravity accounts».
 - Impacted specs:
   - `specs/sticky-only-accounts.md`: Antigravity sources start sticky-only. Action: `reuse`.
   - `specs/grok-subscription-text-source.md`: the pattern of a subscription-token source. Action: `reuse`.
@@ -120,7 +120,7 @@ The Model sources page SHALL offer «Add Antigravity account» with the authoriz
 6. [x] Provider dispatch and token refresh (R3), account effects (R7, R8).
 7. [x] Admin API and dashboard (R9).
 8. [x] Route-level tests through loopback stubs: sign-in, a streamed Codex turn with a tool call and replayed signature, quota refusal on a sticky account, TOS suspension.
-9. [ ] Gates, archive OpenSpec, release notes, merge and release; stop before prod and before any real Google traffic.
+9. [x] Gates, archive OpenSpec, release notes, merge and release; stop before prod and before any real Google traffic.
 
 ## Open questions
 
