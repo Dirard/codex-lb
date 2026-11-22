@@ -105,3 +105,26 @@ func TestExternalCredentialRotationNeverOverwritesANewerSignIn(t *testing.T) {
 		t.Fatalf("a plain credential was accepted: %v", err)
 	}
 }
+
+// Disabling and re-enabling a suspended source must not turn the suspension
+// into a pause and then into an active account; only a new sign-in may.
+func TestSuspendedSourceStaysSuspendedAcrossEnableToggles(t *testing.T) {
+	ctx := context.Background()
+	s, _ := testStore(t)
+	source := antigravityTestSource(t, s, testCiphertext())
+	appeal := "https://forms.example.test/appeal"
+	if err := s.SetAntigravityAccountStatus(ctx, source.ID, domain.AccountDeactivated, "tos_violation", &appeal); err != nil {
+		t.Fatal(err)
+	}
+	for _, enabled := range []bool{false, true} {
+		toggled := source
+		toggled.Enabled = enabled
+		if err := s.SaveModelSource(ctx, toggled, nil); err != nil {
+			t.Fatal(err)
+		}
+		account, err := s.GetAccount(ctx, source.ID)
+		if err != nil || account.Status != domain.AccountDeactivated || account.DeactivationReason != "tos_violation" {
+			t.Fatalf("enabled=%v changed the suspension: %+v %v", enabled, account, err)
+		}
+	}
+}

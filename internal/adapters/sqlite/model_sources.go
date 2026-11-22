@@ -88,7 +88,8 @@ func (s *Store) SaveModelSource(ctx context.Context, source domain.ModelSource, 
  (id,kind,provider,base_url,email,alias,plan_type,routing_policy,status,created_at)
  VALUES(?,'external',?,?,?,?, 'external','normal',?,?) ON CONFLICT(id) DO UPDATE SET
  provider=excluded.provider,base_url=excluded.base_url,alias=excluded.alias,
- status=CASE WHEN excluded.status='paused' THEN 'paused'
+ status=CASE WHEN accounts.status='deactivated' THEN accounts.status
+ WHEN excluded.status='paused' THEN 'paused'
  WHEN ? AND accounts.status='paused' THEN 'active'
  WHEN ? AND accounts.status IN ('rate_limited','quota_exceeded') THEN 'active'
  ELSE accounts.status END,

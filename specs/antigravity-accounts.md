@@ -58,7 +58,7 @@ Requirements:
 `POST /api/antigravity/sign-in` SHALL return an authorization URL for Google's Antigravity OAuth client with PKCE S256, the hosted redirect `https://antigravity.google/oauth-callback`, the Antigravity scopes, `access_type=offline`, `prompt=consent` and a random `state`, plus a flow id that expires after 10 minutes. `POST /api/antigravity/sign-in/{flow}` with the pasted code SHALL exchange it once, read the email from userinfo, call `loadCodeAssist` (and `onboardUser` when no project comes back), and list the account's models with `fetchAvailableModels`.
 
   R2:
-A successful sign-in SHALL create a model source of kind `antigravity` named after the email (or re-authorize the existing source of that email, keeping its models, prices and options) with every non-internal, non-disabled model at price 0, `stickyOnly` on, and the refresh token, project, tier and email encrypted in the credential row. Tokens SHALL never be logged or returned.
+A successful sign-in SHALL create a model source of kind `antigravity` named after the email (or re-authorize the existing source of that email, keeping its models, prices and options) with every non-internal, non-disabled model at price 0 and `stickyOnly` on. The refresh token SHALL be encrypted in the credential row; the email, project, tier and action link are non-secret and live in `providerConfig.antigravity`. Tokens SHALL never be logged or returned.
 
 Logic Details:
 - The client id and installed-app secret are Google's published Antigravity values; the secret is not confidential, but it is kept in code, not configuration.
@@ -114,12 +114,12 @@ The Model sources page SHALL offer «Add Antigravity account» with the authoriz
 
 1. [x] OpenSpec change `add-antigravity-accounts`, validated strictly.
 2. [x] Contracts: domain kind `antigravity`, credential payload, upstream `ProtocolAntigravity`, target fields and error codes.
-3. [ ] Upstream translation and stream (R4–R6) with unit tests.
-4. [ ] Error classification (R7, R8) with tests for each variant.
-5. [ ] OAuth client, Cloud Code client and sign-in service (R1, R2).
-6. [ ] Provider dispatch and token refresh (R3), account effects (R7, R8).
-7. [ ] Admin API and dashboard (R9).
-8. [ ] Route-level tests through loopback stubs: sign-in, a streamed Codex turn with a tool call and replayed signature, quota refusal on a sticky account, TOS suspension.
+3. [x] Upstream translation and stream (R4–R6) with unit tests.
+4. [x] Error classification (R7, R8) with tests for each variant.
+5. [x] OAuth client, Cloud Code client and sign-in service (R1, R2).
+6. [x] Provider dispatch and token refresh (R3), account effects (R7, R8).
+7. [x] Admin API and dashboard (R9).
+8. [x] Route-level tests through loopback stubs: sign-in, a streamed Codex turn with a tool call and replayed signature, quota refusal on a sticky account, TOS suspension.
 9. [ ] Gates, archive OpenSpec, release notes, merge and release; stop before prod and before any real Google traffic.
 
 ## Open questions
@@ -131,3 +131,11 @@ None blocking. Quota windows (`retrieveUserQuotaSummary`) for balancing and the 
 - 2026-11-22: the owner accepts the Terms risk. No fingerprint emulation and no filter evasion.
 - Antigravity accounts are model sources (like Grok subscription sources), so they join the pool, catalog, pricing and sticky option without a new routing path.
 - New sources start sticky-only, because thought signatures and Google's heuristics tie a conversation to its account.
+- Implementation decisions (2026-11-22):
+  - Egress is handled like Grok subscription sources: the account row needs no separate egress decision, and the access token goes only to `Config.AntigravityBaseURL` under the source's concurrency gate.
+  - Account status writes are guarded (`SetAntigravityAccountStatus`): `reauth_required` replaces only active or limit states, a TOS suspension replaces anything but deletion, and a new sign-in returns only a re-authorization or suspension state to active and clears the link. Saving or toggling the source never undoes a suspension.
+  - A rotated refresh token is written with compare-and-swap, so an old rotation never overwrites a newer sign-in.
+  - Antigravity sources are created only by sign-in: `POST /api/model-sources` refuses the kind, and a source update refuses any `apiKey` field so the refresh token cannot be erased.
+  - Native Chat Completions skip Antigravity sources (they would send the stored refresh token as a bearer); such requests go through the Responses translation.
+  - Thought signatures are kept per call id and per model turn in memory, also indexed by owner and key so stateless Codex replays without `previous_response_id` get them back; after a restart an unknown Gemini call carries the validator sentinel.
+  - The model source JSON gains `accountStatus` and `deactivationReason` for the dashboard.
