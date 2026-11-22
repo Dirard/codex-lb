@@ -4,7 +4,7 @@ import "regexp"
 
 // DefaultAntigravityClientVersion is the Antigravity client version presented
 // in the User-Agent of Cloud Code calls until an administrator saves another.
-const DefaultAntigravityClientVersion = "2.34.0"
+const DefaultAntigravityClientVersion = "2.33.0"
 
 var antigravityClientVersionPattern = regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$`)
 

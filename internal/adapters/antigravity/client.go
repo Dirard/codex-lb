@@ -68,7 +68,7 @@ func UserAgent(version string) string {
 	if !ValidClientVersion(version) {
 		version = DefaultClientVersion
 	}
-	return fmt.Sprintf("antigravity/hub/%s (aidev_client; os_type=%s; arch=%s)", version, runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("antigravity/hub/%s (aidev_client; os_type=windows; arch=amd64; cl=1023160026)", version)
 }
 
 // Config sets the HTTP client, how the presented client version is read

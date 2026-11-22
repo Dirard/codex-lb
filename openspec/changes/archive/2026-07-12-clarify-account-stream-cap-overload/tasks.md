@@ -1,4 +1,0 @@
-- [x] Return cap-specific account selection messages for local account caps.
-- [x] Cover stream-cap message behavior in load balancer tests.
-- [x] Run targeted backend tests and lint.
-- [x] Validate the OpenSpec change.

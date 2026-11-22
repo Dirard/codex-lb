@@ -1,3 +1,0 @@
-- [x] Guard refresh singleflight settlement cache mutations by task ownership.
-- [x] Verify the independent-caller successor-race regression.
-- [x] Run the account refresh unit suites and OpenSpec validation.

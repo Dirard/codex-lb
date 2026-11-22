@@ -1,4 +1,0 @@
-- [x] 1. Reuse the canonical downstream side-effect classifier for compact history selection.
-- [x] 2. Reserve recognised historical call/output pairs before optional ordinary compact context.
-- [x] 3. Add unit and Codex compact-route regression coverage for code-mode side effects.
-- [x] 4. Specify the bounded historical-side-effect retention contract.
