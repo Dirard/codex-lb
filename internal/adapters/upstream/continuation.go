@@ -21,6 +21,10 @@ type Continuation struct {
 	Messages        []ChatMessage
 	ReasoningByID   map[string]string
 	ReasoningByTurn map[uint64]string
+	// Signatures are opaque provider thought signatures of the turns in
+	// Messages (Antigravity), keyed by antigravityCallSignatureKey or
+	// antigravityTurnSignatureKey; they are replayed on the same part.
+	Signatures map[string]string
 }
 
 type ContinuationStore struct {
@@ -29,6 +33,11 @@ type ContinuationStore struct {
 	entries map[continuationKey]continuationEntry
 	lru     []continuationKey
 	bytes   int
+	// signatureOwners names, per owner and signature key, the latest saved
+	// response whose continuation holds that signature. It lets a stateless
+	// replay (full input, no previous_response_id) find signatures; entries
+	// leave it with their continuation.
+	signatureOwners map[signatureIndexKey]string
 
 	maxEntries int
 	maxBytes   int
@@ -39,6 +48,11 @@ type ContinuationStore struct {
 type continuationKey struct {
 	owner      Owner
 	responseID string
+}
+
+type signatureIndexKey struct {
+	owner Owner
+	key   string
 }
 
 type continuationEntry struct {
@@ -62,11 +76,12 @@ func NewContinuationStoreWithLimits(maxEntries int, maxBytes int, ttl time.Durat
 		ttl = time.Second
 	}
 	return &ContinuationStore{
-		entries:    make(map[continuationKey]continuationEntry),
-		maxEntries: maxEntries,
-		maxBytes:   maxBytes,
-		ttl:        ttl,
-		now:        time.Now,
+		entries:         make(map[continuationKey]continuationEntry),
+		signatureOwners: make(map[signatureIndexKey]string),
+		maxEntries:      maxEntries,
+		maxBytes:        maxBytes,
+		ttl:             ttl,
+		now:             time.Now,
 	}
 }
 
@@ -110,8 +125,7 @@ func (s *ContinuationStore) Save(owner Owner, responseID string, value Continuat
 
 	key := continuationKey{owner: owner, responseID: responseID}
 	if old, ok := s.entries[key]; ok {
-		s.bytes -= old.sizeBytes
-		delete(s.entries, key)
+		s.dropLocked(key, old)
 		s.removeFromLRULocked(key)
 	}
 
@@ -120,6 +134,9 @@ func (s *ContinuationStore) Save(owner Owner, responseID string, value Continuat
 	}
 	s.lru = append(s.lru, key)
 	s.bytes += size
+	for signature := range value.Signatures {
+		s.signatureOwners[signatureIndexKey{owner: owner, key: signature}] = responseID
+	}
 
 	for len(s.entries) > s.maxEntries {
 		s.evictOldestLocked()
@@ -128,6 +145,29 @@ func (s *ContinuationStore) Save(owner Owner, responseID string, value Continuat
 		s.evictOldestLocked()
 	}
 	return nil
+}
+
+// Signatures returns the stored thought signatures of owner for keys, each
+// from the latest saved continuation that recorded it. Keys without one are
+// absent from the result.
+func (s *ContinuationStore) Signatures(owner Owner, keys []string) map[string]string {
+	found := make(map[string]string)
+	if len(keys) == 0 {
+		return found
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupLocked()
+	for _, key := range keys {
+		responseID, ok := s.signatureOwners[signatureIndexKey{owner: owner, key: key}]
+		if !ok {
+			continue
+		}
+		if signature, ok := s.entries[continuationKey{owner: owner, responseID: responseID}].value.Signatures[key]; ok {
+			found[key] = signature
+		}
+	}
+	return found
 }
 
 func (s *ContinuationStore) Len() int {
@@ -148,8 +188,7 @@ func (s *ContinuationStore) cleanupLocked() {
 			continue
 		}
 		if ok {
-			s.bytes -= entry.sizeBytes
-			delete(s.entries, key)
+			s.dropLocked(key, entry)
 		}
 		s.lru = append(s.lru[:i], s.lru[i+1:]...)
 	}
@@ -161,10 +200,22 @@ func (s *ContinuationStore) evictOldestLocked() {
 	}
 	key := s.lru[0]
 	if entry, ok := s.entries[key]; ok {
-		s.bytes -= entry.sizeBytes
-		delete(s.entries, key)
+		s.dropLocked(key, entry)
 	}
 	s.lru = s.lru[1:]
+}
+
+// dropLocked removes an entry and the signature index keys that still name it;
+// the caller maintains the LRU list.
+func (s *ContinuationStore) dropLocked(key continuationKey, entry continuationEntry) {
+	s.bytes -= entry.sizeBytes
+	delete(s.entries, key)
+	for signature := range entry.value.Signatures {
+		index := signatureIndexKey{owner: key.owner, key: signature}
+		if s.signatureOwners[index] == key.responseID {
+			delete(s.signatureOwners, index)
+		}
+	}
 }
 
 func (s *ContinuationStore) touchLocked(key continuationKey) {
@@ -201,6 +252,7 @@ func cloneContinuation(value Continuation) Continuation {
 		Messages:        make([]ChatMessage, len(value.Messages)),
 		ReasoningByID:   make(map[string]string, len(value.ReasoningByID)),
 		ReasoningByTurn: make(map[uint64]string, len(value.ReasoningByTurn)),
+		Signatures:      make(map[string]string, len(value.Signatures)),
 	}
 	for i, message := range value.Messages {
 		message.Content = append(json.RawMessage(nil), message.Content...)
@@ -212,6 +264,9 @@ func cloneContinuation(value Continuation) Continuation {
 	}
 	for k, v := range value.ReasoningByTurn {
 		out.ReasoningByTurn[k] = v
+	}
+	for k, v := range value.Signatures {
+		out.Signatures[k] = v
 	}
 	return out
 }
