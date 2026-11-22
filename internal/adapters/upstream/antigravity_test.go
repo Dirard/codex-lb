@@ -462,3 +462,46 @@ func TestContinuationStoreSignatureIndexFollowsEviction(t *testing.T) {
 		t.Fatalf("evicted signature still indexed: %v %v", found, store.signatureOwners)
 	}
 }
+
+// TestAntigravityRequestsUseTheDedicatedClient pins the routing of the
+// Antigravity transport: once SetAntigravityClient installed the
+// Chrome-profile client, every Cloud Code call leaves through it and never
+// through the shared upstream client (owner decision 2026-11-22).
+func TestAntigravityRequestsUseTheDedicatedClient(t *testing.T) {
+	var sharedHits atomic.Int32
+	shared := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		sharedHits.Add(1)
+	}))
+	t.Cleanup(shared.Close)
+	dedicated, calls := antigravityServer(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	adapter := New(shared.Client(), NewContinuationStore())
+	defer adapter.Close()
+	adapter.SetAntigravityClient(&http.Client{Timeout: 5 * time.Second})
+
+	response, rejected, err := adapter.openAntigravity(context.Background(), antigravityTarget(dedicated.URL),
+		antigravityGenerateMethod, []byte(`{"model":"gemini-3-pro-preview"}`), false)
+	if err != nil || rejected.Failed {
+		t.Fatalf("openAntigravity: err = %v, rejected = %+v", err, rejected)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+
+	if sharedHits.Load() != 0 {
+		t.Fatal("the Antigravity request left through the shared upstream client")
+	}
+	call := receiveCall(t, calls)
+	if call.path != "/v1internal:generateContent" {
+		t.Fatalf("path = %s", call.path)
+	}
+	for header, want := range map[string]string{
+		"Content-Type": "application/json", "Authorization": "Bearer access-token",
+	} {
+		if got := call.header.Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+}

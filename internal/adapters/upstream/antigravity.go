@@ -174,8 +174,10 @@ func (a *HTTPAdapter) finishAntigravity(target Target, plan antigravityPlan, tur
 
 // openAntigravity posts the envelope with exactly the Content-Type,
 // Authorization and User-Agent headers (owner boundary: no native-only
-// headers, no fingerprint emulation). A refusal before the body is
-// classified and proven unexecuted.
+// headers, no prompt rewriting). The connection itself travels with the
+// Chrome 123 wire fingerprint of Antigravity-Manager (owner decision
+// 2026-11-22); the fingerprint lives in the transport, not in these headers.
+// A refusal before the body is classified and proven unexecuted.
 func (a *HTTPAdapter) openAntigravity(ctx context.Context, target Target, method string, body []byte, stream bool) (*http.Response, Result, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(target.BaseURL, method), bytes.NewReader(body))
 	if err != nil {
@@ -186,7 +188,7 @@ func (a *HTTPAdapter) openAntigravity(ctx context.Context, target Target, method
 		"Authorization": {"Bearer " + target.Credential},
 		"User-Agent":    {target.AntigravityUserAgent},
 	}
-	response, err := a.client.Do(request)
+	response, err := a.antigravityHTTPClient().Do(request)
 	if err != nil {
 		return nil, Result{}, wrapContext(ctx, &Error{Code: ErrorCodeConnection, Message: err.Error()})
 	}
