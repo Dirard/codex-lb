@@ -24,6 +24,7 @@ function createModelSource(overrides: Partial<ModelSource> = {}): ModelSource {
     supportsEmbeddings: false,
     timeoutSeconds: null,
     maxConcurrency: null,
+    stickyOnly: false,
     createdAt: "2026-07-03T00:00:00Z",
     updatedAt: "2026-07-03T00:00:00Z",
     models: [

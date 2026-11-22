@@ -51,9 +51,12 @@ type ModelSource struct {
 	TimeoutSeconds int                       `json:"timeoutSeconds,omitempty"`
 	MaxConcurrency int                       `json:"maxConcurrency,omitempty"`
 	ProviderConfig ModelSourceProviderConfig `json:"providerConfig,omitempty"`
-	Models         []ModelSourceModel        `json:"models"`
-	CreatedAt      time.Time                 `json:"createdAt"`
-	UpdatedAt      time.Time                 `json:"updatedAt"`
+	// StickyOnly mirrors the sticky-only option of the source's account row;
+	// it is changed through the account, never by a source save.
+	StickyOnly bool               `json:"stickyOnly"`
+	Models     []ModelSourceModel `json:"models"`
+	CreatedAt  time.Time          `json:"createdAt"`
+	UpdatedAt  time.Time          `json:"updatedAt"`
 }
 
 type ModelSourceProviderConfig struct {

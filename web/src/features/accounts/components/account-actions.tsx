@@ -2,6 +2,7 @@ import {
   Activity,
   Download,
   Pause,
+  Pin,
   Play,
   RefreshCw,
   RotateCcw,
@@ -39,6 +40,7 @@ export type AccountActionsProps = {
   onResetCredit: (accountId: string) => void;
   showResetCreditExpiryBadge?: boolean;
   onSecurityWorkAuthorizedChange: (accountId: string, enabled: boolean) => void;
+  onStickyOnlyChange: (accountId: string, enabled: boolean) => void;
   onLimitWarmupChange: (accountId: string, enabled: boolean) => void;
   onRoutingPolicyChange: (
     accountId: string,
@@ -58,6 +60,7 @@ export function AccountActions({
   onResetCredit,
   showResetCreditExpiryBadge = true,
   onSecurityWorkAuthorizedChange,
+  onStickyOnlyChange,
   onLimitWarmupChange,
   onRoutingPolicyChange,
 }: AccountActionsProps) {
@@ -126,6 +129,26 @@ export function AccountActions({
           onCheckedChange={(checked) =>
             onSecurityWorkAuthorizedChange(account.accountId, checked)
           }
+        />
+      </label>
+
+      <label
+        htmlFor={`sticky-only-${account.accountId}`}
+        className="flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2"
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-2 text-xs font-medium">
+            <Pin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{t("accounts.actions.stickyOnly")}</span>
+          </span>
+          <span className="text-[11px] text-muted-foreground">{t("accounts.actions.stickyOnlyHint")}</span>
+        </span>
+        <Switch
+          id={`sticky-only-${account.accountId}`}
+          className="shrink-0"
+          checked={account.stickyOnly ?? false}
+          disabled={busy}
+          onCheckedChange={(checked) => onStickyOnlyChange(account.accountId, checked)}
         />
       </label>
 

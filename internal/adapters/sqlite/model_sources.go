@@ -175,10 +175,11 @@ func (s *Store) GetModelSource(ctx context.Context, id string) (domain.ModelSour
 	var created, updated int64
 	err := s.readDB.QueryRowContext(ctx, `SELECT id,name,kind,base_url,is_enabled,health_status,
  supports_chat_completions,supports_responses,supports_audio_transcriptions,supports_embeddings,
- timeout_seconds,max_concurrency,provider_config_json,created_at,updated_at
+ timeout_seconds,max_concurrency,provider_config_json,created_at,updated_at,
+ coalesce((SELECT a.sticky_only FROM accounts a WHERE a.id=legacy_model_sources.id),0)
  FROM legacy_model_sources WHERE id=? AND deleted_at IS NULL`, id).Scan(&source.ID, &source.Name,
 		&source.Kind, &source.BaseURL, &source.Enabled, &source.Health, &source.Chat, &source.Responses,
-		&source.Audio, &source.Embeddings, &timeout, &concurrency, &config, &created, &updated)
+		&source.Audio, &source.Embeddings, &timeout, &concurrency, &config, &created, &updated, &source.StickyOnly)
 	if errors.Is(err, sql.ErrNoRows) {
 		return source, ErrNotFound
 	}

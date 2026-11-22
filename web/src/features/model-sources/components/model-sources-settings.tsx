@@ -50,6 +50,7 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
     createMutation,
     updateMutation,
     deleteMutation,
+    stickyMutation,
   } = useModelSources();
   const createDialog = useDialogState();
   const editDialog = useDialogState<ModelSource>();
@@ -70,12 +71,14 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
     modelSourcesQuery.isFetching ||
     createMutation.isPending ||
     updateMutation.isPending ||
-    deleteMutation.isPending;
+    deleteMutation.isPending ||
+    stickyMutation.isPending;
   const error =
     getErrorMessageOrNull(modelSourcesQuery.error) ||
     getErrorMessageOrNull(createMutation.error) ||
     getErrorMessageOrNull(updateMutation.error) ||
-    getErrorMessageOrNull(deleteMutation.error);
+    getErrorMessageOrNull(deleteMutation.error) ||
+    getErrorMessageOrNull(stickyMutation.error);
 
   const createSource = async (payload: ModelSourceCreateRequest) => {
     await createMutation.mutateAsync(payload);
@@ -145,6 +148,20 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                    title={t("modelSources.actions.stickyOnlyAria", { name: source.name })}
+                  >
+                    {t("modelSources.actions.stickyOnly")}
+                    <Switch
+                      aria-label={t("modelSources.actions.stickyOnlyAria", { name: source.name })}
+                      checked={source.stickyOnly}
+                      disabled={busy}
+                      onCheckedChange={(checked) =>
+                        void stickyMutation.mutateAsync({ sourceId: source.id, stickyOnly: checked })
+                      }
+                    />
+                  </label>
                   <Switch
 	                    aria-label={t("modelSources.actions.toggleAria", { name: source.name })}
                     checked={source.isEnabled}

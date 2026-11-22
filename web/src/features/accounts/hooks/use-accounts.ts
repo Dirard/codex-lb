@@ -258,10 +258,10 @@ export function useAccountMutations() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ accountId, securityWorkAuthorized }: { accountId: string; securityWorkAuthorized: boolean }) =>
-      updateAccount(accountId, { securityWorkAuthorized }),
-    onSuccess: (_data, variables) => {
-      patchAccountRow(queryClient, variables.accountId, { securityWorkAuthorized: variables.securityWorkAuthorized });
+    mutationFn: ({ accountId, ...update }: { accountId: string; securityWorkAuthorized?: boolean; stickyOnly?: boolean }) =>
+      updateAccount(accountId, update),
+    onSuccess: (_data, { accountId, ...update }) => {
+      patchAccountRow(queryClient, accountId, update);
       toast.success(t("accounts.toasts.updated"));
       void invalidateAccountRelatedQueries(queryClient);
     },

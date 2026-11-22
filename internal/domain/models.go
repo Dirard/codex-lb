@@ -26,8 +26,11 @@ type Account struct {
 	RequiresEgressDecision bool          `json:"requiresEgressDecision"`
 	SecurityWorkAuthorized bool          `json:"securityWorkAuthorized"`
 	LimitWarmupEnabled     bool          `json:"limitWarmupEnabled"`
-	CreatedAt              time.Time     `json:"createdAt"`
-	LastRefresh            *time.Time    `json:"lastRefresh,omitempty"`
+	// StickyOnly keeps conversations owned by the account on it when its
+	// limit runs out; new conversations are still balanced as usual.
+	StickyOnly  bool       `json:"stickyOnly"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	LastRefresh *time.Time `json:"lastRefresh,omitempty"`
 }
 
 type AccountKind string

@@ -56,11 +56,13 @@ func (s *Server) ConfigureAccounts(service *application.AccountsService) error {
 func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		SecurityWorkAuthorized *bool `json:"securityWorkAuthorized"`
+		StickyOnly             *bool `json:"stickyOnly"`
 	}
 	if !decodeJSON(w, r, &payload) {
 		return
 	}
-	if err := s.accountsService().UpdateAccount(r.Context(), r.PathValue("id"), payload.SecurityWorkAuthorized); err != nil {
+	update := application.AccountUpdate{SecurityWorkAuthorized: payload.SecurityWorkAuthorized, StickyOnly: payload.StickyOnly}
+	if err := s.accountsService().UpdateAccount(r.Context(), r.PathValue("id"), update); err != nil {
 		s.fail(w, err)
 		return
 	}

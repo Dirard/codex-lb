@@ -120,6 +120,8 @@ export const AccountSummarySchema = z.object({
   auth: AccountAuthSchema.nullable().optional(),
   additionalQuotas: z.array(AccountAdditionalQuotaSchema).default([]),
   limitWarmupEnabled: z.boolean().default(false),
+  /** Conversations started on the account stay on it when its limit runs out. */
+  stickyOnly: z.boolean().default(false),
   limitWarmup: AccountLimitWarmupStatusSchema.nullable().optional(),
   availableResetCredits: z.number().nullable().optional(),
   resetCreditNearestExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
@@ -297,6 +299,7 @@ export const AccountGroupsUpdateResponseSchema = z.object({
 
 export const AccountUpdateRequestSchema = z.object({
   securityWorkAuthorized: z.boolean().optional(),
+  stickyOnly: z.boolean().optional(),
 });
 
 export const OauthStartRequestSchema = z.object({

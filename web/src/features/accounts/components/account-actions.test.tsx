@@ -22,6 +22,7 @@ describe("AccountActions", () => {
         onExportAuth={vi.fn()}
         onResetCredit={vi.fn()}
         onSecurityWorkAuthorizedChange={vi.fn()}
+        onStickyOnlyChange={vi.fn()}
         onLimitWarmupChange={vi.fn()}
         onRoutingPolicyChange={onRoutingPolicyChange}
       />,
@@ -31,6 +32,32 @@ describe("AccountActions", () => {
     expect(
       screen.getByRole("combobox", { name: "Routing policy" }),
     ).toHaveTextContent("Normal");
+  });
+
+  it("switches the account to keep its conversations", async () => {
+    const onStickyOnlyChange = vi.fn();
+    const account = createAccountSummary({ stickyOnly: false });
+
+    render(
+      <AccountActions
+        account={account}
+        busy={false}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onProbe={vi.fn()}
+        onDelete={vi.fn()}
+        onReauth={vi.fn()}
+        onExportAuth={vi.fn()}
+        onResetCredit={vi.fn()}
+        onSecurityWorkAuthorizedChange={vi.fn()}
+        onStickyOnlyChange={onStickyOnlyChange}
+        onLimitWarmupChange={vi.fn()}
+        onRoutingPolicyChange={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("switch", { name: /Keep conversations here/ }));
+    expect(onStickyOnlyChange).toHaveBeenCalledWith(account.accountId, true);
   });
 
   it("renders re-authenticate action for re-auth required accounts", () => {
@@ -49,6 +76,7 @@ describe("AccountActions", () => {
         onExportAuth={vi.fn()}
         onResetCredit={vi.fn()}
         onSecurityWorkAuthorizedChange={vi.fn()}
+        onStickyOnlyChange={vi.fn()}
         onLimitWarmupChange={vi.fn()}
         onRoutingPolicyChange={vi.fn()}
       />,
@@ -82,6 +110,7 @@ describe("AccountActions", () => {
         onExportAuth={vi.fn()}
         onResetCredit={vi.fn()}
         onSecurityWorkAuthorizedChange={vi.fn()}
+        onStickyOnlyChange={vi.fn()}
         onLimitWarmupChange={vi.fn()}
         onRoutingPolicyChange={vi.fn()}
       />,
@@ -112,6 +141,7 @@ describe("AccountActions", () => {
           onExportAuth={vi.fn()}
           onResetCredit={vi.fn()}
           onSecurityWorkAuthorizedChange={vi.fn()}
+          onStickyOnlyChange={vi.fn()}
           onLimitWarmupChange={vi.fn()}
           onRoutingPolicyChange={vi.fn()}
         />,
@@ -146,6 +176,7 @@ describe("AccountActions", () => {
         onExportAuth={vi.fn()}
         onResetCredit={onResetCredit}
         onSecurityWorkAuthorizedChange={vi.fn()}
+        onStickyOnlyChange={vi.fn()}
         onLimitWarmupChange={vi.fn()}
         onRoutingPolicyChange={vi.fn()}
       />,
@@ -178,6 +209,7 @@ describe("AccountActions", () => {
           onResetCredit={vi.fn()}
           showResetCreditExpiryBadge={false}
           onSecurityWorkAuthorizedChange={vi.fn()}
+          onStickyOnlyChange={vi.fn()}
           onLimitWarmupChange={vi.fn()}
           onRoutingPolicyChange={vi.fn()}
         />,
@@ -213,6 +245,7 @@ describe("AccountActions", () => {
           onExportAuth={vi.fn()}
           onResetCredit={onResetCredit}
           onSecurityWorkAuthorizedChange={vi.fn()}
+          onStickyOnlyChange={vi.fn()}
           onLimitWarmupChange={vi.fn()}
           onRoutingPolicyChange={vi.fn()}
         />,
@@ -243,6 +276,7 @@ describe("AccountActions", () => {
         onExportAuth={vi.fn()}
         onResetCredit={vi.fn()}
         onSecurityWorkAuthorizedChange={vi.fn()}
+        onStickyOnlyChange={vi.fn()}
         onLimitWarmupChange={vi.fn()}
         onRoutingPolicyChange={vi.fn()}
       />,
