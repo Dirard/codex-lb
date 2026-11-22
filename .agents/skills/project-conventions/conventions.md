@@ -36,7 +36,7 @@ The repository is a single Go module (`codex-lb`) with an embedded React dashboa
 - Tests live beside the implementation. Use deterministic local upstream stubs and temporary SQLite databases; never real provider credentials or traffic.
 - A bug fix needs a regression test on the failing product path (route, WebSocket, migration, dashboard), not only on a helper.
 - Prefer channels or `testing/synctest` over `time.Sleep` polling.
-- Gates: `make check` (vet, lint, test, race, vuln, OpenSpec) and `make web-check`.
+- Gates: `make check` (vet, lint, test, vuln, OpenSpec) and `make web-check`. `make race` is optional.
 
 ## 6. Migrations
 

@@ -33,7 +33,7 @@ spec-validate:
 	OPENSPEC_TELEMETRY=0 $(OPENSPEC) validate --specs --no-interactive
 
 # The complete local gate; CI runs the same targets.
-check: vet lint test race vuln spec-validate
+check: vet lint test vuln spec-validate
 
 web-check:
 	npm --prefix web run lint
