@@ -130,7 +130,7 @@ export const DashboardSettingsSchema = z
     additionalQuotaPolicies: z.array(AdditionalQuotaPolicySchema).optional().default([]),
     warmupModel: z.string().trim().min(1).optional().default("gpt-5.4-mini"),
     codexClientVersion: CodexClientVersionSchema.optional().default("0.156.0"),
-    antigravityClientVersion: AntigravityClientVersionSchema.optional().default("2.34.0"),
+    antigravityClientVersion: AntigravityClientVersionSchema.optional().default("2.33.0"),
     importWithoutOverwrite: z.boolean(),
     totpRequiredOnLogin: z.boolean(),
     totpConfigured: z.boolean(),

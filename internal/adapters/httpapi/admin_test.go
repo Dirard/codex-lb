@@ -217,7 +217,7 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 	var loaded domain.RuntimeSettings
 	if initial.Code != http.StatusOK || json.Unmarshal(initial.Body.Bytes(), &loaded) != nil ||
 		loaded.RelativeAvailabilityPower != 2 || loaded.RelativeAvailabilityTopK != 5 ||
-		loaded.WarmupModel != "gpt-5.4-mini" || loaded.CodexClientVersion != "0.156.0" || loaded.AntigravityClientVersion != "2.34.0" ||
+		loaded.WarmupModel != "gpt-5.4-mini" || loaded.CodexClientVersion != "0.156.0" || loaded.AntigravityClientVersion != "2.33.0" ||
 		loaded.OpenAICacheAffinityMaxAgeSeconds != 1800 || loaded.StickyReallocationPrimaryBudgetThresholdPct != 95 || loaded.StickyReallocationSecondaryBudgetThresholdPct != 100 ||
 		loaded.WeeklyPaceSmoothingMinutes != 30 || loaded.WeeklyPaceWorkingDays != "0,1,2,3,4,5,6" ||
 		!loaded.ShowResetCreditBadges || !loaded.ShowResetCreditExpiryBadge {

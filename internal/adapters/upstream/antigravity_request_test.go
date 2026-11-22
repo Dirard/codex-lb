@@ -15,7 +15,7 @@ func antigravityTarget(serverURL string) Target {
 		ProviderID: "antigravity", AccountID: "source-1", KeyID: "key-1",
 		BaseURL: serverURL, Credential: "access-token",
 		AntigravityProject:   "aicode-consumers",
-		AntigravityUserAgent: "antigravity/hub/2.34.0 (aidev_client; os_type=linux; arch=amd64)",
+		AntigravityUserAgent: "antigravity/hub/2.34.0 (aidev_client; os_type=windows; arch=amd64; cl=1023160026)",
 		Capabilities:         AntigravityCapabilities(),
 	}
 }

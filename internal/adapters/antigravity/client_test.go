@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -177,7 +176,7 @@ func TestCloudCodeCallsSendOnlyTheAgreedHeaders(t *testing.T) {
 	if body := string(stub.bodies["/v1internal:loadCodeAssist"]); body != `{"metadata":{"ideType":"ANTIGRAVITY"}}` {
 		t.Fatalf("loadCodeAssist body: %s", body)
 	}
-	wantAgent := "antigravity/hub/2.35.1 (aidev_client; os_type=" + runtime.GOOS + "; arch=" + runtime.GOARCH + ")"
+	wantAgent := "antigravity/hub/2.35.1 (aidev_client; os_type=windows; arch=amd64; cl=1023160026)"
 	for _, path := range []string{"/v1internal:loadCodeAssist", "/userinfo", "/token"} {
 		if path == "/token" {
 			if _, err := client.Refresh(ctx, "stored-refresh"); err != nil {
@@ -280,7 +279,10 @@ func TestClientVersionValidation(t *testing.T) {
 			t.Errorf("%q accepted", version)
 		}
 	}
-	if agent := UserAgent("bad version"); !strings.HasPrefix(agent, "antigravity/hub/"+DefaultClientVersion+" (aidev_client; os_type=") || strings.Contains(agent, "cl=") {
+	// An invalid version falls back to the whole default fingerprint, the
+	// Antigravity-Manager egress form with its changelist.
+	wantFallback := "antigravity/hub/" + DefaultClientVersion + " (aidev_client; os_type=windows; arch=amd64; cl=1023160026)"
+	if agent := UserAgent("bad version"); agent != wantFallback {
 		t.Fatalf("fallback User-Agent: %q", agent)
 	}
 }
