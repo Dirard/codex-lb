@@ -60,10 +60,16 @@ type ModelSource struct {
 	ProviderConfig ModelSourceProviderConfig `json:"providerConfig,omitempty"`
 	// StickyOnly mirrors the sticky-only option of the source's account row;
 	// it is changed through the account, never by a source save.
-	StickyOnly bool               `json:"stickyOnly"`
-	Models     []ModelSourceModel `json:"models"`
-	CreatedAt  time.Time          `json:"createdAt"`
-	UpdatedAt  time.Time          `json:"updatedAt"`
+	StickyOnly bool `json:"stickyOnly"`
+	// AccountStatus and DeactivationReason mirror the source's account row,
+	// for example reauth_required after Google refused an Antigravity token;
+	// like StickyOnly they are read with the source and never written by a
+	// source save.
+	AccountStatus      AccountStatus      `json:"accountStatus,omitempty"`
+	DeactivationReason string             `json:"deactivationReason,omitempty"`
+	Models             []ModelSourceModel `json:"models"`
+	CreatedAt          time.Time          `json:"createdAt"`
+	UpdatedAt          time.Time          `json:"updatedAt"`
 }
 
 type ModelSourceProviderConfig struct {

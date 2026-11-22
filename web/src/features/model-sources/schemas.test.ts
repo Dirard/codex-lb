@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AntigravitySignInCompleteRequestSchema,
+  AntigravitySignInStartSchema,
   ModelSourceCreateRequestSchema,
   ModelSourceSchema,
   ModelSourcesResponseSchema,
@@ -111,5 +113,33 @@ describe("Grok subscription sources", () => {
       kind: "grok_subscription", name: "Grok", baseUrl: "https://api.x.ai/v1", providerConfig: { grokAccountId: "vacc_alpha" },
     });
     expect(request).toMatchObject({ kind: "grok_subscription", providerConfig: { grokAccountId: "vacc_alpha" }, models: [] });
+  });
+});
+
+describe("Antigravity sources", () => {
+  it("carry the signed-in account and its status, never a token", () => {
+    const source = ModelSourceSchema.parse({
+      ...BASE_SOURCE,
+      kind: "antigravity",
+      accountStatus: "deactivated",
+      deactivationReason: "tos_violation",
+      providerConfig: {
+        antigravity: { email: "agent@example.test", project: "aicode-consumers", tier: "g1-pro-tier", actionUrl: "https://forms.gle/appeal" },
+      },
+    });
+    expect(source.providerConfig?.antigravity).toEqual({
+      email: "agent@example.test", project: "aicode-consumers", tier: "g1-pro-tier", actionUrl: "https://forms.gle/appeal",
+    });
+    expect(source.accountStatus).toBe("deactivated");
+    expect(source.deactivationReason).toBe("tos_violation");
+  });
+
+  it("validate sign-in answers and requests", () => {
+    expect(AntigravitySignInStartSchema.parse({
+      flowId: "agsign_x", authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth", expiresAt: "2026-11-22T12:10:00Z",
+    }).flowId).toBe("agsign_x");
+    expect(AntigravitySignInCompleteRequestSchema.parse({ code: " 4/code " }).code).toBe("4/code");
+    expect(() => AntigravitySignInCompleteRequestSchema.parse({ code: "  " })).toThrow();
+    expect(() => ModelSourceCreateRequestSchema.parse({ kind: "antigravity", name: "x", baseUrl: "https://x" })).toThrow();
   });
 });

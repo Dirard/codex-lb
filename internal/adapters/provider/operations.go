@@ -364,6 +364,11 @@ func (a *Adapter) externalTarget(ctx context.Context, account domain.Account) (d
 	if err != nil {
 		return domain.ModelSource{}, "", providerFailure("model_source_unavailable", 0, false)
 	}
+	if source.Kind == domain.ModelSourceAntigravity {
+		// Its credential is a Google refresh token, never a bearer for a
+		// pass-through call; Antigravity serves only translated Responses.
+		return domain.ModelSource{}, "", providerFailure("model_source_protocol_unsupported", 0, false)
+	}
 	credential, err := a.credentialForAccount(ctx, account)
 	if err != nil {
 		return domain.ModelSource{}, "", providerFailure("model_source_credential_unavailable", 0, false)

@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex-lb/internal/adapters/antigravity"
 	"codex-lb/internal/adapters/backups"
 	"codex-lb/internal/adapters/chatgpt"
 	"codex-lb/internal/adapters/egress"
@@ -156,7 +157,13 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	// The Grok pool exists before the provider: Grok subscription sources
 	// borrow its account tokens.
 	videos := application.NewVideoService(data.store, data.vault, xai.New(xai.Config{HTTPClient: client}))
+	// Antigravity sources take their Google access tokens from this service,
+	// which also signs the accounts in on the dashboard.
+	antigravitySources := application.NewAntigravityService(data.store, data.vault,
+		antigravity.New(antigravity.Config{HTTPClient: client, ClientVersion: cfg.antigravityClientVersion}))
+	antigravitySources.ConfigureLogger(logger)
 	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client, UpstreamWebSocketSessions: capacity.UpstreamWebSockets, GrokTokens: videos,
+		AntigravityTokens: antigravitySources, AntigravityClientVersion: cfg.antigravityClientVersion,
 		ResolveClientVersion: data.store.LoadCodexClientVersion, ChatGPTReasoningFallback: catalog.SubscriptionReasoningFallback})
 	if err := catalog.Load(ctx); err != nil {
 		_ = accounts.Close()
@@ -215,6 +222,7 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	videos.ConfigureAdmission(proxy)
 	videos.ConfigureLogger(logger)
 	api.ConfigureVideo(videos)
+	api.ConfigureAntigravity(antigravitySources)
 	limitWarmup := application.NewLimitWarmupService(data.store, data.store, warmups, data.store, time.Now)
 	limitWarmup.ConfigureCatalog(catalog)
 	usage.ConfigureLimitWarmups(limitWarmup)

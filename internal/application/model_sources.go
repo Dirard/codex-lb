@@ -149,6 +149,9 @@ func (s *ModelSourceService) Create(ctx context.Context, request ModelSourceCrea
 			return domain.ModelSource{}, err
 		}
 	}
+	if source.Kind == domain.ModelSourceAntigravity {
+		return domain.ModelSource{}, errAntigravitySourceCreate
+	}
 	credential, err := s.credential(source.ID, request.APIKey, false)
 	if err != nil {
 		return domain.ModelSource{}, err
@@ -221,10 +224,19 @@ func (s *ModelSourceService) Update(ctx context.Context, id string, request Mode
 		source.MaxConcurrency = intOrDefault(request.Concurrency.Value)
 	}
 	if request.ProviderConfig != nil {
+		account := source.ProviderConfig.Antigravity
 		source.ProviderConfig = *request.ProviderConfig
+		if source.Kind == domain.ModelSourceAntigravity {
+			// The Google account changes only through a sign-in.
+			source.ProviderConfig.Antigravity = account
+		}
 	}
 	if request.Models != nil {
 		source.Models = modelsFromInputs(*request.Models, source.Models)
+	}
+	// Any apiKey, even null, would replace the stored refresh token.
+	if source.Kind == domain.ModelSourceAntigravity && request.APIKey.Set {
+		return domain.ModelSource{}, errAntigravitySourceKey
 	}
 	if source.Kind == domain.ModelSourceGrokSubscription {
 		if hasAPIKey(request.APIKey) {
@@ -256,6 +268,11 @@ func (s *ModelSourceService) Update(ctx context.Context, id string, request Mode
 }
 
 var errGrokSourceKey = fmt.Errorf("%w: Grok subscription sources use the account's token, not an API key", domain.ErrInvalid)
+
+var (
+	errAntigravitySourceCreate = fmt.Errorf("%w: Antigravity sources are added by signing in a Google account", domain.ErrInvalid)
+	errAntigravitySourceKey    = fmt.Errorf("%w: Antigravity sources use the signed-in account's token, not an API key", domain.ErrInvalid)
+)
 
 // prepareGrokSource checks the account link and fixed endpoint of a new Grok
 // subscription source and, when no models are given, fills them from xAI.
