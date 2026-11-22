@@ -152,10 +152,10 @@ Tests:
 7. [x] Admin API and dashboard (R9).
 8. [x] Route-level tests through loopback stubs: sign-in, a streamed Codex turn with a tool call and replayed signature, quota refusal on a sticky account, TOS suspension.
 9. [x] Gates, archive OpenSpec, release notes, merge and release; stop before prod and before any real Google traffic.
-10. [x] OpenSpec change `move-antigravity-client-version-to-settings`, validated strictly. (R10, R11)
+10. [x] OpenSpec change `move-antigravity-client-version-to-settings`, validated strictly and archived as `openspec/changes/archive/2026-11-22-move-antigravity-client-version-to-settings/`. (R10, R11)
 11. [x] Migration 53, settings store and admin API, live resolver for the provider and the Antigravity client; retire the environment variable. (R10)
 12. [x] Dashboard «Antigravity client» section with locales and tests. (R11)
-13. [ ] Gates, archive, release notes, merge and release; stop before prod.
+13. [x] Gates, archive, release notes, merge and release; stop before prod.
 
 ## Open questions
 
