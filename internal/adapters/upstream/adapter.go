@@ -82,6 +82,9 @@ func (a *HTTPAdapter) Execute(ctx context.Context, target Target, request Reques
 		}
 		return a.executeResponses(ctx, prepared, req)
 	}
+	if prepared.Capabilities.Protocol == ProtocolAntigravity {
+		return a.executeAntigravity(ctx, prepared, req, items, catalog)
+	}
 	return a.executeChat(ctx, prepared, req, items, catalog)
 }
 
@@ -105,6 +108,9 @@ func (a *HTTPAdapter) OpenStream(ctx context.Context, target Target, request Req
 			return a.streamResponsesWebSocket(ctx, prepared, req, emit)
 		}
 		return a.streamResponses(ctx, prepared, req, emit)
+	}
+	if prepared.Capabilities.Protocol == ProtocolAntigravity {
+		return a.streamAntigravity(ctx, prepared, req, items, catalog, emit)
 	}
 	return a.streamChat(ctx, prepared, req, items, catalog, emit)
 }

@@ -88,7 +88,8 @@ func (s *Store) SaveModelSource(ctx context.Context, source domain.ModelSource, 
  (id,kind,provider,base_url,email,alias,plan_type,routing_policy,status,created_at)
  VALUES(?,'external',?,?,?,?, 'external','normal',?,?) ON CONFLICT(id) DO UPDATE SET
  provider=excluded.provider,base_url=excluded.base_url,alias=excluded.alias,
- status=CASE WHEN excluded.status='paused' THEN 'paused'
+ status=CASE WHEN accounts.status='deactivated' THEN accounts.status
+ WHEN excluded.status='paused' THEN 'paused'
  WHEN ? AND accounts.status='paused' THEN 'active'
  WHEN ? AND accounts.status IN ('rate_limited','quota_exceeded') THEN 'active'
  ELSE accounts.status END,
@@ -176,10 +177,13 @@ func (s *Store) GetModelSource(ctx context.Context, id string) (domain.ModelSour
 	err := s.readDB.QueryRowContext(ctx, `SELECT id,name,kind,base_url,is_enabled,health_status,
  supports_chat_completions,supports_responses,supports_audio_transcriptions,supports_embeddings,
  timeout_seconds,max_concurrency,provider_config_json,created_at,updated_at,
- coalesce((SELECT a.sticky_only FROM accounts a WHERE a.id=legacy_model_sources.id),0)
+ coalesce((SELECT a.sticky_only FROM accounts a WHERE a.id=legacy_model_sources.id),0),
+ coalesce((SELECT a.status FROM accounts a WHERE a.id=legacy_model_sources.id),''),
+ coalesce((SELECT a.deactivation_reason FROM accounts a WHERE a.id=legacy_model_sources.id),'')
  FROM legacy_model_sources WHERE id=? AND deleted_at IS NULL`, id).Scan(&source.ID, &source.Name,
 		&source.Kind, &source.BaseURL, &source.Enabled, &source.Health, &source.Chat, &source.Responses,
-		&source.Audio, &source.Embeddings, &timeout, &concurrency, &config, &created, &updated, &source.StickyOnly)
+		&source.Audio, &source.Embeddings, &timeout, &concurrency, &config, &created, &updated, &source.StickyOnly,
+		&source.AccountStatus, &source.DeactivationReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return source, ErrNotFound
 	}
