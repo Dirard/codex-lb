@@ -38,6 +38,7 @@ export type AccountDetailSheetProps = {
   onLimitWarmupChange: (accountId: string, enabled: boolean) => void;
   onRoutingPolicyChange: (accountId: string, routingPolicy: AccountRoutingPolicy) => void;
   onSecurityWorkAuthorizedChange: (accountId: string, enabled: boolean) => void;
+  onStickyOnlyChange: (accountId: string, enabled: boolean) => void;
   checkedResetCredits: CheckedResetCredits | null;
   checkingResetCredits: boolean;
   onCheckResetCredits: (accountId: string) => void;
@@ -68,6 +69,7 @@ export function AccountDetailSheet({
   onLimitWarmupChange,
   onRoutingPolicyChange,
   onSecurityWorkAuthorizedChange,
+  onStickyOnlyChange,
   checkedResetCredits,
   checkingResetCredits,
   onCheckResetCredits,
@@ -92,6 +94,7 @@ export function AccountDetailSheet({
             onLimitWarmupChange={onLimitWarmupChange}
             onRoutingPolicyChange={onRoutingPolicyChange}
             onSecurityWorkAuthorizedChange={onSecurityWorkAuthorizedChange}
+            onStickyOnlyChange={onStickyOnlyChange}
             checkedResetCredits={checkedResetCredits}
             checkingResetCredits={checkingResetCredits}
             onCheckResetCredits={onCheckResetCredits}
@@ -118,6 +121,7 @@ function AccountDetailContent({
   onLimitWarmupChange,
   onRoutingPolicyChange,
   onSecurityWorkAuthorizedChange,
+  onStickyOnlyChange,
   checkedResetCredits,
   checkingResetCredits,
   onCheckResetCredits,
@@ -204,6 +208,7 @@ function AccountDetailContent({
         onLimitWarmupChange={onLimitWarmupChange}
         onRoutingPolicyChange={onRoutingPolicyChange}
         onSecurityWorkAuthorizedChange={onSecurityWorkAuthorizedChange}
+        onStickyOnlyChange={onStickyOnlyChange}
       />
     </div>
   );

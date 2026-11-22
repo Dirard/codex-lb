@@ -66,6 +66,7 @@ type AccountPolicyRepository interface {
 	UpdateAccountWarmup(context.Context, string, bool) error
 	UpdateAccountRoutingPolicy(context.Context, string, string) error
 	UpdateAccountSecurityAuthorization(context.Context, string, bool) error
+	UpdateAccountStickyOnly(context.Context, string, bool) error
 	TransitionAccountStatus(context.Context, string, domain.AccountStatus, string, domain.AccountStatus) error
 }
 
@@ -158,11 +159,28 @@ func (s *AccountsService) SetRoutingPolicy(ctx context.Context, id, policy strin
 	return s.accounts.UpdateAccountRoutingPolicy(ctx, id, policy)
 }
 
-func (s *AccountsService) UpdateAccount(ctx context.Context, id string, securityWorkAuthorized *bool) error {
-	if securityWorkAuthorized == nil {
+// AccountUpdate names the account options an administrator changes; nil
+// leaves an option as it is.
+type AccountUpdate struct {
+	SecurityWorkAuthorized *bool
+	StickyOnly             *bool
+}
+
+// UpdateAccount writes each given option through its own single-column
+// update, so a concurrent refresh or another option cannot be reverted.
+func (s *AccountsService) UpdateAccount(ctx context.Context, id string, update AccountUpdate) error {
+	if update.SecurityWorkAuthorized == nil && update.StickyOnly == nil {
 		return fmt.Errorf("empty account update: %w", domain.ErrInvalid)
 	}
-	return s.accounts.UpdateAccountSecurityAuthorization(ctx, id, *securityWorkAuthorized)
+	if update.SecurityWorkAuthorized != nil {
+		if err := s.accounts.UpdateAccountSecurityAuthorization(ctx, id, *update.SecurityWorkAuthorized); err != nil {
+			return err
+		}
+	}
+	if update.StickyOnly != nil {
+		return s.accounts.UpdateAccountStickyOnly(ctx, id, *update.StickyOnly)
+	}
+	return nil
 }
 
 func (s *AccountsService) DeleteAccount(ctx context.Context, id string, deleteHistory bool) error {

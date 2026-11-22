@@ -63,6 +63,7 @@ func (s *CodexOperations) CompactWithOptions(ctx context.Context, options CodexO
 	if account.Kind != domain.AccountChatGPT {
 		return CodexOperationResult{}, ownerUnavailable()
 	}
+	owner = stickyOwner(owner, account)
 	excluded := map[string]bool{}
 	replayed := false
 	var replay json.RawMessage
@@ -99,6 +100,9 @@ func (s *CodexOperations) CompactWithOptions(ctx context.Context, options CodexO
 			lease = nil // billedAdmitted released this attempt before any replay.
 			if !compactQuotaRefusal(result, callErr) {
 				return result, callErr
+			}
+			if !replayed && keepsStickyConversation(owner, account) {
+				return result, stickyQuotaError(callErr)
 			}
 			if owner != nil && !replayed {
 				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

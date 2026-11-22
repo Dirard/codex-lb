@@ -62,7 +62,7 @@ func TestAccountPolicyServiceAvoidsFullSnapshotWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := true
-	if err := service.UpdateAccount(ctx, "acct", &allowed); err != nil {
+	if err := service.UpdateAccount(ctx, "acct", AccountUpdate{SecurityWorkAuthorized: &allowed}); err != nil {
 		t.Fatal(err)
 	}
 	if store.fullSaves != 1 || store.accounts["acct"].Status != domain.AccountQuotaExceeded {
@@ -154,6 +154,9 @@ func (f *fakeAccountsStore) UpdateAccountRoutingPolicy(_ context.Context, id, po
 }
 func (f *fakeAccountsStore) UpdateAccountSecurityAuthorization(_ context.Context, id string, enabled bool) error {
 	return f.updatePolicy(id, func(a *domain.Account) { a.SecurityWorkAuthorized = enabled })
+}
+func (f *fakeAccountsStore) UpdateAccountStickyOnly(_ context.Context, id string, sticky bool) error {
+	return f.updatePolicy(id, func(a *domain.Account) { a.StickyOnly = sticky })
 }
 func (f *fakeAccountsStore) TransitionAccountStatus(_ context.Context, id string, expected domain.AccountStatus, reason string, next domain.AccountStatus) error {
 	f.mu.Lock()
@@ -357,10 +360,10 @@ func TestAccountAdminCRUDTransitions(t *testing.T) {
 		t.Fatalf("invalid policy err = %v", err)
 	}
 	authorized := true
-	if err := service.UpdateAccount(ctx, account.ID, &authorized); err != nil {
+	if err := service.UpdateAccount(ctx, account.ID, AccountUpdate{SecurityWorkAuthorized: &authorized}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.UpdateAccount(ctx, account.ID, nil); !errors.Is(err, domain.ErrInvalid) {
+	if err := service.UpdateAccount(ctx, account.ID, AccountUpdate{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("empty update err = %v", err)
 	}
 	saved, _ := store.GetAccount(ctx, account.ID)

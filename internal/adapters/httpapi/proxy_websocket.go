@@ -361,6 +361,9 @@ func sendWebSocketError(ctx context.Context, connection *websocket.Conn, err err
 	if errors.As(err, &request) && request.Param != "" {
 		detail["type"], detail["param"] = "invalid_request_error", request.Param
 	}
+	if code == application.UsageLimitCode {
+		detail["type"] = code
+	}
 	frame := map[string]any{"type": "error", "status": status, "error": detail}
 	var exhausted *application.RequestPoolExhausted
 	if errors.As(err, &exhausted) {

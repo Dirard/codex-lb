@@ -295,6 +295,8 @@ func providerFailureMessage(code string) string {
 		return "The upstream provider did not report usage for this request"
 	case "chatgpt_credential_unavailable", "chatgpt_token_unavailable":
 		return "The upstream account could not be authorized"
+	case application.UsageLimitCode:
+		return "The usage limit of this conversation's account was reached; the conversation stays on that account until the limit resets"
 	}
 	return "Upstream request failed"
 }
@@ -337,6 +339,10 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		writeJSON(w, status, map[string]any{"error": map[string]any{
 			"code": code, "type": "invalid_request_error", "message": message, "param": request.Param,
 		}})
+		return
+	}
+	if code == application.UsageLimitCode {
+		writeJSON(w, status, map[string]any{"error": map[string]string{"type": code, "code": code, "message": message}})
 		return
 	}
 	writeError(w, status, code, message)

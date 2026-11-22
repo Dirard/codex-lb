@@ -204,6 +204,21 @@ func TestAccountRoutesImportCRUDAndExportAuth(t *testing.T) {
 	if rec := request(http.MethodPatch, "/api/accounts/"+accountID, "application/json", []byte(`{"securityWorkAuthorized":true}`)); rec.Code != http.StatusOK {
 		t.Fatalf("patch account = %d", rec.Code)
 	}
+	if rec := request(http.MethodPatch, "/api/accounts/"+accountID, "application/json", []byte(`{"stickyOnly":true}`)); rec.Code != http.StatusOK {
+		t.Fatalf("patch sticky-only = %d", rec.Code)
+	}
+	if stored, err := store.GetAccount(context.Background(), accountID); err != nil || !stored.StickyOnly || !stored.SecurityWorkAuthorized {
+		t.Fatalf("sticky-only was not stored beside the other option: %+v %v", stored, err)
+	}
+	if rec := request(http.MethodPatch, "/api/accounts/"+accountID, "application/json", []byte(`{"stickyOnly":false}`)); rec.Code != http.StatusOK {
+		t.Fatalf("clear sticky-only = %d", rec.Code)
+	}
+	if stored, err := store.GetAccount(context.Background(), accountID); err != nil || stored.StickyOnly {
+		t.Fatalf("sticky-only was not cleared: %+v %v", stored, err)
+	}
+	if rec := request(http.MethodPatch, "/api/accounts/"+accountID, "application/json", []byte(`{}`)); rec.Code < 400 || rec.Code > 499 {
+		t.Fatalf("empty account update = %d", rec.Code)
+	}
 	if rec := request(http.MethodPost, "/api/accounts/missing/pause", "", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing pause = %d", rec.Code)
 	}

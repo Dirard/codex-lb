@@ -15,7 +15,7 @@ import (
 const accountColumns = `id,kind,provider,base_url,chatgpt_account_id,chatgpt_user_id,codex_installation_id,
  email,alias,workspace_id,workspace_label,seat_type,plan_type,routing_policy,status,
  deactivation_reason,requires_egress_decision,security_work_authorized,limit_warmup_enabled,
- created_at,last_refresh,generation,route_revision`
+ created_at,last_refresh,generation,route_revision,sticky_only`
 
 type scanner interface{ Scan(...any) error }
 
@@ -32,7 +32,7 @@ func scanAccount(row scanner) (domain.Account, error) {
 		&a.ChatGPTUserID, &a.CodexInstallationID, &a.Email, &a.Alias, &a.WorkspaceID,
 		&a.WorkspaceLabel, &a.SeatType, &a.PlanType, &a.RoutingPolicy, &a.Status,
 		&a.DeactivationReason, &a.RequiresEgressDecision, &a.SecurityWorkAuthorized,
-		&a.LimitWarmupEnabled, &created, &last, &a.Generation, &a.RouteRevision)
+		&a.LimitWarmupEnabled, &created, &last, &a.Generation, &a.RouteRevision, &a.StickyOnly)
 	if err != nil {
 		return a, err
 	}
@@ -71,8 +71,8 @@ func saveAccount(ctx context.Context, db accountWriter, a domain.Account) error 
 	res, err := db.ExecContext(ctx, `INSERT INTO accounts (
  id,kind,provider,base_url,chatgpt_account_id,chatgpt_user_id,codex_installation_id,
  email,alias,workspace_id,workspace_label,seat_type,plan_type,routing_policy,status,
- deactivation_reason,requires_egress_decision,security_work_authorized,limit_warmup_enabled,created_at,last_refresh,generation,route_revision
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ deactivation_reason,requires_egress_decision,security_work_authorized,limit_warmup_enabled,created_at,last_refresh,generation,route_revision,sticky_only
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,provider=excluded.provider,base_url=excluded.base_url,
  chatgpt_account_id=excluded.chatgpt_account_id,chatgpt_user_id=excluded.chatgpt_user_id,
  codex_installation_id=excluded.codex_installation_id,email=excluded.email,alias=excluded.alias,
@@ -88,7 +88,7 @@ ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,provider=excluded.provider,base
 		a.ChatGPTUserID, a.CodexInstallationID, a.Email, a.Alias, a.WorkspaceID, a.WorkspaceLabel,
 		a.SeatType, a.PlanType, a.RoutingPolicy, a.Status, a.DeactivationReason,
 		boolInt(a.RequiresEgressDecision), boolInt(a.SecurityWorkAuthorized), boolInt(a.LimitWarmupEnabled),
-		millis(a.CreatedAt), optionalMillis(a.LastRefresh), a.Generation, a.RouteRevision)
+		millis(a.CreatedAt), optionalMillis(a.LastRefresh), a.Generation, a.RouteRevision, boolInt(a.StickyOnly))
 	if err != nil {
 		return err
 	}

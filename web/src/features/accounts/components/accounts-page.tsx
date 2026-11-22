@@ -244,6 +244,7 @@ export function AccountsPage() {
         onSecurityWorkAuthorizedChange={(accountId, enabled) =>
           void updateMutation.mutateAsync({ accountId, securityWorkAuthorized: enabled })
         }
+        onStickyOnlyChange={(accountId, enabled) => void updateMutation.mutateAsync({ accountId, stickyOnly: enabled })}
         checkedResetCredits={checkMutation.data ?? null}
         checkingResetCredits={checkMutation.isPending}
         onCheckResetCredits={(accountId) => checkMutation.mutate(accountId)}

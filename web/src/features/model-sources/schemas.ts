@@ -36,6 +36,8 @@ export const ModelSourceSchema = z.object({
   timeoutSeconds: z.number().int().positive().nullable().default(null),
   maxConcurrency: z.number().int().positive().nullable().default(null),
   providerConfig: z.object({ grokAccountId: z.string().optional() }).optional(),
+  /** Conversations started on the source stay on it when its limit runs out. */
+  stickyOnly: z.boolean().default(false),
   createdAt: z.iso.datetime({ offset: true }),
   updatedAt: z.iso.datetime({ offset: true }),
   models: z.array(ModelSourceModelSchema).default([]),

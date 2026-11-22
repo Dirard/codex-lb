@@ -209,9 +209,6 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 			return ResponseResult{}, err
 		}
 	}
-	if owner != nil && owner.QuotaRefused && (request.FilePinned || owner.FilePinned) {
-		return ResponseResult{}, replayUnavailable()
-	}
 	var pinned domain.Account
 	if owner != nil {
 		pinned, err = p.store.GetAccount(ctx, owner.AccountID)
@@ -219,6 +216,10 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 			p.retireRequiredSocket(route, owner.AccountID, key.ID)
 			return ResponseResult{}, ownerUnavailable()
 		}
+		owner = stickyOwner(owner, pinned)
+	}
+	if owner != nil && owner.QuotaRefused && (request.FilePinned || owner.FilePinned) {
+		return ResponseResult{}, replayUnavailable()
 	}
 	var account domain.Account
 	var price pricing.Price
@@ -403,7 +404,7 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		settled := !plan.RetainUncertain
 		if settleErr == nil && capabilityErr == nil && (quota || settled && callErr == nil && !result.Failed) {
 			plan.Outcome = &domain.AccountOutcome{AccountID: account.ID, QuotaRefused: quota, Success: !quota}
-			if quota && owner != nil && owner.AccountID == account.ID {
+			if quota && owner != nil && owner.AccountID == account.ID && !account.StickyOnly {
 				plan.Outcome.QuotaMark = &domain.ContinuationQuotaMark{KeyID: key.ID, ResponseID: owner.ResponseID}
 			}
 		}
@@ -491,6 +492,9 @@ func (p *Proxy) Respond(ctx context.Context, options ResponseOptions, body json.
 		}
 		if !safeZero {
 			return result, finishOutput(output, callErr)
+		}
+		if keepsStickyConversation(owner, account) {
+			return result, finishOutput(output, stickyQuotaError(callErr))
 		}
 		if request.FilePinned || owner != nil && (owner.FilePinned || len(owner.ContextEncrypted) == 0) {
 			if err := finishOutput(output, callErr); callErr == nil && err != nil {

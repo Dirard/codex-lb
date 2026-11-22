@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+import { updateAccount } from "@/features/accounts/api";
 import {
   createModelSource,
   deleteModelSource,
@@ -63,10 +64,24 @@ export function useModelSources() {
     },
   });
 
+  // A source is an account row; its sticky-only option is an account option.
+  const stickyMutation = useMutation({
+    mutationFn: ({ sourceId, stickyOnly }: { sourceId: string; stickyOnly: boolean }) =>
+      updateAccount(sourceId, { stickyOnly }),
+    onSuccess: () => {
+      toast.success(t("modelSources.toasts.updated"));
+      void queryClient.invalidateQueries({ queryKey: ["model-sources", "list"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t("modelSources.toasts.updateFailed"));
+    },
+  });
+
   return {
     modelSourcesQuery,
     createMutation,
     updateMutation,
     deleteMutation,
+    stickyMutation,
   };
 }

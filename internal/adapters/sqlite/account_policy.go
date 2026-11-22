@@ -35,6 +35,12 @@ func (s *Store) UpdateAccountSecurityAuthorization(ctx context.Context, id strin
 	return s.updateAccountPolicy(ctx, id, "security_work_authorized", boolInt(authorized))
 }
 
+// UpdateAccountStickyOnly changes only the sticky-only option; the account
+// upsert never writes that column, so a stale snapshot cannot revert it.
+func (s *Store) UpdateAccountStickyOnly(ctx context.Context, id string, sticky bool) error {
+	return s.updateAccountPolicy(ctx, id, "sticky_only", boolInt(sticky))
+}
+
 func (s *Store) updateAccountPolicy(ctx context.Context, id, column string, value any) error {
 	if id == "" {
 		return ErrInvalid
