@@ -42,6 +42,18 @@ type GrokTokenSource interface {
 	GrokAccessToken(ctx context.Context, accountID string, rejectedVersion int64) (string, int64, error)
 }
 
+// AntigravityTokens lends an Antigravity source its account's current
+// access token and Cloud Code project, and records refusals that change the
+// account. rejectedVersion, when not negative, asks for a token newer than
+// the one Google rejected.
+type AntigravityTokens interface {
+	AntigravityAccessToken(ctx context.Context, sourceID string, rejectedVersion int64) (token string, version int64, project string, err error)
+	// ReportAntigravityRefusal records an account refusal: code is
+	// upstream.ErrorCodeAccountSuspended or
+	// upstream.ErrorCodeAccountValidationRequired, actionURL its link.
+	ReportAntigravityRefusal(ctx context.Context, sourceID, code, actionURL string) error
+}
+
 type Config struct {
 	HTTPClient               *http.Client
 	ChatGPTBaseURL           string
@@ -57,6 +69,15 @@ type Config struct {
 	// GrokBaseURL is where Grok subscription tokens go, whatever a source
 	// stores; tests replace it.
 	GrokBaseURL string
+	// AntigravityTokens serves Antigravity sources; without it they fail
+	// before dispatch.
+	AntigravityTokens AntigravityTokens
+	// AntigravityBaseURL is where Antigravity tokens go (domain
+	// AntigravityBaseURL); tests replace it.
+	AntigravityBaseURL string
+	// AntigravityClientVersion is the Antigravity client version in the
+	// User-Agent of Cloud Code calls (CODEX_LB_ANTIGRAVITY_CLIENT_VERSION).
+	AntigravityClientVersion string
 }
 
 type Adapter struct {

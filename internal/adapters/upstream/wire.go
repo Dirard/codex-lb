@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"codex-lb/internal/domain"
 )
@@ -16,6 +17,10 @@ import (
 const (
 	ProtocolResponses       = Protocol("responses")
 	ProtocolChatCompletions = Protocol("chat_completions")
+	// ProtocolAntigravity is Google's Cloud Code v1internal generateContent
+	// protocol behind Antigravity accounts; requests are translated from the
+	// same Responses input as Chat Completions sources.
+	ProtocolAntigravity = Protocol("antigravity")
 )
 
 type Protocol string
@@ -57,6 +62,19 @@ func ChatCompletionsCapabilities() Capabilities {
 	}
 }
 
+// AntigravityCapabilities serves an Antigravity account: tools, reasoning
+// (thought parts) and image input, without hosted tools.
+func AntigravityCapabilities() Capabilities {
+	return Capabilities{
+		Protocol:            ProtocolAntigravity,
+		Tools:               true,
+		ParallelToolCalls:   true,
+		Reasoning:           true,
+		ImageInput:          true,
+		MaxRequestBodyBytes: 32 << 20,
+	}
+}
+
 func ResponsesCapabilities() Capabilities {
 	return Capabilities{
 		Protocol:            ProtocolResponses,
@@ -77,7 +95,7 @@ func ZAIChatCompletionsCapabilities() Capabilities {
 
 func (c Capabilities) Normalized() (Capabilities, error) {
 	switch c.Protocol {
-	case ProtocolResponses, ProtocolChatCompletions:
+	case ProtocolResponses, ProtocolChatCompletions, ProtocolAntigravity:
 	default:
 		return c, &Error{Code: ErrorCodeInvalidConfiguration, Message: "upstream protocol is not configured"}
 	}
@@ -133,6 +151,11 @@ type Target struct {
 	// Headers is an explicit allowlist. Only ChatGPT-Account-ID and Codex
 	// headers are copied; arbitrary inbound client headers never enter it.
 	Headers http.Header
+	// AntigravityProject and AntigravityUserAgent are set only for
+	// ProtocolAntigravity: the Cloud Code project of the account (the
+	// envelope's project field) and the User-Agent header of every call.
+	AntigravityProject   string
+	AntigravityUserAgent string
 	Capabilities
 }
 
@@ -186,6 +209,20 @@ const (
 	// ErrorCodeImageGenerationLimit is a 429 refused by the subscription's image
 	// window (X-Codex-Active-Limit names an image limit), not by account quota.
 	ErrorCodeImageGenerationLimit = "image_generation_limit"
+	// Antigravity refusals (Google RPC errors of Cloud Code v1internal).
+	// ErrorCodeContentRefused is a bare 429 without details: a request
+	// refused for its content, never an account or quota signal.
+	ErrorCodeContentRefused = "upstream_content_refused"
+	// ErrorCodeCapacityExhausted is a 503 MODEL_CAPACITY_EXHAUSTED.
+	ErrorCodeCapacityExhausted = "model_capacity_exhausted"
+	// ErrorCodeAccountSuspended is a 403 TOS_VIOLATION: terminal for the
+	// account; ActionURL is the appeal link.
+	ErrorCodeAccountSuspended = "account_suspended"
+	// ErrorCodeAccountValidationRequired is a 403 VALIDATION_REQUIRED;
+	// ActionURL is the verification link.
+	ErrorCodeAccountValidationRequired = "account_validation_required"
+	// ErrorCodeModelAccessDenied is a 403 MODEL_ACCESS_DENIED for one model.
+	ErrorCodeModelAccessDenied = "model_access_denied"
 )
 
 type Error struct {
@@ -199,7 +236,12 @@ type Error struct {
 	RejectedBeforeExecution bool
 	// LimitHeaders are the upstream reset headers of an image-limit refusal.
 	LimitHeaders map[string][]string
-	cause        error
+	// RetryAfter is the provider's own retry hint for a rate or capacity
+	// refusal; zero when it gave none.
+	RetryAfter time.Duration
+	// ActionURL is the appeal or verification link of an account refusal.
+	ActionURL string
+	cause     error
 }
 
 func (e *Error) Unwrap() error { return e.cause }
