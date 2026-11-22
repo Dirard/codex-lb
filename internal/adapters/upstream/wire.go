@@ -370,6 +370,8 @@ type responsesWireRequest struct {
 	Instructions       string              `json:"instructions"`
 	Reasoning          *responsesReasoning `json:"reasoning"`
 	ParallelToolCalls  *bool               `json:"parallel_tool_calls"`
+	// ToolChoice is read only by the Antigravity translation.
+	ToolChoice json.RawMessage `json:"tool_choice"`
 }
 
 type responsesReasoning struct {
