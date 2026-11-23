@@ -11,7 +11,7 @@ The owner rolled back the Antigravity accounts: «откати все измен
 - Entrypoints: merges #56 (Antigravity sources), #58 (client version setting), the direct commit `9a3ec581` (User-Agent change that also deleted the whole `openspec/` tree), and #59 (Chrome 123 transport); migrations 53 and 54.
 - Changed assumption: Antigravity sources are a supported model source kind. Production ran go-v1.19.0 at schema 54 with one active Antigravity source when the owner decided.
 - Non-local: every package the reverted merges touched, the SQLite migration runner, OpenSpec `go-runtime`, release notes.
-- OpenSpec change `retire-antigravity-sources`: `go-runtime` ADDED «Withdrawn Antigravity sources are retired on upgrade».
+- OpenSpec change `retire-antigravity-sources`, archived as `openspec/changes/archive/2026-11-23-retire-antigravity-sources/`: `go-runtime` ADDED «Withdrawn Antigravity sources are retired on upgrade».
 - Impacted specs: `specs/antigravity-accounts.md` and `specs/antigravity-chrome-transport.md` are removed with the code (action: `archive`, kept in Git history at `10e8226e`). `specs/sticky-only-accounts.md` stays authoritative (action: `reuse`).
 
 ## Connected groups or observed existing logic
@@ -50,7 +50,7 @@ internal/adapters/sqlite/antigravity_retirement_test.go
 2. [x] Keep migrations 53 and 54; add migration 55 and the retirement step. (R1)
 3. [x] Keep the published release notes of go-v1.17.0 – go-v1.19.0 as history.
 4. [x] OpenSpec change `retire-antigravity-sources`, validated strictly.
-5. [ ] Gates, archive, release notes go-v1.20.0, merge and release; stop before prod.
+5. [x] Gates, archive, release notes go-v1.20.0, merge and release; stop before prod.
 
 ## Open questions
 

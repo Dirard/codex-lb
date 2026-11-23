@@ -6,4 +6,4 @@
 ## 2. Verification
 
 - [x] 2.1 Migration test from schema 54 with live and deleted Antigravity sources and another source.
-- [ ] 2.2 Gates, strict OpenSpec validation and release notes.
+- [x] 2.2 Gates, strict OpenSpec validation and release notes.
