@@ -6,4 +6,4 @@
 ## 2. Verification
 
 - [x] 2.1 Route regression test (HTTP and WebSocket) and dashboard test.
-- [ ] 2.2 Gates, strict OpenSpec validation and release notes.
+- [x] 2.2 Gates, strict OpenSpec validation and release notes.
