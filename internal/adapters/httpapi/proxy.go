@@ -269,6 +269,8 @@ func proxyError(err error) (int, string, string) {
 		return 429, "api_key_limit_exceeded", "This API key's configured limit has been reached"
 	case errors.Is(err, domain.ErrNoAccounts):
 		return 503, "no_available_accounts", "No permitted account is currently available"
+	case errors.Is(err, application.ErrModelNotServed):
+		return 404, "model_not_available", "No permitted account supports the requested model"
 	case errors.Is(err, pricing.ErrUnpriced):
 		return 400, "model_not_priced", "No price is configured for this model and provider"
 	case errors.Is(err, context.DeadlineExceeded):

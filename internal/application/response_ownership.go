@@ -136,7 +136,7 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 	now := time.Now()
 	quotaDefinition, quotaMapped := domain.AdditionalQuotaForModel(model)
 	blockedByData, blockedByAdditionalQuota := false, false
-	unpriced := 0
+	unpriced, notServed := 0, 0
 	ids := make([]string, 0, len(accounts))
 	for _, account := range accounts {
 		ids = append(ids, account.ID)
@@ -164,6 +164,12 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 		price, err := resolvePrice(account)
 		if errors.Is(err, pricing.ErrUnpriced) {
 			unpriced++
+			continue
+		}
+		if errors.Is(err, ErrModelNotServed) {
+			// A model source that does not list the model is no candidate;
+			// it says nothing about prices.
+			notServed++
 			continue
 		}
 		if err != nil {
@@ -231,8 +237,11 @@ func (p *Proxy) accountCandidates(ctx context.Context, keyID string, request *re
 		if blockedByAdditionalQuota {
 			return nil, &ProxyError{Code: "quota_exhausted", Status: 429, Message: "Additional quota exhausted for the requested model"}
 		}
-		if unpriced > 0 && unpriced == len(accounts) {
+		if unpriced > 0 && unpriced+notServed == len(accounts) {
 			return nil, pricing.ErrUnpriced
+		}
+		if notServed > 0 && notServed == len(accounts) {
+			return nil, modelNotAvailable()
 		}
 		return nil, domain.ErrNoAccounts
 	}
@@ -301,4 +310,9 @@ func (p *Proxy) continuationPlan(options ResponseOptions, request responseReques
 		return &owner, nil, nil // Retain partial response ownership without establishing new aliases.
 	}
 	return &owner, conversationAliases(owner, options.identity(), forwardTurn), nil
+}
+
+// modelNotAvailable refuses a model that no permitted account serves.
+func modelNotAvailable() error {
+	return &ProxyError{Code: "model_not_available", Status: 404, Message: "No permitted account supports the requested model"}
 }
