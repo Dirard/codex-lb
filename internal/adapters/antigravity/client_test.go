@@ -97,7 +97,7 @@ func (g *googleStub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *googleStub) client() *Client {
-	return New(Config{HTTPClient: g.server.Client(), ResolveClientVersion: func(context.Context) (string, error) { return "2.35.1", nil }, TokenURL: g.server.URL + "/token",
+	return New(Config{HTTPClient: g.server.Client(), ClientVersion: "2.35.1", TokenURL: g.server.URL + "/token",
 		UserInfoURL: g.server.URL + "/userinfo", CloudCodeBaseURL: g.server.URL, OnboardInterval: time.Millisecond})
 }
 

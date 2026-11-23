@@ -160,10 +160,10 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	// Antigravity sources take their Google access tokens from this service,
 	// which also signs the accounts in on the dashboard.
 	antigravitySources := application.NewAntigravityService(data.store, data.vault,
-		antigravity.New(antigravity.Config{HTTPClient: client, ResolveClientVersion: data.store.LoadAntigravityClientVersion}))
+		antigravity.New(antigravity.Config{HTTPClient: client, ClientVersion: cfg.antigravityClientVersion}))
 	antigravitySources.ConfigureLogger(logger)
 	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client, UpstreamWebSocketSessions: capacity.UpstreamWebSockets, GrokTokens: videos,
-		AntigravityTokens: antigravitySources, ResolveAntigravityClientVersion: data.store.LoadAntigravityClientVersion,
+		AntigravityTokens: antigravitySources, AntigravityClientVersion: cfg.antigravityClientVersion,
 		ResolveClientVersion: data.store.LoadCodexClientVersion, ChatGPTReasoningFallback: catalog.SubscriptionReasoningFallback})
 	if err := catalog.Load(ctx); err != nil {
 		_ = accounts.Close()

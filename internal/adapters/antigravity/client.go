@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -38,7 +39,7 @@ const (
 	DefaultUserInfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
 	// DefaultClientVersion is the Antigravity client version presented in the
 	// User-Agent unless CODEX_LB_ANTIGRAVITY_CLIENT_VERSION says otherwise.
-	DefaultClientVersion = domain.DefaultAntigravityClientVersion
+	DefaultClientVersion = "2.34.0"
 
 	maxTokenBytes     = 1 << 20
 	maxCloudCodeBytes = 4 << 20
@@ -58,8 +59,10 @@ var Scopes = []string{
 	"https://www.googleapis.com/auth/aicode",
 }
 
+var clientVersionPattern = regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$`)
+
 // ValidClientVersion accepts a dotted version such as 2.34.0.
-func ValidClientVersion(version string) bool { return domain.ValidAntigravityClientVersion(version) }
+func ValidClientVersion(version string) bool { return clientVersionPattern.MatchString(version) }
 
 // UserAgent is the User-Agent of every Cloud Code call: the Antigravity Hub
 // form with this host's operating system and architecture, without a
@@ -71,22 +74,21 @@ func UserAgent(version string) string {
 	return fmt.Sprintf("antigravity/hub/%s (aidev_client; os_type=%s; arch=%s)", version, runtime.GOOS, runtime.GOARCH)
 }
 
-// Config sets the HTTP client, how the presented client version is read
-// (the runtime setting; nil means the default version) and, for tests,
+// Config sets the HTTP client, the presented client version and, for tests,
 // every endpoint and the onboarding poll interval.
 type Config struct {
-	HTTPClient           *http.Client
-	ResolveClientVersion func(context.Context) (string, error)
-	AuthURL              string
-	TokenURL             string
-	UserInfoURL          string
-	CloudCodeBaseURL     string
-	OnboardInterval      time.Duration
+	HTTPClient       *http.Client
+	ClientVersion    string
+	AuthURL          string
+	TokenURL         string
+	UserInfoURL      string
+	CloudCodeBaseURL string
+	OnboardInterval  time.Duration
 }
 
 type Client struct {
 	http            *http.Client
-	resolveVersion  func(context.Context) (string, error)
+	userAgent       string
 	authURL         string
 	tokenURL        string
 	userInfoURL     string
@@ -104,7 +106,7 @@ func New(config Config) *Client {
 	owned := *client
 	// Tokens and codes must not follow a redirect to another host.
 	owned.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	c := &Client{http: &owned, resolveVersion: config.ResolveClientVersion, authURL: config.AuthURL, tokenURL: config.TokenURL,
+	c := &Client{http: &owned, userAgent: UserAgent(config.ClientVersion), authURL: config.AuthURL, tokenURL: config.TokenURL,
 		userInfoURL: config.UserInfoURL, cloudCode: strings.TrimSuffix(config.CloudCodeBaseURL, "/"), onboardInterval: config.OnboardInterval}
 	if c.authURL == "" {
 		c.authURL = DefaultAuthURL
@@ -161,12 +163,8 @@ func (c *Client) token(ctx context.Context, form url.Values) (application.Antigr
 	if err != nil {
 		return application.AntigravityTokenSet{}, errors.New("invalid google token request")
 	}
-	agent, err := c.userAgent(ctx)
-	if err != nil {
-		return application.AntigravityTokenSet{}, err
-	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("User-Agent", agent)
+	request.Header.Set("User-Agent", c.userAgent)
 	status, body, err := c.do(request, maxTokenBytes)
 	if err != nil {
 		return application.AntigravityTokenSet{}, err
@@ -203,12 +201,8 @@ func (c *Client) UserEmail(ctx context.Context, accessToken string) (string, err
 	if err != nil {
 		return "", errors.New("invalid google userinfo request")
 	}
-	agent, err := c.userAgent(ctx)
-	if err != nil {
-		return "", err
-	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.Header.Set("User-Agent", agent)
+	request.Header.Set("User-Agent", c.userAgent)
 	status, body, err := c.do(request, maxTokenBytes)
 	if err != nil {
 		return "", err
@@ -363,19 +357,6 @@ func internalModel(id string) bool {
 
 // call posts one Cloud Code control method with only Content-Type,
 // Authorization and User-Agent headers.
-// userAgent builds the User-Agent of one call from the current client
-// version setting, so a saved version applies without restart.
-func (c *Client) userAgent(ctx context.Context) (string, error) {
-	if c.resolveVersion == nil {
-		return UserAgent(DefaultClientVersion), nil
-	}
-	version, err := c.resolveVersion(ctx)
-	if err != nil || !ValidClientVersion(version) {
-		return "", errors.New("antigravity client version unavailable")
-	}
-	return UserAgent(version), nil
-}
-
 func (c *Client) call(ctx context.Context, accessToken, method string, body, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
@@ -387,13 +368,9 @@ func (c *Client) call(ctx context.Context, accessToken, method string, body, out
 	if err != nil {
 		return errors.New("invalid cloud code request")
 	}
-	agent, err := c.userAgent(ctx)
-	if err != nil {
-		return err
-	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.Header.Set("User-Agent", agent)
+	request.Header.Set("User-Agent", c.userAgent)
 	status, payload, err := c.do(request, maxCloudCodeBytes)
 	if err != nil {
 		return err

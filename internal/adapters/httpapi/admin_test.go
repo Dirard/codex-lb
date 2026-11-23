@@ -217,7 +217,7 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 	var loaded domain.RuntimeSettings
 	if initial.Code != http.StatusOK || json.Unmarshal(initial.Body.Bytes(), &loaded) != nil ||
 		loaded.RelativeAvailabilityPower != 2 || loaded.RelativeAvailabilityTopK != 5 ||
-		loaded.WarmupModel != "gpt-5.4-mini" || loaded.CodexClientVersion != "0.156.0" || loaded.AntigravityClientVersion != "2.34.0" ||
+		loaded.WarmupModel != "gpt-5.4-mini" || loaded.CodexClientVersion != "0.156.0" ||
 		loaded.OpenAICacheAffinityMaxAgeSeconds != 1800 || loaded.StickyReallocationPrimaryBudgetThresholdPct != 95 || loaded.StickyReallocationSecondaryBudgetThresholdPct != 100 ||
 		loaded.WeeklyPaceSmoothingMinutes != 30 || loaded.WeeklyPaceWorkingDays != "0,1,2,3,4,5,6" ||
 		!loaded.ShowResetCreditBadges || !loaded.ShowResetCreditExpiryBadge {
@@ -228,7 +228,6 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 		"showResetCreditBadges": false, "showResetCreditExpiryBadge": false,
 		"warmupModel":                      " gpt-6-sol ",
 		"codexClientVersion":               " 0.157.0-beta.1 ",
-		"antigravityClientVersion":         " 2.35.0 ",
 		"openaiCacheAffinityMaxAgeSeconds": 600, "stickyReallocationBudgetThresholdPct": 70,
 		"stickyReallocationPrimaryBudgetThresholdPct": 80, "stickyReallocationSecondaryBudgetThresholdPct": 90,
 		"weeklyPaceWorkingDays": "4, 0,4,2", "weeklyPaceSmoothingMinutes": 120,
@@ -236,7 +235,7 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 	var updated domain.RuntimeSettings
 	if saved.Code != http.StatusOK || json.Unmarshal(saved.Body.Bytes(), &updated) != nil ||
 		updated.RelativeAvailabilityPower != 1.5 || updated.RelativeAvailabilityTopK != 4 ||
-		updated.WarmupModel != "gpt-6-sol" || updated.CodexClientVersion != "0.157.0-beta.1" || updated.AntigravityClientVersion != "2.35.0" ||
+		updated.WarmupModel != "gpt-6-sol" || updated.CodexClientVersion != "0.157.0-beta.1" ||
 		updated.OpenAICacheAffinityMaxAgeSeconds != 600 || updated.StickyReallocationPrimaryBudgetThresholdPct != 80 || updated.StickyReallocationSecondaryBudgetThresholdPct != 90 ||
 		updated.WeeklyPaceSmoothingMinutes != 120 || updated.WeeklyPaceWorkingDays != "0,2,4" ||
 		updated.ShowResetCreditBadges || updated.ShowResetCreditExpiryBadge || updated.Version != loaded.Version+1 {
@@ -252,10 +251,6 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 		{"expectedVersion": updated.Version, "codexClientVersion": nil},
 		{"expectedVersion": updated.Version, "codexClientVersion": "latest"},
 		{"expectedVersion": updated.Version, "codexClientVersion": "0.156.0\r\nX-Injected: yes"},
-		{"expectedVersion": updated.Version, "antigravityClientVersion": ""},
-		{"expectedVersion": updated.Version, "antigravityClientVersion": "2.35"},
-		{"expectedVersion": updated.Version, "antigravityClientVersion": "2.35.0-beta"},
-		{"expectedVersion": updated.Version, "antigravityClientVersion": "2.35.0\r\nX-Injected: yes"},
 		{"expectedVersion": updated.Version, "openaiCacheAffinityMaxAgeSeconds": 0},
 		{"expectedVersion": updated.Version, "stickyReallocationPrimaryBudgetThresholdPct": -1},
 		{"expectedVersion": updated.Version, "stickyReallocationSecondaryBudgetThresholdPct": 101},
@@ -278,9 +273,6 @@ func TestRuntimeSettingsAPIValidationAndRestart(t *testing.T) {
 	for _, invalid := range []any{156, true, []string{"0.156.0"}} {
 		if response := request(http.MethodPut, "/api/settings", map[string]any{"expectedVersion": updated.Version, "codexClientVersion": invalid}); response.Code != http.StatusBadRequest {
 			t.Fatalf("non-string version accepted: %d", response.Code)
-		}
-		if response := request(http.MethodPut, "/api/settings", map[string]any{"expectedVersion": updated.Version, "antigravityClientVersion": invalid}); response.Code != http.StatusBadRequest {
-			t.Fatalf("non-string Antigravity version accepted: %d", response.Code)
 		}
 	}
 	if response := request(http.MethodPut, "/api/settings", map[string]any{

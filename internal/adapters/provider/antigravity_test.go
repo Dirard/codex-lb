@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,23 +60,11 @@ type recordedCall struct {
 	stream bool
 }
 
-// antigravityVersion is the runtime setting the test adapters read on every
-// call; a test may change it to show a saved version applies at once.
-var antigravityVersion atomic.Value
-
 func antigravityAdapter(t *testing.T, tokens *fakeAntigravityTokens, answers ...func() (application.ResponseResult, error)) (*Adapter, *[]recordedCall) {
 	t.Helper()
-	antigravityVersion.Store("2.35.1")
 	source, credential := antigravitySource()
 	adapter := New(&sourceStore{source: source, credential: credential}, tokenSource{}, testCipher{},
-		Config{AntigravityTokens: tokens, AntigravityBaseURL: "https://cloudcode.example.test",
-			ResolveAntigravityClientVersion: func(context.Context) (string, error) {
-				version, _ := antigravityVersion.Load().(string)
-				if version == "" {
-					return "", errors.New("synthetic unreadable setting")
-				}
-				return version, nil
-			}})
+		Config{AntigravityTokens: tokens, AntigravityBaseURL: "https://cloudcode.example.test", AntigravityClientVersion: "2.35.1"})
 	t.Cleanup(func() { _ = adapter.Close() })
 	calls := &[]recordedCall{}
 	adapter.sourceCall = func(_ context.Context, target upstream.Target, _ json.RawMessage, stream bool,
@@ -276,29 +263,5 @@ func TestTranslatedStreamsStartWithASyntheticCreatedEvent(t *testing.T) {
 	}
 	if syntheticStreamEvent(upstream.ProtocolResponses, "response.created") {
 		t.Fatal("a Responses provider's own created event was treated as synthetic")
-	}
-}
-
-func TestAntigravityClientVersionSettingAppliesToTheNextCall(t *testing.T) {
-	tokens := &fakeAntigravityTokens{}
-	adapter, calls := antigravityAdapter(t, tokens, answered, answered)
-	source, _ := antigravitySource()
-	body := json.RawMessage(`{"model":"gemini-3.8-flash-high","input":"hi"}`)
-	if _, err := adapter.Respond(context.Background(), antigravityTarget(source), body, nil); err != nil {
-		t.Fatal(err)
-	}
-	antigravityVersion.Store("2.36.0")
-	if _, err := adapter.Respond(context.Background(), antigravityTarget(source), body, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix((*calls)[0].target.AntigravityUserAgent, "antigravity/hub/2.35.1 ") ||
-		!strings.HasPrefix((*calls)[1].target.AntigravityUserAgent, "antigravity/hub/2.36.0 ") {
-		t.Fatalf("User-Agents: %q, %q", (*calls)[0].target.AntigravityUserAgent, (*calls)[1].target.AntigravityUserAgent)
-	}
-	antigravityVersion.Store("")
-	_, err := adapter.Respond(context.Background(), antigravityTarget(source), body, nil)
-	var failure *application.ProviderFailure
-	if !errors.As(err, &failure) || failure.Code != "antigravity_client_version_unavailable" || failure.Dispatched || len(*calls) != 2 {
-		t.Fatalf("an unreadable setting was not refused before dispatch: %v, %d calls", err, len(*calls))
 	}
 }
