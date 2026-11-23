@@ -350,6 +350,11 @@ func hasAPIKey(value NullableString) bool {
 	return value.Set && value.Value != nil && strings.TrimSpace(*value.Value) != ""
 }
 
+// ErrModelNotServed means the account does not serve the requested model at
+// all (no enabled source model or alias matches it), which is not the same
+// as a served model without a price.
+var ErrModelNotServed = errors.New("the account does not serve this model")
+
 func (s *ModelSourceService) Price(ctx context.Context, account domain.Account, model string) (pricing.Price, error) {
 	if account.Kind != domain.AccountExternal {
 		return pricing.Price{}, pricing.ErrUnpriced
@@ -360,7 +365,7 @@ func (s *ModelSourceService) Price(ctx context.Context, account domain.Account, 
 	}
 	entry, ok := source.Model(model)
 	if !ok {
-		return pricing.Price{}, pricing.ErrUnpriced
+		return pricing.Price{}, ErrModelNotServed
 	}
 	return ModelSourcePrice(entry)
 }

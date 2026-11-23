@@ -27,7 +27,7 @@ func defaultCodexPrice(store ModelSourceRepository) func(context.Context, domain
 			}
 			entry, ok := source.Model(model)
 			if !ok {
-				return pricing.Price{}, pricing.ErrUnpriced
+				return pricing.Price{}, ErrModelNotServed
 			}
 			return ModelSourcePrice(entry)
 		}

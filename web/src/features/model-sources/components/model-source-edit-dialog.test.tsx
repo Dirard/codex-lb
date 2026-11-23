@@ -71,6 +71,24 @@ describe("ModelSourceEditDialog", () => {
     expect(screen.getByLabelText("Base URL")).toHaveValue(source.baseUrl);
   });
 
+  it("gives a model added to the list the settings the form shows", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <ModelSourceEditDialog open busy={false} source={createModelSource()} onOpenChange={vi.fn()} onSubmit={onSubmit} />,
+    );
+    const models = screen.getByLabelText("Models");
+    await user.clear(models);
+    await user.type(models, "Qwen/Qwen3.6-27B-FP8, Qwen/Qwen3.7-32B");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const added = onSubmit.mock.calls[0][1].models.find((model: { model: string }) => model.model === "Qwen/Qwen3.7-32B");
+    expect(added).toMatchObject({
+      inputPer1M: 0.5, outputPer1M: 1.5, contextWindow: 32768, maxOutputTokens: 4096,
+      supportsStreaming: true, supportsTools: true, supportsVision: false,
+    });
+  });
+
   it("prefills existing fields including pricing and models", () => {
     renderWithProviders(
       <ModelSourceEditDialog

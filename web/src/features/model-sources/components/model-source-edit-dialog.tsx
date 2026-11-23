@@ -103,40 +103,43 @@ function buildModelInputs(
 ): ModelSourceModelInput[] {
   return modelNames.map((model) => {
     const existingModel = existingModelsByName.get(model);
+    // The form shows one set of settings "applied to every model listed":
+    // a model added to the list takes them all, not only the changed ones.
+    const isNew = existingModel === undefined;
 
     return {
       model,
       aliases: existingModel?.aliases,
       upstreamModel: existingModel?.upstreamModel,
       displayName: existingModel?.displayName ?? model,
-      contextWindow: draftChangeFlags.contextWindow
+      contextWindow: draftChangeFlags.contextWindow || isNew
         ? parsePositiveInt(draft.contextWindow)
         : existingModel?.contextWindow ?? null,
-      maxOutputTokens: draftChangeFlags.maxOutputTokens
+      maxOutputTokens: draftChangeFlags.maxOutputTokens || isNew
         ? parsePositiveInt(draft.maxOutputTokens)
         : existingModel?.maxOutputTokens ?? null,
-      supportsStreaming: draftChangeFlags.supportsStreaming
+      supportsStreaming: draftChangeFlags.supportsStreaming || isNew
         ? draft.supportsStreaming
         : existingModel?.supportsStreaming ?? true,
-      supportsTools: draftChangeFlags.supportsTools
+      supportsTools: draftChangeFlags.supportsTools || isNew
         ? draft.supportsTools
         : existingModel?.supportsTools ?? false,
-      supportsVision: draftChangeFlags.supportsVision
+      supportsVision: draftChangeFlags.supportsVision || isNew
         ? draft.supportsVision
         : existingModel?.supportsVision ?? false,
-      inputPer1M: draftChangeFlags.inputPer1M
+      inputPer1M: draftChangeFlags.inputPer1M || isNew
         ? parseNonNegativeFloat(draft.inputPer1M)
         : existingModel?.inputPer1M ?? null,
-      cachedInputPer1M: draftChangeFlags.cachedInputPer1M
+      cachedInputPer1M: draftChangeFlags.cachedInputPer1M || isNew
         ? parseNonNegativeFloat(draft.cachedInputPer1M)
         : existingModel?.cachedInputPer1M ?? null,
-      outputPer1M: draftChangeFlags.outputPer1M
+      outputPer1M: draftChangeFlags.outputPer1M || isNew
         ? parseNonNegativeFloat(draft.outputPer1M)
         : existingModel?.outputPer1M ?? null,
-      audioPerMinute: draftChangeFlags.audioPerMinute
+      audioPerMinute: draftChangeFlags.audioPerMinute || isNew
         ? parseNonNegativeFloat(draft.audioPerMinute)
         : existingModel?.audioPerMinute ?? null,
-      rawMetadataJson: draftChangeFlags.supportsReasoning
+      rawMetadataJson: draftChangeFlags.supportsReasoning || isNew
         ? mergeReasoningMetadata(
             existingModel?.rawMetadataJson,
             draft.supportsReasoning,
