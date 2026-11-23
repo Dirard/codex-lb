@@ -10,8 +10,6 @@ const modelSourceApiMocks = vi.hoisted(() => ({
   createModelSource: vi.fn(),
   updateModelSource: vi.fn(),
   deleteModelSource: vi.fn(),
-  startAntigravitySignIn: vi.fn(),
-  refreshAntigravityModels: vi.fn(),
 }));
 
 const toastMocks = vi.hoisted(() => ({

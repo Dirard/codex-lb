@@ -297,20 +297,6 @@ func providerFailureMessage(code string) string {
 		return "The upstream account could not be authorized"
 	case application.UsageLimitCode:
 		return "The usage limit of this conversation's account was reached; the conversation stays on that account until the limit resets"
-	case "upstream_content_refused":
-		return "The upstream provider refused this request for its content; change the request instead of retrying it"
-	case "model_capacity_exhausted":
-		return "The upstream provider has no capacity for this model right now; retry later"
-	case "rate_limit_exceeded":
-		return "The upstream provider is limiting the rate of requests for this model; retry later"
-	case "model_access_denied":
-		return "The upstream account's plan does not include this model"
-	case "account_suspended":
-		return "The upstream provider suspended this account; it was removed from the pool"
-	case "account_validation_required":
-		return "The upstream provider wants this account verified; it needs a new sign-in"
-	case "antigravity_account_unavailable":
-		return "The Antigravity account behind this model needs a new sign-in or is suspended"
 	}
 	return "Upstream request failed"
 }
@@ -334,13 +320,10 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		return
 	}
 	status, code, message := proxyError(err)
-	providerRetry := ""
-	if errors.As(err, &failure) && (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) {
-		// A voice limit or a provider rate or capacity refusal says when to
-		// retry.
+	if errors.As(err, &failure) && status == http.StatusTooManyRequests {
+		// A voice limit refusal says when to retry.
 		if retry := failure.LimitHeaders["Retry-After"]; len(retry) == 1 {
-			providerRetry = retry[0]
-			w.Header().Set("Retry-After", providerRetry)
+			w.Header().Set("Retry-After", retry[0])
 		}
 	}
 	if status == 429 && (code == "account_response_create_cap" || code == "account_stream_cap" || code == "api_key_stream_fair_share") {
@@ -348,7 +331,7 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "type": "rate_limit_error", "message": message}})
 		return
 	}
-	if status == 503 && providerRetry == "" {
+	if status == 503 {
 		w.Header().Set("Retry-After", "2")
 	}
 	var request *application.ProxyError

@@ -71,7 +71,6 @@ type Server struct {
 	automations    *application.AutomationsService
 	warmups        *application.WarmupService
 	video          *application.VideoService
-	antigravity    *application.AntigravityService
 	catalog        *application.ModelCatalogService
 	modelPricing   *ModelPricingHandler
 	firewall       *application.Firewall
@@ -222,7 +221,6 @@ func (s *Server) adminRoutes() *http.ServeMux {
 		s.registerWarmupRoutes(admin, s.warmups)
 	}
 	s.registerModelSourceRoutes(admin)
-	s.registerAntigravityRoutes(admin)
 	return admin
 }
 

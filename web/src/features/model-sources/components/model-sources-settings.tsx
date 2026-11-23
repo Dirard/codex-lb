@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Database, KeyRound, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Database, Pencil, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AlertMessage } from "@/components/alert-message";
@@ -8,15 +7,12 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { AntigravitySignInDialog } from "@/features/model-sources/components/antigravity-sign-in-dialog";
-import { AntigravitySourceDetails } from "@/features/model-sources/components/antigravity-source-details";
 import { ModelSourceCreateDialog } from "@/features/model-sources/components/model-source-create-dialog";
 import { ModelSourceEditDialog } from "@/features/model-sources/components/model-source-edit-dialog";
-import { grokAccountName, isAntigravitySource } from "@/features/model-sources/components/model-source-form";
+import { grokAccountName } from "@/features/model-sources/components/model-source-form";
 import { listVideoAccounts } from "@/features/video/api";
 import { useModelSources } from "@/features/model-sources/hooks/use-model-sources";
 import type {
-  AntigravitySignInStart,
   ModelSource,
   ModelSourceCreateRequest,
   ModelSourceUpdateRequest,
@@ -55,19 +51,7 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
     updateMutation,
     deleteMutation,
     stickyMutation,
-    antigravitySignInMutation,
-    refreshModelsMutation,
   } = useModelSources();
-  // The started Google sign-in and the source it re-authorizes, if any.
-  const [signIn, setSignIn] = useState<{ start: AntigravitySignInStart; sourceId?: string } | null>(null);
-  const startSignIn = async (sourceId?: string) => {
-    try {
-      const start = await antigravitySignInMutation.mutateAsync({ sourceId });
-      setSignIn({ start, sourceId });
-    } catch {
-      setSignIn(null);
-    }
-  };
   const createDialog = useDialogState();
   const editDialog = useDialogState<ModelSource>();
   const deleteDialog = useDialogState<ModelSource>();
@@ -88,17 +72,13 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
     createMutation.isPending ||
     updateMutation.isPending ||
     deleteMutation.isPending ||
-    stickyMutation.isPending ||
-    antigravitySignInMutation.isPending ||
-    refreshModelsMutation.isPending;
+    stickyMutation.isPending;
   const error =
     getErrorMessageOrNull(modelSourcesQuery.error) ||
     getErrorMessageOrNull(createMutation.error) ||
     getErrorMessageOrNull(updateMutation.error) ||
     getErrorMessageOrNull(deleteMutation.error) ||
-    getErrorMessageOrNull(stickyMutation.error) ||
-    getErrorMessageOrNull(antigravitySignInMutation.error) ||
-    getErrorMessageOrNull(refreshModelsMutation.error);
+    getErrorMessageOrNull(stickyMutation.error);
 
   const createSource = async (payload: ModelSourceCreateRequest) => {
     await createMutation.mutateAsync(payload);
@@ -120,29 +100,16 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
 	            <p className="text-xs text-muted-foreground">{t("modelSources.description")}</p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-8 gap-1.5 text-xs"
-            disabled={busy}
-            onClick={() => void startSignIn()}
-          >
-            <KeyRound className="h-3.5 w-3.5" />
-            {t("modelSources.antigravity.add")}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            className="h-8 gap-1.5 text-xs"
-            disabled={busy}
-            onClick={() => createDialog.show()}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("modelSources.actions.addSource")}
-          </Button>
-        </div>
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 gap-1.5 text-xs"
+          disabled={busy}
+          onClick={() => createDialog.show()}
+        >
+          <Plus className="h-3.5 w-3.5" />
+	          {t("modelSources.actions.addSource")}
+        </Button>
       </div>
 
       {error ? <AlertMessage variant="error">{error}</AlertMessage> : null}
@@ -164,15 +131,11 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
                       </Badge>
                     ))}
                   </div>
-                  {isAntigravitySource(source) ? (
-                    <AntigravitySourceDetails source={source} />
-                  ) : (
-                    <div className="truncate text-xs text-muted-foreground">
-                      {source.kind === "grok_subscription"
-                        ? t("modelSources.grok.listAccount", { account: grokAccountLabel(source) })
-                        : source.baseUrl}
-                    </div>
-                  )}
+                  <div className="truncate text-xs text-muted-foreground">
+                    {source.kind === "grok_subscription"
+                      ? t("modelSources.grok.listAccount", { account: grokAccountLabel(source) })
+                      : source.baseUrl}
+                  </div>
                   <div className="flex flex-wrap items-center gap-1 pt-1">
                     {source.models.map((model) => (
                       <Badge key={model.id} variant={model.isEnabled ? "outline" : "secondary"}>
@@ -185,32 +148,6 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {isAntigravitySource(source) ? (
-                    <>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        disabled={busy}
-                        title={t("modelSources.antigravity.refreshModels")}
-                        onClick={() => void refreshModelsMutation.mutateAsync(source.id).catch(() => undefined)}
-                      >
-                        <RefreshCw className="size-4" />
-                        <span className="sr-only">{t("modelSources.antigravity.refreshModelsAria", { name: source.name })}</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        disabled={busy}
-                        title={t("modelSources.antigravity.reauthorize")}
-                        onClick={() => void startSignIn(source.id)}
-                      >
-                        <KeyRound className="size-4" />
-                        <span className="sr-only">{t("modelSources.antigravity.reauthorizeAria", { name: source.name })}</span>
-                      </Button>
-                    </>
-                  ) : null}
                   <label
                     className="flex items-center gap-1.5 text-xs text-muted-foreground"
                     title={t("modelSources.actions.stickyOnlyAria", { name: source.name })}
@@ -266,16 +203,6 @@ export function ModelSourcesSettings({ disabled = false }: ModelSourcesSettingsP
           </div>
         )}
       </div>
-
-      {signIn ? (
-        <AntigravitySignInDialog
-          key={signIn.start.flowId}
-          start={signIn.start}
-          reauthorizing={Boolean(signIn.sourceId)}
-          onRestart={() => void startSignIn(signIn.sourceId)}
-          onClose={() => setSignIn(null)}
-        />
-      ) : null}
 
       <ModelSourceCreateDialog
         open={createDialog.open}

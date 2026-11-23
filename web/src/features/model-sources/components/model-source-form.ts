@@ -27,7 +27,7 @@ export type ModelSourceFormValues = z.infer<typeof modelSourceFormSchema>;
 // Per-model settings the dialogs apply uniformly across every model ID entered
 // for the source. Pricing is USD per 1M tokens; blank means "unknown" (cost
 // settles at $0 for that model).
-export type ModelSourceKind = "openai_compatible" | "zai" | "grok_subscription" | "antigravity";
+export type ModelSourceKind = "openai_compatible" | "zai" | "grok_subscription";
 
 // A Grok subscription source always talks to xAI; the server rejects any other URL.
 export const GROK_TEXT_BASE_URL = "https://api.x.ai/v1";
@@ -38,33 +38,7 @@ export function grokAccountName(account: { label: string; email: string; id: str
 }
 
 export function modelSourceKind(value: string): ModelSourceKind {
-  return value === "zai" || value === "grok_subscription" || value === "antigravity" ? value : "openai_compatible";
-}
-
-// Antigravity sources are added by signing in a Google account and keep its
-// token, so they have no key to enter and no URL to change.
-export function isAntigravitySource(source: { kind: string }): boolean {
-  return source.kind === "antigravity";
-}
-
-export type AntigravityAccountState = "active" | "reauth_required" | "suspended" | "other";
-
-/** The Antigravity account's state as the dashboard explains it. */
-export function antigravityAccountState(source: { accountStatus?: string; deactivationReason?: string }): AntigravityAccountState {
-  if (source.accountStatus === "reauth_required") return "reauth_required";
-  if (source.accountStatus === "deactivated" && source.deactivationReason === "tos_violation") return "suspended";
-  if (!source.accountStatus || source.accountStatus === "active") return "active";
-  return "other";
-}
-
-/** Only an https link from the server is rendered; anything else is dropped. */
-export function safeActionLink(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    return new URL(value).protocol === "https:" ? value : null;
-  } catch {
-    return null;
-  }
+  return value === "zai" || value === "grok_subscription" ? value : "openai_compatible";
 }
 
 export type ModelSourceDraft = {

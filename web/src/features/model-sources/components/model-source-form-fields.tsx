@@ -55,10 +55,6 @@ export function ModelSourceKindSelect({ draft, updateDraft, readOnly = false }: 
           <SelectItem value="openai_compatible">OpenAI-compatible API</SelectItem>
           <SelectItem value="zai">Z.AI / GLM</SelectItem>
           <SelectItem value="grok_subscription">{t("modelSources.grok.provider")}</SelectItem>
-          {/* Antigravity sources come only from a Google sign-in, never from this form. */}
-          {draft.kind === "antigravity" ? (
-            <SelectItem value="antigravity">{t("modelSources.antigravity.provider")}</SelectItem>
-          ) : null}
         </SelectContent>
       </Select>
     </div>
@@ -76,9 +72,8 @@ export function ModelSourceFormFields({
   const { t } = useTranslation();
   const fieldId = useId();
   // A Grok subscription source borrows its account's token for xAI's fixed
-  // endpoint, and an Antigravity source keeps its signed-in Google account's
-  // token, so neither has a key to enter or a URL to change.
-  const grok = draft.kind === "grok_subscription" || draft.kind === "antigravity";
+  // endpoint, so it has no key to enter and no URL to change.
+  const grok = draft.kind === "grok_subscription";
   return (
     <>
       <ModelSourceKindSelect draft={draft} updateDraft={updateDraft} readOnly={kindReadOnly} />

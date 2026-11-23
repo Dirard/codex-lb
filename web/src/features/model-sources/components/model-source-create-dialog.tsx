@@ -56,8 +56,7 @@ export function ModelSourceCreateDialog({
 
   const handleSubmit = async (values: ModelSourceFormValues) => {
     const payload: ModelSourceCreateRequest = {
-      // Antigravity sources come from a Google sign-in, never from this form.
-      kind: draft.kind === "antigravity" ? undefined : draft.kind,
+      kind: draft.kind,
       ...sourceRuntimeOptions(draft),
       name: values.name,
       baseUrl: values.baseUrl,

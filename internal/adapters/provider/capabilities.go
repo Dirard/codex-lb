@@ -35,9 +35,6 @@ func (metadata modelMetadata) reasoningEfforts() []string {
 }
 
 func sourceCapabilities(source domain.ModelSource, model domain.ModelSourceModel, protocol upstream.Protocol, transport upstream.StreamTransport) (upstream.Capabilities, error) {
-	if protocol == upstream.ProtocolAntigravity {
-		return antigravityCapabilities(model)
-	}
 	capabilities := upstream.Capabilities{
 		Protocol: protocol, StreamTransport: transport,
 		Tools: model.Tools, ParallelToolCalls: model.Tools, ImageInput: model.Vision,
@@ -77,26 +74,6 @@ func sourceCapabilities(source domain.ModelSource, model domain.ModelSourceModel
 	}
 	normalized, err := capabilities.Normalized()
 	return normalized, err
-}
-
-// antigravityCapabilities fits the Cloud Code protocol to one listed model:
-// image input when Google says it takes images, tools as the source model
-// says, reasoning from its metadata, plain HTTP and no hosted tools.
-func antigravityCapabilities(model domain.ModelSourceModel) (upstream.Capabilities, error) {
-	capabilities := upstream.AntigravityCapabilities()
-	capabilities.StreamTransport = upstream.TransportHTTP
-	capabilities.Tools = model.Tools
-	capabilities.ParallelToolCalls = model.Tools
-	capabilities.ImageInput = model.Vision
-	capabilities.ModelMappings = modelMappings(model)
-	var metadata modelMetadata
-	if strings.TrimSpace(model.RawMetadataJSON) != "" {
-		if err := json.Unmarshal([]byte(model.RawMetadataJSON), &metadata); err != nil {
-			return capabilities, providerFailure("invalid_model_metadata", 0, false)
-		}
-	}
-	capabilities.Reasoning = metadata.SupportsReasoning
-	return capabilities.Normalized()
 }
 
 func modelMappings(model domain.ModelSourceModel) map[string]string {

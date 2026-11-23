@@ -22,15 +22,6 @@ export const ModelSourceModelSchema = z.object({
   updatedAt: z.iso.datetime({ offset: true }),
 });
 
-/** The signed-in Google account of an Antigravity source; never a token. */
-export const AntigravityAccountInfoSchema = z.object({
-  email: z.string(),
-  project: z.string(),
-  tier: z.string().optional(),
-  /** Appeal link of a suspended account or verification link Google asks for. */
-  actionUrl: z.string().optional(),
-});
-
 export const ModelSourceSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -44,17 +35,9 @@ export const ModelSourceSchema = z.object({
   supportsEmbeddings: z.boolean().default(false),
   timeoutSeconds: z.number().int().positive().nullable().default(null),
   maxConcurrency: z.number().int().positive().nullable().default(null),
-  providerConfig: z
-    .object({
-      grokAccountId: z.string().optional(),
-      antigravity: AntigravityAccountInfoSchema.optional(),
-    })
-    .optional(),
+  providerConfig: z.object({ grokAccountId: z.string().optional() }).optional(),
   /** Conversations started on the source stay on it when its limit runs out. */
   stickyOnly: z.boolean().default(false),
-  /** Status of the source's account row, e.g. reauth_required or deactivated. */
-  accountStatus: z.string().optional(),
-  deactivationReason: z.string().optional(),
   createdAt: z.iso.datetime({ offset: true }),
   updatedAt: z.iso.datetime({ offset: true }),
   models: z.array(ModelSourceModelSchema).default([]),
@@ -113,19 +96,7 @@ export const ModelSourceUpdateRequestSchema = z.object({
   models: z.array(ModelSourceModelInputSchema).optional(),
 });
 
-export const AntigravitySignInStartSchema = z.object({
-  flowId: z.string(),
-  authorizationUrl: z.string(),
-  expiresAt: z.iso.datetime({ offset: true }),
-});
-
-export const AntigravitySignInCompleteRequestSchema = z.object({
-  code: z.string().trim().min(1).max(4096),
-});
-
 export type ModelSource = z.infer<typeof ModelSourceSchema>;
-export type AntigravityAccountInfo = z.infer<typeof AntigravityAccountInfoSchema>;
-export type AntigravitySignInStart = z.infer<typeof AntigravitySignInStartSchema>;
 export type ModelSourceModel = z.infer<typeof ModelSourceModelSchema>;
 export type ModelSourceModelInput = z.infer<typeof ModelSourceModelInputSchema>;
 export type ModelSourceCreateRequest = z.infer<typeof ModelSourceCreateRequestSchema>;

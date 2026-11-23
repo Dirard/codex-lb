@@ -7,8 +7,6 @@ import {
   createModelSource,
   deleteModelSource,
   listModelSources,
-  refreshAntigravityModels,
-  startAntigravitySignIn,
   updateModelSource,
 } from "@/features/model-sources/api";
 import type {
@@ -79,34 +77,11 @@ export function useModelSources() {
     },
   });
 
-  // A Google sign-in starts here; its dialog completes it with the code.
-  const antigravitySignInMutation = useMutation({
-    mutationFn: ({ sourceId }: { sourceId?: string }) => startAntigravitySignIn(sourceId),
-    onError: (error: Error) => {
-      toast.error(error.message || t("modelSources.antigravity.toasts.startFailed"));
-    },
-  });
-
-  const refreshModelsMutation = useMutation({
-    mutationFn: (sourceId: string) => refreshAntigravityModels(sourceId),
-    onSuccess: () => {
-      toast.success(t("modelSources.antigravity.toasts.modelsRefreshed"));
-      void queryClient.invalidateQueries({ queryKey: ["model-sources", "list"] });
-      void queryClient.invalidateQueries({ queryKey: ["api-keys", "list"] });
-      void queryClient.invalidateQueries({ queryKey: ["models"] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || t("modelSources.antigravity.toasts.refreshFailed"));
-    },
-  });
-
   return {
     modelSourcesQuery,
     createMutation,
     updateMutation,
     deleteMutation,
     stickyMutation,
-    antigravitySignInMutation,
-    refreshModelsMutation,
   };
 }
