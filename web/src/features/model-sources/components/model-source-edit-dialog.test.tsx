@@ -53,28 +53,6 @@ function createModelSource(overrides: Partial<ModelSource> = {}): ModelSource {
 }
 
 describe("ModelSourceEditDialog", () => {
-  it("edits an Antigravity source without a key field or a URL change", async () => {
-    const user = userEvent.setup();
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
-    const source = createModelSource({
-      kind: "antigravity",
-      name: "agent@example.test",
-      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-      supportsResponses: true,
-      providerConfig: { antigravity: { email: "agent@example.test", project: "aicode-consumers" } },
-    });
-    renderWithProviders(
-      <ModelSourceEditDialog open busy={false} source={source} onOpenChange={vi.fn()} onSubmit={onSubmit} />,
-    );
-    expect(screen.getAllByText("Google Antigravity").length).toBeGreaterThan(0);
-    expect(screen.queryByLabelText("Upstream API key")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Base URL")).toHaveAttribute("readonly");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect("apiKey" in onSubmit.mock.calls[0][1]).toBe(false);
-    expect(onSubmit.mock.calls[0][1].baseUrl).toBe(source.baseUrl);
-  });
-
   it("allows changing an existing Z.AI source to Responses without changing its URL or key", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);

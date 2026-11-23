@@ -211,9 +211,7 @@ func selectNativeChatSource(ctx context.Context, store NativeAPIStore, keyID, mo
 	}
 	sourceDefined := false
 	for _, source := range sources {
-		// An Antigravity source speaks Cloud Code, not Chat Completions: its
-		// chat requests are translated to Responses and served by the proxy.
-		if !source.Enabled || !source.Chat || source.Kind == domain.ModelSourceAntigravity {
+		if !source.Enabled || !source.Chat {
 			continue
 		}
 		if _, supported := source.Model(model); !supported {

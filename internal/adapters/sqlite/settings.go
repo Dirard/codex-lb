@@ -28,20 +28,6 @@ func (s *Store) LoadCodexClientVersion(ctx context.Context) (string, error) {
 	return version, nil
 }
 
-// LoadAntigravityClientVersion reads the Antigravity client version of the
-// Cloud Code User-Agent without loading unrelated settings.
-func (s *Store) LoadAntigravityClientVersion(ctx context.Context) (string, error) {
-	var version string
-	err := s.readDB.QueryRowContext(ctx, `SELECT antigravity_client_version FROM runtime_settings WHERE id=1`).Scan(&version)
-	if err != nil {
-		return "", err
-	}
-	if !domain.ValidAntigravityClientVersion(version) {
-		return "", ErrInvalid
-	}
-	return version, nil
-}
-
 func (s *Store) LoadSettings(ctx context.Context) (domain.RuntimeSettings, error) {
 	var v domain.RuntimeSettings
 	var retention, historyRetention sql.NullInt64
@@ -62,8 +48,7 @@ func (s *Store) LoadSettings(ctx context.Context) (domain.RuntimeSettings, error
 	 proxy_account_response_create_limit,proxy_account_stream_limit,
 	 proxy_account_stream_recovery_reserve,proxy_api_key_fair_share_congestion_threshold_pct,
 	 weekly_pace_working_days,weekly_pace_smoothing_minutes,openai_cache_affinity_max_age_seconds,
-	 sticky_reallocation_primary_budget_threshold_pct,sticky_reallocation_secondary_budget_threshold_pct,codex_client_version,
-	 antigravity_client_version
+	 sticky_reallocation_primary_budget_threshold_pct,sticky_reallocation_secondary_budget_threshold_pct,codex_client_version
  FROM runtime_settings WHERE id=1`).Scan(&v.APIKeyAuthEnabled, &v.HideUpstreamQuotaFromKeys,
 		&v.StickyThreadsEnabled, &v.TOTPRequiredOnLogin, &v.ProhibitFastMode,
 		&v.PreferEarlierResetAccounts, &v.PreferEarlierResetWindow,
@@ -77,12 +62,11 @@ func (s *Store) LoadSettings(ctx context.Context) (domain.RuntimeSettings, error
 		&v.LimitWarmupStaggeredIdleEnabled, &additionalPolicies, &v.Version,
 		&retention, &historyRetention, &createOverride, &streamOverride, &reserveOverride, &fairShareOverride,
 		&v.WeeklyPaceWorkingDays, &v.WeeklyPaceSmoothingMinutes, &v.OpenAICacheAffinityMaxAgeSeconds,
-		&v.StickyReallocationPrimaryBudgetThresholdPct, &v.StickyReallocationSecondaryBudgetThresholdPct, &v.CodexClientVersion,
-		&v.AntigravityClientVersion)
+		&v.StickyReallocationPrimaryBudgetThresholdPct, &v.StickyReallocationSecondaryBudgetThresholdPct, &v.CodexClientVersion)
 	if err != nil {
 		return v, err
 	}
-	if !domain.ValidCodexClientVersion(v.CodexClientVersion) || !domain.ValidAntigravityClientVersion(v.AntigravityClientVersion) {
+	if !domain.ValidCodexClientVersion(v.CodexClientVersion) {
 		return v, ErrInvalid
 	}
 	if err := normalizeWeeklyPaceSettings(&v); err != nil {
@@ -142,13 +126,6 @@ func (s *Store) LoadSettings(ctx context.Context) (domain.RuntimeSettings, error
 func (s *Store) SaveSettings(ctx context.Context, v domain.RuntimeSettings) error {
 	v.CodexClientVersion = strings.TrimSpace(v.CodexClientVersion)
 	if !domain.ValidCodexClientVersion(v.CodexClientVersion) {
-		return ErrInvalid
-	}
-	v.AntigravityClientVersion = strings.TrimSpace(v.AntigravityClientVersion)
-	if v.AntigravityClientVersion == "" {
-		v.AntigravityClientVersion = domain.DefaultAntigravityClientVersion
-	}
-	if !domain.ValidAntigravityClientVersion(v.AntigravityClientVersion) {
 		return ErrInvalid
 	}
 	if err := validateAffinitySettings(v); err != nil {
@@ -248,8 +225,7 @@ func (s *Store) SaveSettings(ctx context.Context, v domain.RuntimeSettings) erro
 	 proxy_account_response_create_limit=?,proxy_account_stream_limit=?,
 	 proxy_account_stream_recovery_reserve=?,proxy_api_key_fair_share_congestion_threshold_pct=?,
 	 weekly_pace_working_days=?,weekly_pace_smoothing_minutes=?,openai_cache_affinity_max_age_seconds=?,
-	 sticky_reallocation_primary_budget_threshold_pct=?,sticky_reallocation_secondary_budget_threshold_pct=?,codex_client_version=?,
-	 antigravity_client_version=?,version=version+1
+	 sticky_reallocation_primary_budget_threshold_pct=?,sticky_reallocation_secondary_budget_threshold_pct=?,codex_client_version=?,version=version+1
  WHERE id=1 AND version=?`, boolInt(v.APIKeyAuthEnabled), boolInt(v.HideUpstreamQuotaFromKeys),
 			boolInt(v.StickyThreadsEnabled), boolInt(v.TOTPRequiredOnLogin), boolInt(v.ProhibitFastMode),
 			boolInt(v.PreferEarlierResetAccounts), v.PreferEarlierResetWindow,
@@ -266,7 +242,7 @@ func (s *Store) SaveSettings(ctx context.Context, v domain.RuntimeSettings) erro
 			nullableIntValue(v.ProxyAccountStreamRecoveryReserveOverride), nullableIntValue(v.ProxyApiKeyFairShareCongestionThresholdPctOverride),
 			v.WeeklyPaceWorkingDays, v.WeeklyPaceSmoothingMinutes,
 			v.OpenAICacheAffinityMaxAgeSeconds, v.StickyReallocationPrimaryBudgetThresholdPct, v.StickyReallocationSecondaryBudgetThresholdPct,
-			v.CodexClientVersion, v.AntigravityClientVersion, v.Version)
+			v.CodexClientVersion, v.Version)
 		if err != nil {
 			return err
 		}

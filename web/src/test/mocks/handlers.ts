@@ -1963,49 +1963,6 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  http.post("/api/antigravity/sign-in", () => {
-    return HttpResponse.json({
-      flowId: "agsign_mock",
-      authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=mock-state",
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    });
-  }),
-
-  http.post("/api/antigravity/sign-in/:flowId", ({ params }) => {
-    const now = new Date().toISOString();
-    const sourceId = `src_antigravity_${String(params.flowId)}`;
-    const source = createModelSource({
-      id: sourceId,
-      name: "agent@example.test",
-      kind: "antigravity",
-      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-      supportsChatCompletions: true,
-      supportsResponses: true,
-      stickyOnly: true,
-      accountStatus: "active",
-      providerConfig: { antigravity: { email: "agent@example.test", project: "aicode-consumers", tier: "g1-pro-tier" } },
-      models: [{
-        id: 1, sourceId, model: "gemini-3.8-flash-high", displayName: "Gemini 3.8 Flash", contextWindow: 1048576,
-        maxOutputTokens: 65536, supportsStreaming: true, supportsTools: true, supportsVision: true, inputPer1M: 0,
-        cachedInputPer1M: 0, outputPer1M: 0, audioPerMinute: null, rawMetadataJson: null, isEnabled: true,
-        createdAt: now, updatedAt: now,
-      }],
-    });
-    state.modelSources = [...state.modelSources.filter((entry) => entry.id !== sourceId), source];
-    return HttpResponse.json(source);
-  }),
-
-  http.post("/api/model-sources/:sourceId/antigravity/refresh-models", ({ params }) => {
-    const source = state.modelSources.find((entry) => entry.id === String(params.sourceId));
-    if (!source || source.kind !== "antigravity") {
-      return HttpResponse.json(
-        { error: { code: "antigravity_source_not_found", message: "This Antigravity source no longer exists" } },
-        { status: 404 },
-      );
-    }
-    return HttpResponse.json(source);
-  }),
-
   http.get("/api/account-groups/", () => {
     syncGroupKeyCounts();
     return HttpResponse.json(state.accountGroups);

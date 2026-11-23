@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
 	"codex-lb/internal/application"
@@ -139,7 +138,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		domain.RuntimeSettings
 		ExpectedVersion     *int64          `json:"expectedVersion"`
 		ClientVersion       json.RawMessage `json:"codexClientVersion"`
-		AntigravityVersion  json.RawMessage `json:"antigravityClientVersion"`
 		CreateLimit         json.RawMessage `json:"proxyAccountResponseCreateLimit"`
 		StreamLimit         json.RawMessage `json:"proxyAccountStreamLimit"`
 		RecoveryReserve     json.RawMessage `json:"proxyAccountStreamRecoveryReserve"`
@@ -167,18 +165,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		payload.CodexClientVersion = value
-	}
-	if len(payload.AntigravityVersion) > 0 {
-		var value string
-		if json.Unmarshal(payload.AntigravityVersion, &value) != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "Invalid Antigravity client version")
-			return
-		}
-		if strings.TrimSpace(value) == "" {
-			writeError(w, http.StatusUnprocessableEntity, "invalid_request", "Invalid settings or resource data")
-			return
-		}
-		payload.AntigravityClientVersion = value
 	}
 	if payload.CacheAffinityTTL != nil {
 		payload.OpenAICacheAffinityMaxAgeSeconds = *payload.CacheAffinityTTL

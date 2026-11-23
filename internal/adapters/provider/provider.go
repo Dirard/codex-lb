@@ -9,13 +9,11 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptrace"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"codex-lb/internal/adapters/antigravity"
 	"codex-lb/internal/adapters/upstream"
 	"codex-lb/internal/application"
 	"codex-lb/internal/domain"
@@ -44,18 +42,6 @@ type GrokTokenSource interface {
 	GrokAccessToken(ctx context.Context, accountID string, rejectedVersion int64) (string, int64, error)
 }
 
-// AntigravityTokens lends an Antigravity source its account's current
-// access token and Cloud Code project, and records refusals that change the
-// account. rejectedVersion, when not negative, asks for a token newer than
-// the one Google rejected.
-type AntigravityTokens interface {
-	AntigravityAccessToken(ctx context.Context, sourceID string, rejectedVersion int64) (token string, version int64, project string, err error)
-	// ReportAntigravityRefusal records an account refusal: code is
-	// upstream.ErrorCodeAccountSuspended or
-	// upstream.ErrorCodeAccountValidationRequired, actionURL its link.
-	ReportAntigravityRefusal(ctx context.Context, sourceID, code, actionURL string) error
-}
-
 type Config struct {
 	HTTPClient               *http.Client
 	ChatGPTBaseURL           string
@@ -71,20 +57,6 @@ type Config struct {
 	// GrokBaseURL is where Grok subscription tokens go, whatever a source
 	// stores; tests replace it.
 	GrokBaseURL string
-	// AntigravityTokens serves Antigravity sources; without it they fail
-	// before dispatch.
-	AntigravityTokens AntigravityTokens
-	// AntigravityBaseURL is where Antigravity tokens go (domain
-	// AntigravityBaseURL); tests replace it.
-	AntigravityBaseURL string
-	// ResolveAntigravityClientVersion reads the Antigravity client version of
-	// the Cloud Code User-Agent (the runtime setting) on every call; nil
-	// means the default version.
-	ResolveAntigravityClientVersion func(context.Context) (string, error)
-	// AntigravityHTTPClient carries the Antigravity model traffic; nil means
-	// the shared HTTPClient. The runtime passes the Chrome-profile transport
-	// here (owner decision 2026-11-22).
-	AntigravityHTTPClient *http.Client
 }
 
 type Adapter struct {
@@ -96,10 +68,6 @@ type Adapter struct {
 	sourceMu     sync.Mutex
 	sourceActive map[string]int
 	realtime     realtimeBounds
-	// sourceCall sends a model-source request upstream; nil means a.call.
-	// Tests replace it to observe the target a source dispatch builds.
-	sourceCall func(ctx context.Context, target upstream.Target, body json.RawMessage, stream bool,
-		emit func(application.ResponseEvent) error, firstUpstreamEvent func()) (application.ResponseResult, error)
 }
 
 func (a *Adapter) Close() error { return a.client.Close() }
@@ -124,12 +92,8 @@ func New(store SourceStore, tokens ChatGPTTokenSource, cipher application.Secret
 	if config.GrokBaseURL == "" {
 		config.GrokBaseURL = domain.GrokTextBaseURL
 	}
-	if config.AntigravityBaseURL == "" {
-		config.AntigravityBaseURL = domain.AntigravityBaseURL
-	}
 	client := upstream.New(config.HTTPClient, config.Continuations)
 	client.SetWebSocketSessionLimit(config.UpstreamWebSocketSessions)
-	client.SetAntigravityClient(config.AntigravityHTTPClient)
 	return &Adapter{
 		store: store, cipher: cipher, chatgpt: tokens, client: client,
 		config: config, realtime: defaultRealtimeBounds,
@@ -185,7 +149,6 @@ func (a *Adapter) respondExternal(
 		return application.ResponseResult{}, providerFailure("streaming_unsupported", 0, false)
 	}
 	grok := source.Kind == domain.ModelSourceGrokSubscription
-	antigravitySource := source.Kind == domain.ModelSourceAntigravity
 	// A Grok Responses request is reshaped to what xAI accepts, which
 	// includes fitting its reasoning effort to the model.
 	var names grokToolNames
@@ -200,19 +163,13 @@ func (a *Adapter) respondExternal(
 	if err != nil {
 		return application.ResponseResult{}, providerFailure("model_source_credential_unavailable", 0, false)
 	}
-	var key, project string
+	var key string
 	var tokenVersion int64
 	baseURL := source.BaseURL
-	switch {
-	case grok:
+	if grok {
 		key, tokenVersion, err = a.grokToken(ctx, source, -1)
 		baseURL = a.config.GrokBaseURL
-	case antigravitySource:
-		// The stored credential is the refresh token; only the service that
-		// owns it reads it, and the provider takes an access token.
-		key, tokenVersion, project, err = a.antigravityToken(ctx, source, -1)
-		baseURL = a.config.AntigravityBaseURL
-	default:
+	} else {
 		key, err = a.plainCredential(credential.ExternalKeyEncrypted)
 	}
 	if err != nil {
@@ -220,12 +177,9 @@ func (a *Adapter) respondExternal(
 	}
 
 	protocol := upstream.ProtocolChatCompletions
-	switch {
-	case antigravitySource:
-		protocol = upstream.ProtocolAntigravity
-	case source.Responses:
+	if source.Responses {
 		protocol = upstream.ProtocolResponses
-	case !source.Chat:
+	} else if !source.Chat {
 		return application.ResponseResult{}, providerFailure("responses_protocol_unsupported", 0, false)
 	}
 	transport := upstream.TransportHTTP
@@ -247,16 +201,6 @@ func (a *Adapter) respondExternal(
 		SessionID: target.SessionID, RequiredCapability: target.RequiredCapability,
 		BaseURL: baseURL, Credential: key, Capabilities: capabilities,
 	}
-	if antigravitySource {
-		version := antigravity.DefaultClientVersion
-		if a.config.ResolveAntigravityClientVersion != nil {
-			if version, err = a.config.ResolveAntigravityClientVersion(ctx); err != nil || !antigravity.ValidClientVersion(version) {
-				return application.ResponseResult{}, providerFailure("antigravity_client_version_unavailable", 0, false)
-			}
-		}
-		upstreamTarget.AntigravityProject = project
-		upstreamTarget.AntigravityUserAgent = antigravity.UserAgent(version)
-	}
 	if len(names) != 0 && emit != nil {
 		clientEmit := emit
 		emit = func(event application.ResponseEvent) error {
@@ -264,80 +208,18 @@ func (a *Adapter) respondExternal(
 			return clientEmit(event)
 		}
 	}
-	send := a.sourceCall
-	if send == nil {
-		send = a.call
-	}
-	result, callErr := send(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
-	if (grok || antigravitySource) && retryableAuthRejection(result, callErr) {
-		// The subscription token expired or was revoked before the provider
-		// did anything: the same account may answer once more with a newer
-		// token.
-		if grok {
-			upstreamTarget.Credential, _, err = a.grokToken(ctx, source, tokenVersion)
-		} else {
-			upstreamTarget.Credential, _, upstreamTarget.AntigravityProject, err = a.antigravityToken(ctx, source, tokenVersion)
-		}
-		if err != nil {
+	result, callErr := a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
+	if grok && retryableAuthRejection(result, callErr) {
+		// The subscription token expired or was revoked before xAI did
+		// anything: the same account may answer once more with a newer token.
+		if upstreamTarget.Credential, _, err = a.grokToken(ctx, source, tokenVersion); err != nil {
 			return result, err
 		}
-		result, callErr = send(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
-	}
-	if antigravitySource {
-		a.applyAntigravityRefusal(ctx, source.ID, result, callErr)
+		result, callErr = a.call(ctx, upstreamTarget, body, stream, emit, target.OnFirstUpstreamEvent)
 	}
 	result.Response = names.restoreResponse(result.Response)
 	return result, callErr
 }
-
-// antigravityToken takes an Antigravity source's current access token and
-// Cloud Code project. A source that needs a new sign-in, was suspended or is
-// gone fails before dispatch.
-func (a *Adapter) antigravityToken(ctx context.Context, source domain.ModelSource, rejectedVersion int64) (string, int64, string, error) {
-	if a.config.AntigravityTokens == nil {
-		return "", 0, "", providerFailure("antigravity_account_unavailable", 0, false)
-	}
-	token, version, project, err := a.config.AntigravityTokens.AntigravityAccessToken(ctx, source.ID, rejectedVersion)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", 0, "", ctx.Err()
-		}
-		return "", 0, "", providerFailure("antigravity_account_unavailable", 0, false)
-	}
-	return token, version, project, nil
-}
-
-// applyAntigravityRefusal hands a suspension or verification request to the
-// token service, which changes the account; the request itself stays refused
-// and is never moved to another account.
-func (a *Adapter) applyAntigravityRefusal(ctx context.Context, sourceID string, result application.ResponseResult, callErr error) {
-	if a.config.AntigravityTokens == nil {
-		return
-	}
-	code, actionURL := result.ErrorCode, ""
-	var refusal *accountRefusal
-	var failure *application.ProviderFailure
-	if errors.As(callErr, &refusal) {
-		code, actionURL = refusal.Code, refusal.actionURL
-	} else if errors.As(callErr, &failure) {
-		code = failure.Code
-	}
-	if code != upstream.ErrorCodeAccountSuspended && code != upstream.ErrorCodeAccountValidationRequired {
-		return
-	}
-	// The service records the effect with its own detached deadline.
-	_ = a.config.AntigravityTokens.ReportAntigravityRefusal(ctx, sourceID, code, actionURL)
-}
-
-// accountRefusal is a provider failure that changes the account behind it.
-// Its link (an appeal or verification URL) stays inside the provider and
-// never reaches the client.
-type accountRefusal struct {
-	*application.ProviderFailure
-	actionURL string
-}
-
-func (e *accountRefusal) Unwrap() error { return e.ProviderFailure }
 
 // upstreamModelName is the provider's own name for a source model.
 func upstreamModelName(model domain.ModelSourceModel) string {
@@ -476,11 +358,10 @@ func (a *Adapter) call(
 			return application.ResponseResult{}, providerFailure("stream_consumer_required", 0, false)
 		}
 		result, err = a.client.OpenStream(ctx, target, request, func(event upstream.Event) error {
-			synthetic := syntheticStreamEvent(target.Capabilities.Protocol, event.Type)
-			if firstUpstreamEvent != nil && !synthetic {
+			if firstUpstreamEvent != nil && (target.Capabilities.Protocol != upstream.ProtocolChatCompletions || event.Type != "response.created") {
 				firstOnce.Do(firstUpstreamEvent)
 			}
-			if firstEventMS == 0 && !synthetic {
+			if firstEventMS == 0 && !(target.Capabilities.Protocol == upstream.ProtocolChatCompletions && event.Type == "response.created") {
 				firstEventMS = max(1, time.Since(started).Milliseconds())
 			}
 			if event.Type != "response.created" && event.Type != "response.in_progress" && event.Type != "response.completed" && event.Type != "response.failed" && event.Type != "response.incomplete" && event.Type != "error" {
@@ -514,13 +395,6 @@ func (a *Adapter) call(
 		return appResult, wrapUpstreamFailure(err)
 	}
 	return appResult, nil
-}
-
-// syntheticStreamEvent is the response.created a translated stream (Chat
-// Completions, Antigravity) emits before the provider answered anything; it
-// neither releases the create lease nor counts as the first upstream event.
-func syntheticStreamEvent(protocol upstream.Protocol, eventType string) bool {
-	return eventType == "response.created" && (protocol == upstream.ProtocolChatCompletions || protocol == upstream.ProtocolAntigravity)
 }
 
 func (a *Adapter) plainCredential(encrypted []byte) (string, error) {
@@ -601,20 +475,6 @@ func wrapUpstreamFailure(err error) error {
 	failure.WebSocketHTTPFallback = upstreamErr.WebSocketHTTPFallback
 	failure.RejectedBeforeExecution = upstreamErr.RejectedBeforeExecution
 	failure.LimitHeaders = upstreamErr.LimitHeaders
-	if upstreamErr.RetryAfter > 0 && len(failure.LimitHeaders["Retry-After"]) == 0 {
-		// The provider's own hint (Google's retry delay) tells the client
-		// when to come back, in whole seconds of at most a day.
-		headers := make(map[string][]string, len(failure.LimitHeaders)+1)
-		for name, values := range failure.LimitHeaders {
-			headers[name] = values
-		}
-		seconds := min(int64(math.Ceil(upstreamErr.RetryAfter.Seconds())), 86400)
-		headers["Retry-After"] = []string{strconv.FormatInt(seconds, 10)}
-		failure.LimitHeaders = headers
-	}
-	if upstreamErr.ActionURL != "" && (upstreamErr.Code == upstream.ErrorCodeAccountSuspended || upstreamErr.Code == upstream.ErrorCodeAccountValidationRequired) {
-		return &accountRefusal{ProviderFailure: failure, actionURL: upstreamErr.ActionURL}
-	}
 	// Keep cancellation identity without discarding the adapter's proof that
 	// this request never reached response.create. Never retain raw error text.
 	if errors.Is(err, context.Canceled) {

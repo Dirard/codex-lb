@@ -99,9 +99,6 @@ const EXPECTED_ENDPOINTS = [
 	"POST /api/model-sources/",
 	"PATCH /api/model-sources/:sourceId",
 	"DELETE /api/model-sources/:sourceId",
-	"POST /api/model-sources/:sourceId/antigravity/refresh-models",
-	"POST /api/antigravity/sign-in",
-	"POST /api/antigravity/sign-in/:flowId",
 	// api-keys
 	"GET /api/api-keys/",
 	"GET /api/api-keys/:keyId",

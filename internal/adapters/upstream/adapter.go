@@ -23,11 +23,7 @@ type Adapter interface {
 }
 
 type HTTPAdapter struct {
-	client *http.Client
-	// antigravityClient carries the Antigravity model traffic; nil means the
-	// shared client. It holds the Chrome-profile transport, the fingerprint
-	// Antigravity-Manager presents to Google (owner decision 2026-11-22).
-	antigravityClient     *http.Client
+	client                *http.Client
 	store                 *ContinuationStore
 	sessions              websocketSessions
 	websocketPingInterval time.Duration
@@ -41,32 +37,7 @@ type HTTPAdapter struct {
 func (a *HTTPAdapter) Close() error {
 	a.sessions.close()
 	a.client.CloseIdleConnections()
-	if dedicated := a.antigravityHTTPClient(); dedicated != a.client {
-		dedicated.CloseIdleConnections()
-	}
 	return nil
-}
-
-// antigravityHTTPClient is the client of the Antigravity calls: the dedicated
-// one when it was set, else the shared client.
-func (a *HTTPAdapter) antigravityHTTPClient() *http.Client {
-	if a.antigravityClient != nil {
-		return a.antigravityClient
-	}
-	return a.client
-}
-
-// SetAntigravityClient sends every Antigravity model request through client
-// instead of the shared upstream client; call it before the adapter serves
-// requests. Its redirect policy is forced like the shared client's, so an
-// upstream redirect never carries an account token to another endpoint.
-func (a *HTTPAdapter) SetAntigravityClient(client *http.Client) {
-	if client == nil {
-		return
-	}
-	owned := *client
-	owned.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	a.antigravityClient = &owned
 }
 
 // SetWebSocketSessionLimit bounds live upstream WebSocket sessions; call it
@@ -111,9 +82,6 @@ func (a *HTTPAdapter) Execute(ctx context.Context, target Target, request Reques
 		}
 		return a.executeResponses(ctx, prepared, req)
 	}
-	if prepared.Capabilities.Protocol == ProtocolAntigravity {
-		return a.executeAntigravity(ctx, prepared, req, items, catalog)
-	}
 	return a.executeChat(ctx, prepared, req, items, catalog)
 }
 
@@ -137,9 +105,6 @@ func (a *HTTPAdapter) OpenStream(ctx context.Context, target Target, request Req
 			return a.streamResponsesWebSocket(ctx, prepared, req, emit)
 		}
 		return a.streamResponses(ctx, prepared, req, emit)
-	}
-	if prepared.Capabilities.Protocol == ProtocolAntigravity {
-		return a.streamAntigravity(ctx, prepared, req, items, catalog, emit)
 	}
 	return a.streamChat(ctx, prepared, req, items, catalog, emit)
 }

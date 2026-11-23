@@ -17,14 +17,7 @@ const (
 	// ModelSourceGrokSubscription serves text through a Grok account of the
 	// video pool, with that account's OAuth token instead of an API key.
 	ModelSourceGrokSubscription ModelSourceKind = "grok_subscription"
-	// ModelSourceAntigravity serves a Google Antigravity account's models
-	// through Cloud Code v1internal with that account's own OAuth tokens.
-	ModelSourceAntigravity ModelSourceKind = "antigravity"
 )
-
-// AntigravityBaseURL is the only endpoint of an Antigravity source; the
-// account's Google token is never sent anywhere else.
-const AntigravityBaseURL = "https://daily-cloudcode-pa.googleapis.com"
 
 // GrokTextBaseURL is the only endpoint of a Grok subscription source; the
 // subscription token is never sent anywhere else.
@@ -60,16 +53,10 @@ type ModelSource struct {
 	ProviderConfig ModelSourceProviderConfig `json:"providerConfig,omitempty"`
 	// StickyOnly mirrors the sticky-only option of the source's account row;
 	// it is changed through the account, never by a source save.
-	StickyOnly bool `json:"stickyOnly"`
-	// AccountStatus and DeactivationReason mirror the source's account row,
-	// for example reauth_required after Google refused an Antigravity token;
-	// like StickyOnly they are read with the source and never written by a
-	// source save.
-	AccountStatus      AccountStatus      `json:"accountStatus,omitempty"`
-	DeactivationReason string             `json:"deactivationReason,omitempty"`
-	Models             []ModelSourceModel `json:"models"`
-	CreatedAt          time.Time          `json:"createdAt"`
-	UpdatedAt          time.Time          `json:"updatedAt"`
+	StickyOnly bool               `json:"stickyOnly"`
+	Models     []ModelSourceModel `json:"models"`
+	CreatedAt  time.Time          `json:"createdAt"`
+	UpdatedAt  time.Time          `json:"updatedAt"`
 }
 
 type ModelSourceProviderConfig struct {
@@ -82,20 +69,6 @@ type ModelSourceProviderConfig struct {
 	// GrokAccountID names the video-pool account a Grok subscription source
 	// borrows its token from; other kinds leave it empty.
 	GrokAccountID string `json:"grokAccountId,omitempty"`
-	// Antigravity describes the signed-in Google account of an Antigravity
-	// source; other kinds leave it nil. Its refresh token is never here: it
-	// lives encrypted in the source's credential row.
-	Antigravity *AntigravityAccountInfo `json:"antigravity,omitempty"`
-}
-
-// AntigravityAccountInfo is the non-secret part of an Antigravity sign-in.
-type AntigravityAccountInfo struct {
-	Email   string `json:"email"`
-	Project string `json:"project"`
-	Tier    string `json:"tier,omitempty"`
-	// ActionURL is the appeal link of a suspended account or the
-	// verification link of an account Google wants verified.
-	ActionURL string `json:"actionUrl,omitempty"`
 }
 
 type ModelSourceModel struct {
@@ -131,18 +104,6 @@ func (source ModelSource) Validate() error {
 		if source.Audio || source.Embeddings {
 			return fmt.Errorf("%w: Z.AI sources support Chat Completions and Responses only", ErrInvalid)
 		}
-	case ModelSourceAntigravity:
-		if source.Audio || source.Embeddings {
-			return fmt.Errorf("%w: Antigravity sources support Chat Completions and Responses only", ErrInvalid)
-		}
-		if strings.TrimSpace(source.BaseURL) != AntigravityBaseURL {
-			return fmt.Errorf("%w: Antigravity sources use %s", ErrInvalid, AntigravityBaseURL)
-		}
-		info := source.ProviderConfig.Antigravity
-		if info == nil || strings.TrimSpace(info.Email) == "" || len(info.Email) > 320 ||
-			strings.TrimSpace(info.Project) == "" || len(info.Project) > 128 || len(info.Tier) > 64 || len(info.ActionURL) > 2048 {
-			return fmt.Errorf("%w: Antigravity sources need a signed-in Google account", ErrInvalid)
-		}
 	case ModelSourceGrokSubscription:
 		if source.Audio || source.Embeddings {
 			return fmt.Errorf("%w: Grok subscription sources support Chat Completions and Responses only", ErrInvalid)
@@ -158,9 +119,6 @@ func (source ModelSource) Validate() error {
 	}
 	if source.Kind != ModelSourceGrokSubscription && source.ProviderConfig.GrokAccountID != "" {
 		return fmt.Errorf("%w: only Grok subscription sources name a Grok account", ErrInvalid)
-	}
-	if source.Kind != ModelSourceAntigravity && source.ProviderConfig.Antigravity != nil {
-		return fmt.Errorf("%w: only Antigravity sources describe a Google account", ErrInvalid)
 	}
 	if !source.Chat && !source.Responses && !source.Audio && !source.Embeddings {
 		return fmt.Errorf("%w: model source needs at least one protocol", ErrInvalid)
