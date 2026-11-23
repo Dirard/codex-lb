@@ -14,7 +14,7 @@ The owner can add Google Antigravity accounts, «добавлять аккаун
   - existing `internal/adapters/upstream` translation of Responses to Chat Completions (`translateToChat`, `chatStreamState`);
   - new dashboard flow «Add Antigravity account» (paste-code OAuth).
 - Changed assumption: model sources authenticate with a static key or borrow a Grok token; none speaks Google's Cloud Code `v1internal` protocol. Research: `.local/research/antigravity/protocol.md` (2026-11-22).
-- Owner decision (2026-11-22): build it although Antigravity's Terms (Section 6) call third-party access a breach and Google suspended such pools on 2026-11-06 and 2026-11-14; the owner takes the risk («Делать, риск беру на себя»). Boundary agreed in the question: no client fingerprint emulation (TLS, HTTP/2 settings, header order, native request shapes beyond the protocol) and no prompt rewriting to evade content filters. Superseded later the same day (see R4 and the decision log): the owner asked for the Chrome 123 transport profile of Antigravity-Manager on Antigravity Google traffic; native request shapes beyond the protocol and prompt rewriting stay out.
+- Owner decision (2026-11-22): build it although Antigravity's Terms (Section 6) call third-party access a breach and Google suspended such pools on 2026-11-06 and 2026-11-14; the owner takes the risk («Делать, риск беру на себя»). Boundary agreed in the question: no client fingerprint emulation (TLS, HTTP/2 settings, header order, native request shapes beyond the protocol) and no prompt rewriting to evade content filters.
 - Non-local: domain source kind and credential, OAuth client, Cloud Code client, upstream protocol translation, provider dispatch, account status handling, model source service, admin API, dashboard, OpenSpec `go-runtime` and `frontend-architecture`, release notes.
 - OpenSpec change `add-antigravity-accounts`, archived as `openspec/changes/archive/2026-11-22-add-antigravity-accounts/`: `go-runtime` ADDED «Antigravity accounts sign in as model sources», «Antigravity sources serve Responses and Chat Completions», «Antigravity refusals are classified»; `frontend-architecture` ADDED «Dashboard signs in and shows Antigravity accounts».
 - Impacted specs:
@@ -74,7 +74,7 @@ Requirements:
 The provider SHALL refresh the access token before it expires (one refresh at a time per source) and retry once after a 401 when nothing was visible. A refused refresh (`invalid_grant`) SHALL mark the source's account `reauth_required`.
 
   R4:
-Every Cloud Code call SHALL send `User-Agent: antigravity/hub/<version> (aidev_client; os_type=windows; arch=amd64; cl=1023160026)`, where the version is the runtime setting `antigravityClientVersion` (default `2.33.0`, see use case 5) the way codex-lb presents the Codex client version to OpenAI, and only `Content-Type`, `Authorization` and `User-Agent` headers. The connection SHALL carry the transport fingerprint of Chrome 123 (owner decision 2026-11-22, the profile of Antigravity-Manager's rquest `Emulation::Chrome123`): the captured Chrome ClientHello with randomized extension order, ECH GREASE, PSK and ALPS `h2`; HTTP/2 settings `1:65536, 2:0, 4:6291456, 6:262144` in that order, connection window increment `15663105`, and pseudo-header order `:method,:authority,:scheme,:path`. The fingerprint lives in the transport only. It SHALL NOT copy native-only request fields (`labels`, native `requestId` shapes) or rewrite prompts to pass content filters.
+Every Cloud Code call SHALL send `User-Agent: antigravity/hub/<version> (aidev_client; os_type=<GOOS>; arch=<GOARCH>)`, where the version is the runtime setting `antigravityClientVersion` (default `2.34.0`, see use case 5) the way codex-lb presents the Codex client version to OpenAI, and only `Content-Type`, `Authorization` and `User-Agent` headers. It SHALL NOT invent a changelist, emulate TLS or HTTP/2 fingerprints, copy native-only request fields (`labels`, native `requestId` shapes) or rewrite prompts to pass content filters.
 
   R4a:
 The translation SHALL map system text to `systemInstruction`, user text and images to `contents` parts, assistant text, tool calls and tool results to `model`/`user` turns with `functionCall`/`functionResponse`, tools to cleaned `functionDeclarations`, `reasoning.effort` to `thinkingConfig`, and `max_output_tokens` to `maxOutputTokens`. It SHALL drop empty parts, keep one stable `sessionId` per conversation, and send `userAgent: "antigravity"`, `requestType: "agent"` and a fresh `requestId`.
@@ -117,14 +117,14 @@ operator --save a new Antigravity client version in Settings--> stored setting -
 Requirements:
 
   R10:
-`runtime_settings.antigravity_client_version` SHALL hold the Antigravity client version (default `2.33.0`, format `<major>.<minor>.<patch>` with up to 4, 4 and 6 digits; schema V53 seeded `2.34.0` and V54 corrects that seed). `GET /api/settings` SHALL return it as `antigravityClientVersion`, and `PUT /api/settings` SHALL accept and validate it the way it handles `codexClientVersion`. Every Cloud Code call (sign-in control calls and inference) SHALL read the current value, so a saved version applies to the next call without restart; an unreadable setting SHALL refuse the call before dispatch. The environment variable `CODEX_LB_ANTIGRAVITY_CLIENT_VERSION` is retired.
+`runtime_settings.antigravity_client_version` SHALL hold the Antigravity client version (default `2.34.0`, format `<major>.<minor>.<patch>` with up to 4, 4 and 6 digits). `GET /api/settings` SHALL return it as `antigravityClientVersion`, and `PUT /api/settings` SHALL accept and validate it the way it handles `codexClientVersion`. Every Cloud Code call (sign-in control calls and inference) SHALL read the current value, so a saved version applies to the next call without restart; an unreadable setting SHALL refuse the call before dispatch. The environment variable `CODEX_LB_ANTIGRAVITY_CLIENT_VERSION` is retired.
 
   R11:
 The Settings page SHALL show an «Antigravity client» section beside «Codex client» with the version field and a Save button that sends only that change.
 
 Tables:
 runtime_settings
- - antigravity_client_version: TEXT NOT NULL DEFAULT '2.34.0' # V53 column; V54 corrects seeded rows to the domain default 2.33.0
+ - antigravity_client_version: TEXT NOT NULL DEFAULT '2.34.0' # Antigravity client version in the Cloud Code User-Agent
 
 Logic Details:
 - Migration 53 adds the column. It is additive: older code ignores it and adding a column with a constant default rewrites no table.
@@ -164,7 +164,6 @@ None blocking. Quota windows (`retrieveUserQuotaSummary`) for balancing and the 
 ## Decision log
 
 - 2026-11-22: the owner accepts the Terms risk. No fingerprint emulation and no filter evasion.
-- 2026-11-22 (later, supersedes the fingerprint boundary): the owner asked for the Chrome 123 transport profile «как в менеджере» (Antigravity-Manager, `rquest Emulation::Chrome123`). All Antigravity Google traffic — Cloud Code inference and control, OAuth token and userinfo — travels through `internal/adapters/chromeprofile`, a `bogdanfinn/tls-client` RoundTripper with the captured Chrome ClientHello (wire-identical to Chrome 123, randomized extension order) and Chrome's HTTP/2 settings; the User-Agent and headers stay codex-lb's own (`antigravity/hub/...; cl=1023160026`), and the egress guard still checks every destination. No prompt rewriting.
 - Antigravity accounts are model sources (like Grok subscription sources), so they join the pool, catalog, pricing and sticky option without a new routing path.
 - New sources start sticky-only, because thought signatures and Google's heuristics tie a conversation to its account.
 - Implementation decisions (2026-11-22):

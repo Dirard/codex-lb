@@ -18,7 +18,6 @@ import (
 	"codex-lb/internal/adapters/antigravity"
 	"codex-lb/internal/adapters/backups"
 	"codex-lb/internal/adapters/chatgpt"
-	"codex-lb/internal/adapters/chromeprofile"
 	"codex-lb/internal/adapters/egress"
 	"codex-lb/internal/adapters/hostinfo"
 	"codex-lb/internal/adapters/httpapi"
@@ -144,18 +143,6 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 		// OAuth bodies and provider tokens must not follow a redirect to a new host.
 		return http.ErrUseLastResponse
 	}}
-	// Antigravity calls travel with the Chrome 123 wire fingerprint of
-	// Antigravity-Manager (owner decision 2026-11-22): TLS ClientHello, HTTP/2
-	// settings, connection flow and pseudo-header order. Headers stay
-	// codex-lb's own; the egress guard still checks every destination.
-	antigravityTransport, err := chromeprofile.NewTransport(chromeprofile.Config{
-		DialContext: transport.DialContext, Proxy: transport.Proxy,
-	})
-	if err != nil {
-		data.close()
-		return nil, errors.New("cannot build the Antigravity Chrome transport")
-	}
-	antigravityClient := &http.Client{Transport: antigravityTransport}
 	oauthClient := *client
 	oauthClient.Timeout = 30 * time.Second
 	oauth := chatgpt.NewOAuthClient(chatgpt.OAuthConfig{HTTPClient: &oauthClient})
@@ -173,12 +160,11 @@ func openRuntime(ctx context.Context, cfg config, logger *slog.Logger) (*runtime
 	// Antigravity sources take their Google access tokens from this service,
 	// which also signs the accounts in on the dashboard.
 	antigravitySources := application.NewAntigravityService(data.store, data.vault,
-		antigravity.New(antigravity.Config{HTTPClient: antigravityClient, ResolveClientVersion: data.store.LoadAntigravityClientVersion}))
+		antigravity.New(antigravity.Config{HTTPClient: client, ResolveClientVersion: data.store.LoadAntigravityClientVersion}))
 	antigravitySources.ConfigureLogger(logger)
 	adapter := provider.New(data.store, tokens, data.vault, provider.Config{HTTPClient: client, UpstreamWebSocketSessions: capacity.UpstreamWebSockets, GrokTokens: videos,
 		AntigravityTokens: antigravitySources, ResolveAntigravityClientVersion: data.store.LoadAntigravityClientVersion,
-		AntigravityHTTPClient: antigravityClient,
-		ResolveClientVersion:  data.store.LoadCodexClientVersion, ChatGPTReasoningFallback: catalog.SubscriptionReasoningFallback})
+		ResolveClientVersion: data.store.LoadCodexClientVersion, ChatGPTReasoningFallback: catalog.SubscriptionReasoningFallback})
 	if err := catalog.Load(ctx); err != nil {
 		_ = accounts.Close()
 		_ = tokens.Close()

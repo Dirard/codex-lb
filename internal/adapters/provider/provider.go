@@ -81,10 +81,6 @@ type Config struct {
 	// the Cloud Code User-Agent (the runtime setting) on every call; nil
 	// means the default version.
 	ResolveAntigravityClientVersion func(context.Context) (string, error)
-	// AntigravityHTTPClient carries the Antigravity model traffic; nil means
-	// the shared HTTPClient. The runtime passes the Chrome-profile transport
-	// here (owner decision 2026-11-22).
-	AntigravityHTTPClient *http.Client
 }
 
 type Adapter struct {
@@ -129,7 +125,6 @@ func New(store SourceStore, tokens ChatGPTTokenSource, cipher application.Secret
 	}
 	client := upstream.New(config.HTTPClient, config.Continuations)
 	client.SetWebSocketSessionLimit(config.UpstreamWebSocketSessions)
-	client.SetAntigravityClient(config.AntigravityHTTPClient)
 	return &Adapter{
 		store: store, cipher: cipher, chatgpt: tokens, client: client,
 		config: config, realtime: defaultRealtimeBounds,

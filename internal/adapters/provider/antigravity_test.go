@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -115,7 +116,7 @@ func TestAntigravityDispatchBuildsTheCloudCodeTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := (*calls)[0].target
-	wantAgent := "antigravity/hub/2.35.1 (aidev_client; os_type=windows; arch=amd64; cl=1023160026)"
+	wantAgent := "antigravity/hub/2.35.1 (aidev_client; os_type=" + runtime.GOOS + "; arch=" + runtime.GOARCH + ")"
 	if target.BaseURL != "https://cloudcode.example.test" || target.Credential != "google-access-1" ||
 		target.AntigravityProject != "aicode-consumers" || target.AntigravityUserAgent != wantAgent ||
 		target.ProviderID != "antigravity" || target.AccountID != source.ID || target.KeyID != "key" {
